@@ -1,0 +1,93 @@
+@import "tailwindcss";
+
+@theme {
+  /* Baljia Brand Colors */
+  --color-baljia-gold: #F5A623;
+  --color-baljia-gold-light: #FBC86A;
+  --color-baljia-gold-dark: #D4891A;
+  
+  --color-surface-primary: #0A0A0B;
+  --color-surface-secondary: #111113;
+  --color-surface-tertiary: #1A1A1D;
+  --color-surface-card: #16161A;
+  --color-surface-hover: #1E1E22;
+  
+  --color-border-default: #2A2A2E;
+  --color-border-subtle: #1F1F23;
+  --color-border-active: #F5A623;
+  
+  --color-text-primary: #FAFAF9;
+  --color-text-secondary: #A1A1AA;
+  --color-text-muted: #71717A;
+  
+  --color-status-running: #F5A623;
+  --color-status-success: #22C55E;
+  --color-status-error: #EF4444;
+  --color-status-blocked: #F59E0B;
+  --color-status-planning: #8B5CF6;
+  --color-status-investigating: #EC4899;
+  
+  /* Baljia Mascot Size Tokens */
+  --size-baljia-chat: 40px;
+  --size-baljia-header: 48px;
+  --size-baljia-dashboard: 112px;
+  --size-baljia-live-wall: 152px;
+  --size-baljia-hero: 220px;
+  
+  /* Typography */
+  --font-display: 'Satoshi', 'SF Pro Display', system-ui, sans-serif;
+  --font-body: 'General Sans', 'SF Pro Text', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', monospace;
+}
+
+/* Global Styles */
+@layer base {
+  body {
+    background-color: var(--color-surface-primary);
+    color: var(--color-text-primary);
+    font-family: var(--font-body);
+  }
+  
+  ::selection {
+    background-color: color-mix(in srgb, var(--color-baljia-gold) 30%, transparent);
+  }
+}
+
+/* Animations */
+@keyframes slide-up {
+  from {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.animate-slide-up {
+  animation: slide-up 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Scrollbar */
+@layer utilities {
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: var(--color-border-default);
+    border-radius: 3px;
+  }
+}
+
+/* C4: Fade-in animation for chat messages + panels */
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in {
+  animation: fade-in 0.2s ease-out;
+}

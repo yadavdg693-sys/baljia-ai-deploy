@@ -1,0 +1,446 @@
+/* Live Wall — dark operations dashboard */
+/* Domain 10.1: Real event-driven, premium, glowing borders */
+
+.wall {
+  min-height: 100vh;
+  background: #09090b;
+  color: #fafafa;
+  font-family: 'Inter', -apple-system, system-ui, sans-serif;
+}
+
+/* ── Header ── */
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 24px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(9, 9, 11, 0.8);
+  backdrop-filter: blur(12px);
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+
+.headerLeft {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 18px;
+}
+
+.logoIcon {
+  color: #f59e0b;
+  font-size: 20px;
+}
+
+.logoText {
+  background: linear-gradient(135deg, #f59e0b, #f97316);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.connectionDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.connected { background: #22c55e; }
+.disconnected { background: #ef4444; }
+
+.connectionLabel {
+  font-size: 12px;
+  color: #71717a;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.headerTitle {
+  font-size: 14px;
+  font-weight: 500;
+  color: #71717a;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+/* ── Three-Column Layout ── */
+
+.columns {
+  display: grid;
+  grid-template-columns: 280px 1fr 300px;
+  gap: 1px;
+  min-height: calc(100vh - 57px);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.column {
+  padding: 20px;
+  background: #09090b;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
+  max-height: calc(100vh - 57px);
+}
+
+.centerColumn {
+  border-left: 1px solid rgba(255, 255, 255, 0.06);
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* ── Mascot Card ── */
+
+.mascotCard {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 20px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  transition: border-color 0.4s ease, box-shadow 0.4s ease;
+}
+
+.glowAmber {
+  border-color: rgba(245, 158, 11, 0.3);
+  box-shadow: 0 0 20px rgba(245, 158, 11, 0.08);
+}
+
+.glowIndigo {
+  border-color: rgba(99, 102, 241, 0.3);
+  box-shadow: 0 0 20px rgba(99, 102, 241, 0.08);
+}
+
+.mascotAvatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #f59e0b, #f97316);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  color: #09090b;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.mascotInfo { flex: 1; }
+
+.mascotState {
+  font-weight: 600;
+  font-size: 16px;
+  color: #fafafa;
+}
+
+.mascotSub {
+  font-size: 12px;
+  color: #71717a;
+  margin-top: 2px;
+}
+
+/* ── Metrics Grid ── */
+
+.metricsGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.metricTile {
+  padding: 14px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  text-align: center;
+  transition: transform 0.15s ease;
+}
+
+.metricTile:hover {
+  transform: translateY(-1px);
+}
+
+.metricHighlight {
+  border-color: rgba(245, 158, 11, 0.3);
+  background: rgba(245, 158, 11, 0.04);
+}
+
+.metricValue {
+  font-size: 22px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #fafafa;
+}
+
+.metricLabel {
+  font-size: 11px;
+  color: #71717a;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-top: 4px;
+}
+
+/* ── Section Title ── */
+
+.sectionTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: #a1a1aa;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+
+.badge {
+  background: #f59e0b;
+  color: #09090b;
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 6px;
+  padding: 2px 7px;
+  min-width: 20px;
+  text-align: center;
+}
+
+/* ── Task Cards ── */
+
+.taskCard {
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  animation: taskGlow 3s ease-in-out infinite;
+}
+
+.taskHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.taskTitle {
+  font-size: 14px;
+  font-weight: 500;
+  color: #fafafa;
+  flex: 1;
+  line-height: 1.3;
+}
+
+.taskTimer {
+  font-size: 13px;
+  font-weight: 600;
+  color: #f59e0b;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.taskMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.agentPill {
+  font-size: 11px;
+  font-weight: 600;
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.2);
+  border-radius: 6px;
+  padding: 2px 8px;
+}
+
+.taskCompany {
+  font-size: 12px;
+  color: #71717a;
+}
+
+/* ── Event List ── */
+
+.eventList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.eventRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  transition: background 0.15s ease;
+  animation: fadeIn 0.3s ease;
+}
+
+.eventRow:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.eventIcon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.eventTitle {
+  font-size: 13px;
+  color: #d4d4d8;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.eventTime {
+  font-size: 11px;
+  color: #52525b;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+/* ── Completion Cards ── */
+
+.completionCard {
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(34, 197, 94, 0.04);
+  border: 1px solid rgba(34, 197, 94, 0.12);
+  animation: fadeIn 0.3s ease;
+}
+
+.completionTitle {
+  font-size: 13px;
+  color: #d4d4d8;
+  font-weight: 500;
+  line-height: 1.3;
+}
+
+.completionMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+/* ── CTA Card ── */
+
+.ctaCard {
+  padding: 24px 20px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.08), rgba(249, 115, 22, 0.04));
+  border: 1px solid rgba(245, 158, 11, 0.15);
+  text-align: center;
+  margin-top: auto;
+}
+
+.ctaIcon {
+  font-size: 28px;
+  color: #f59e0b;
+  margin-bottom: 8px;
+}
+
+.ctaTitle {
+  font-size: 18px;
+  font-weight: 700;
+  color: #fafafa;
+  margin: 0 0 6px;
+}
+
+.ctaText {
+  font-size: 13px;
+  color: #a1a1aa;
+  margin: 0 0 16px;
+  line-height: 1.5;
+}
+
+.ctaButton {
+  display: inline-block;
+  padding: 10px 28px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #f59e0b, #f97316);
+  color: #09090b;
+  font-weight: 600;
+  font-size: 14px;
+  text-decoration: none;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.ctaButton:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 20px rgba(245, 158, 11, 0.25);
+}
+
+/* ── Empty State ── */
+
+.emptyState {
+  padding: 32px 16px;
+  text-align: center;
+  color: #52525b;
+  font-size: 13px;
+}
+
+/* ── Animations ── */
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+@keyframes taskGlow {
+  0%, 100% { box-shadow: 0 0 12px rgba(245, 158, 11, 0.06); }
+  50% { box-shadow: 0 0 20px rgba(245, 158, 11, 0.12); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Responsive ── */
+
+@media (max-width: 1024px) {
+  .columns {
+    grid-template-columns: 1fr;
+  }
+
+  .column {
+    max-height: none;
+  }
+
+  .centerColumn {
+    border-left: none;
+    border-right: none;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  }
+}
+
+@media (max-width: 640px) {
+  .header {
+    padding: 12px 16px;
+  }
+
+  .column {
+    padding: 16px;
+  }
+
+  .metricsGrid {
+    grid-template-columns: 1fr 1fr 1fr;
+  }
+}

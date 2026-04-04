@@ -1,0 +1,42 @@
+services:
+  - type: web
+    name: baljia-ai
+    runtime: node
+    plan: starter
+    region: oregon
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: AUTH_SECRET
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: POSTMARK_SERVER_TOKEN
+        sync: false
+      - key: NEXT_PUBLIC_APP_URL
+        sync: false
+      - key: NEXT_PUBLIC_APP_DOMAIN
+        value: baljia.app
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY
+        sync: false
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: CRON_SECRET
+        sync: false
