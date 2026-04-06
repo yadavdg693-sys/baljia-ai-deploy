@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyAndUpdate } from '@/lib/services/verification.service';
 import { requireAuth, isApiError } from '@/lib/api-utils';
+import { db, tasks, companies } from '@/lib/db';
+import { eq, and } from 'drizzle-orm';
 
 // POST /api/worker/verify — run verification on a completed task
 export async function POST(request: NextRequest) {
@@ -16,6 +18,23 @@ export async function POST(request: NextRequest) {
 
   if (!body.taskId) {
     return NextResponse.json({ error: 'taskId is required' }, { status: 400 });
+  }
+
+  // Verify the task belongs to a company owned by the authenticated user
+  const [task] = await db.select({ company_id: tasks.company_id })
+    .from(tasks).where(eq(tasks.id, body.taskId)).limit(1);
+
+  if (!task) {
+    return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+  }
+
+  const [company] = await db.select({ id: companies.id })
+    .from(companies)
+    .where(and(eq(companies.id, task.company_id), eq(companies.owner_id, auth.user.id)))
+    .limit(1);
+
+  if (!company) {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
 
   try {

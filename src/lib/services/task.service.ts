@@ -1,6 +1,6 @@
 // Task Service — migrated to Drizzle + Neon
 import { db, tasks } from '@/lib/db';
-import { eq, asc, desc, sql } from 'drizzle-orm';
+import { eq, and, asc, desc, sql } from 'drizzle-orm';
 import type { Task, TaskSource, ExecutionMode, VerificationLevel } from '@/types';
 
 interface CreateTaskInput {
@@ -57,7 +57,7 @@ export async function createTask(input: CreateTaskInput): Promise<Task> {
     suggestion_reasoning: input.suggestion_reasoning ?? null,
     execution_mode: input.execution_mode ?? null,
     verification_level: input.verification_level ?? null,
-    related_task_ids: JSON.stringify(input.related_task_ids ?? []),
+    related_task_ids: input.related_task_ids ?? [],
   }).returning();
 
   return task as unknown as Task;
@@ -102,11 +102,23 @@ export async function rejectTask(taskId: string): Promise<Task> {
   return updateTask(taskId, { status: 'rejected' });
 }
 
+/**
+ * Atomically claim a task for execution.
+ * Uses WHERE status='todo' to prevent double-launch race conditions.
+ * Returns null if the task was already claimed by another process.
+ */
 export async function startTask(taskId: string): Promise<Task> {
-  return updateTask(taskId, {
-    status: 'in_progress',
-    started_at: new Date().toISOString(),
-  });
+  const [task] = await db.update(tasks)
+    .set({
+      status: 'in_progress',
+      started_at: new Date(),
+      updated_at: new Date(),
+    })
+    .where(and(eq(tasks.id, taskId), eq(tasks.status, 'todo')))
+    .returning();
+
+  if (!task) throw new Error(`Task ${taskId} could not be claimed (not in todo status or already started)`);
+  return task as unknown as Task;
 }
 
 export async function completeTask(taskId: string, verified: boolean): Promise<Task> {

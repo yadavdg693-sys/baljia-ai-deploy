@@ -438,7 +438,7 @@ async function handleCreateRecurringTask(input: Record<string, unknown>, company
 async function handleUpdateRecurringTask(input: Record<string, unknown>, companyId: string): Promise<ToolResult> {
   const updates: Record<string, unknown> = {};
   if (input.cadence !== undefined) updates.cadence = input.cadence;
-  if (input.paused !== undefined) updates.paused = input.paused;
+  if (input.paused !== undefined) updates.is_active = !input.paused; // DB uses is_active (inverse of paused)
   if (input.title !== undefined) updates.title = input.title;
   if (input.description !== undefined) updates.description = input.description;
 

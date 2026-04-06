@@ -34,15 +34,23 @@ export async function GET(request: NextRequest) {
   const stream = new ReadableStream({
     async start(controller) {
       // Send initial snapshot
+      // Only include platform-wide metrics/runningTasks for public wall streams
+      // Private company streams only see their own events
       try {
-        const [events, metrics, runningTasks] = await Promise.all([
-          getRecentEvents({ companyId, publicOnly, limit: 20 }),
-          getLiveWallMetrics(),
-          getRunningTasks(),
-        ]);
+        const events = await getRecentEvents({ companyId, publicOnly, limit: 20 });
+        const snapshot: Record<string, unknown> = { type: 'snapshot', events };
+
+        if (publicOnly) {
+          const [metrics, runningTasks] = await Promise.all([
+            getLiveWallMetrics(),
+            getRunningTasks(),
+          ]);
+          snapshot.metrics = metrics;
+          snapshot.runningTasks = runningTasks;
+        }
 
         controller.enqueue(encoder.encode(
-          `data: ${JSON.stringify({ type: 'snapshot', events, metrics, runningTasks })}\n\n`
+          `data: ${JSON.stringify(snapshot)}\n\n`
         ));
       } catch {
         controller.enqueue(encoder.encode(
@@ -74,10 +82,13 @@ export async function GET(request: NextRequest) {
             ));
           }
 
-          // Send heartbeat with running task timers
-          const runningTasks = await getRunningTasks();
+          // Send heartbeat — only include global running tasks for public wall
+          const heartbeat: Record<string, unknown> = { type: 'heartbeat', timestamp: new Date().toISOString() };
+          if (publicOnly) {
+            heartbeat.runningTasks = await getRunningTasks();
+          }
           controller.enqueue(encoder.encode(
-            `data: ${JSON.stringify({ type: 'heartbeat', runningTasks, timestamp: new Date().toISOString() })}\n\n`
+            `data: ${JSON.stringify(heartbeat)}\n\n`
           ));
 
         } catch {

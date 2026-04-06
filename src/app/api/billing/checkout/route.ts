@@ -25,6 +25,14 @@ export async function POST(request: NextRequest) {
 
   try {
     if (credits) {
+      // Validate credits is a positive integer from allowed packages
+      const ALLOWED_CREDIT_AMOUNTS = [10, 50, 100];
+      if (!Number.isInteger(credits) || credits <= 0) {
+        return NextResponse.json({ error: 'credits must be a positive integer' }, { status: 400 });
+      }
+      if (!ALLOWED_CREDIT_AMOUNTS.includes(credits)) {
+        return NextResponse.json({ error: `credits must be one of: ${ALLOWED_CREDIT_AMOUNTS.join(', ')}` }, { status: 400 });
+      }
       const session = await createCreditPurchaseSession(companyId, credits, returnUrl);
       return NextResponse.json(session);
     }

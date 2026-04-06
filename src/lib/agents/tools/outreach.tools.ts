@@ -153,14 +153,7 @@ export async function handleOutreachTool(
         return `Daily outreach limit reached (${countResult?.count}/2). Wait until tomorrow.`;
       }
 
-      // Store outbound email
-      await db.insert(emailThreads).values({
-        company_id: task.company_id, direction: 'outbound',
-        to_address: input.to as string, from_address: 'outreach@baljia.com',
-        subject: input.subject as string, body,
-      });
-
-      // Send via Postmark
+      // Send via Postmark (sendEmail logs the outbound thread record — no manual insert needed)
       let messageId = 'not-sent';
       try {
         const result = await sendEmail({

@@ -131,7 +131,8 @@ export async function requireAdmin(): Promise<
   const userEmail = authResult.user.email?.toLowerCase() ?? '';
 
   if (adminEmails.length === 0) {
-    return authResult;
+    // Fail closed: if ADMIN_EMAILS is not configured, deny all
+    return NextResponse.json({ error: 'Forbidden: admin access not configured' }, { status: 403 });
   }
 
   if (!adminEmails.includes(userEmail)) {

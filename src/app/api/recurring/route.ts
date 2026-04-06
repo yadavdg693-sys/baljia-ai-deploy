@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import * as recurringService from '@/lib/services/recurring.service';
 import { requireAuth, requireAuthAndCompany, isApiError } from '@/lib/api-utils';
+import { createRecurringTaskSchema } from '@/lib/validations';
 
 // GET /api/recurring?companyId=xyz — list recurring tasks + budget
 export async function GET(request: NextRequest) {
@@ -20,23 +21,22 @@ export async function GET(request: NextRequest) {
 
 // POST /api/recurring — create recurring task
 export async function POST(request: NextRequest) {
-  let body: {
-    companyId: string;
-    title: string;
-    description?: string;
-    tag: string;
-    cadence: 'daily' | 'weekly' | 'biweekly' | 'monthly';
-  };
-
+  let rawBody: Record<string, unknown>;
   try {
-    body = await request.json();
+    rawBody = await request.json();
   } catch {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  if (!body.companyId || !body.title || !body.tag || !body.cadence) {
-    return NextResponse.json({ error: 'companyId, title, tag, cadence required' }, { status: 400 });
+  const companyId = rawBody.companyId as string;
+  if (!companyId) return NextResponse.json({ error: 'companyId required' }, { status: 400 });
+
+  // Validate cadence and other fields via Zod schema
+  const parsed = createRecurringTaskSchema.safeParse(rawBody);
+  if (!parsed.success) {
+    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
+  const body = { ...parsed.data, companyId };
 
   const auth = await requireAuthAndCompany(body.companyId);
   if (isApiError(auth)) return auth;

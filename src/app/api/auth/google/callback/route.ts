@@ -52,7 +52,12 @@ export async function GET(request: NextRequest) {
       return NextResponse.redirect(new URL('/login?error=profile_fetch_failed', request.url));
     }
 
-    const profile = await profileRes.json() as { id: string; email: string; name?: string; picture?: string };
+    const profile = await profileRes.json() as { id: string; email: string; name?: string; picture?: string; verified_email?: boolean };
+
+    // Reject unverified Google emails to prevent account-linking attacks
+    if (profile.verified_email === false) {
+      return NextResponse.redirect(new URL('/login?error=email_not_verified', request.url));
+    }
 
     const result = await authService.findOrCreateGoogleUser({
       id: profile.id,

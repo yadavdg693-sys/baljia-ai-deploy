@@ -51,3 +51,18 @@ export const updateCompanySchema = z.object({
   name: z.string().min(1).max(200).optional(),
   one_liner: z.string().max(500).optional(),
 });
+
+export const createRecurringTaskSchema = z.object({
+  title: z.string().min(1).max(500),
+  description: z.string().max(5000).optional(),
+  tag: z.string().min(1).max(100),
+  cadence: z.enum(['daily', 'weekly', 'biweekly', 'monthly']),
+  priority: z.number().int().min(0).max(100).default(50),
+});
+
+// Fix #44: require edited_content when action is 'edit'
+export const documentSuggestionReviewSchemaStrict = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('accept') }),
+  z.object({ action: z.literal('skip') }),
+  z.object({ action: z.literal('edit'), edited_content: z.string().min(1).max(100000) }),
+]);

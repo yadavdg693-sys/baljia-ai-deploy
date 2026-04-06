@@ -48,6 +48,7 @@ async function logEmailThread(params: SendEmailParams, messageId: string | null)
       subject: params.subject,
       body: params.textBody,
       external_id: messageId,
+      thread_id: params.threadId ?? messageId, // persist thread linkage
     });
   } catch (err) { log.error('Failed to log email thread', {}, err); }
 }
@@ -77,6 +78,7 @@ export async function handleInboundEmail(message: PostmarkInboundMessage, compan
   await db.insert(emailThreads).values({
     company_id: companyId, direction: 'inbound', from_address: message.From, to_address: message.To,
     subject: message.Subject, body: message.TextBody, external_id: message.MessageID,
+    thread_id: message.ReplyTo ?? message.MessageID, // link to thread
   });
   log.info('Inbound email stored', { from: message.From, subject: message.Subject });
 }

@@ -48,7 +48,7 @@ export async function captureFailure(input: {
     .limit(1);
 
   if (existing) {
-    const existingAgents: number[] = existing.affected_agents ? JSON.parse(existing.affected_agents) : [];
+    const existingAgents: number[] = (existing.affected_agents as number[] | null) ?? [];
     const updatedAgents = existingAgents.includes(input.agentId)
       ? existingAgents : [...existingAgents, input.agentId];
 
@@ -56,7 +56,7 @@ export async function captureFailure(input: {
       .set({
         occurrence_count: (existing.occurrence_count ?? 0) + 1,
         last_seen_at: new Date(),
-        affected_agents: JSON.stringify(updatedAgents),
+        affected_agents: updatedAgents,
       })
       .where(eq(failureFingerprints.id, existing.id))
       .returning();
@@ -73,8 +73,8 @@ export async function captureFailure(input: {
     category,
     description: pattern,
     occurrence_count: 1,
-    affected_agents: JSON.stringify([input.agentId]),
-    affected_tools: '[]',
+    affected_agents: [input.agentId],
+    affected_tools: [],
     fix_status: 'open',
     regression_sensitive: false,
   }).returning();

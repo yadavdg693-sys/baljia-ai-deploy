@@ -47,19 +47,32 @@ export async function deductCredit(
     return false;
   }
 
-  // Check balance
-  const balance = await getBalance(companyId);
-  if (balance < amount) return false;
+  // Atomic deduction: compute balance and insert in a single statement
+  // Uses a CTE to get the current balance and only insert if sufficient
+  const result = await db.execute(sql`
+    WITH current AS (
+      SELECT COALESCE(SUM(amount), 0)::int AS balance
+      FROM credit_ledger WHERE company_id = ${companyId}
+    )
+    INSERT INTO credit_ledger (id, company_id, entry_type, amount, balance_after, task_id, description, created_at)
+    SELECT
+      gen_random_uuid(),
+      ${companyId},
+      'task_deduction',
+      ${-amount},
+      current.balance - ${amount},
+      ${taskId},
+      ${description},
+      NOW()
+    FROM current
+    WHERE current.balance >= ${amount}
+    RETURNING balance_after
+  `);
 
-  const balanceAfter = balance - amount;
-  await writeLedgerEntry({
-    company_id: companyId,
-    amount: -amount,
-    balance_after: balanceAfter,
-    entry_type: 'task_deduction',
-    description,
-    task_id: taskId,
-  });
+  const rows = result.rows ?? [];
+  if (rows.length === 0) return false; // insufficient balance
+
+  const balanceAfter = (rows[0] as { balance_after: number }).balance_after;
 
   // G-FIN-002: Low balance warning
   if (balanceAfter <= LOW_BALANCE_THRESHOLD) {

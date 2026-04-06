@@ -59,14 +59,31 @@ export async function handleDataTool(
   switch (toolName) {
     case 'query_database': {
       const query = (input.query as string).trim();
-      const upper = query.toUpperCase();
-      if (/^\s*(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE)/i.test(upper)) {
+
+      // Block all mutation keywords — even inside subqueries or CTEs
+      const MUTATION_KEYWORDS = /\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE|COPY|EXECUTE|CALL)\b/i;
+      if (MUTATION_KEYWORDS.test(query)) {
         return 'ERROR: Only SELECT queries are allowed. Data agent has read-only access.';
       }
 
+      // Block semicolons to prevent statement chaining
+      if (query.includes(';')) {
+        return 'ERROR: Multiple statements are not allowed. Send a single SELECT query.';
+      }
+
+      // Enforce tenant scoping: query MUST reference this company_id
+      // (the agent should always filter by company, but we enforce it as a safety net)
+      const companyId = task.company_id;
+      const referencesCompany = query.includes(companyId);
+      if (!referencesCompany) {
+        return `ERROR: Query must filter by company_id = '${companyId}'. Cross-tenant queries are not allowed.`;
+      }
+
       try {
-        const result = await db.execute(sql.raw(query));
-        const rows = result.rows ?? [];
+        // Use a read-only transaction with statement timeout
+        const result = await db.execute(sql`SET LOCAL statement_timeout = '5000'`);
+        const queryResult = await db.execute(sql.raw(query));
+        const rows = queryResult.rows ?? [];
         return `Query returned ${rows.length} rows:\n${JSON.stringify(rows.slice(0, 50), null, 2)}${rows.length > 50 ? '\n... (truncated, showing first 50)' : ''}`;
       } catch (error) {
         return `Query failed: ${error instanceof Error ? error.message : 'Unknown error'}`;

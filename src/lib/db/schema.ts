@@ -118,7 +118,7 @@ export const tasks = pgTable('tasks', {
   actual_credits_charged: integer('actual_credits_charged').default(0),
   verification_level: varchar('verification_level', { length: 50 }),
   failure_class: varchar('failure_class', { length: 50 }),
-  related_task_ids: text('related_task_ids'), // stored as JSON string in Drizzle
+  related_task_ids: jsonb('related_task_ids').$type<string[]>(), // UUID[] stored as JSON array
   run_link: varchar('run_link', { length: 500 }),
   markdown_link: varchar('markdown_link', { length: 500 }),
   max_turns: integer('max_turns').default(200),
@@ -150,9 +150,9 @@ export const taskExecutions = pgTable('task_executions', {
   wall_clock_seconds: integer('wall_clock_seconds'),
   token_usage: jsonb('token_usage'),
   error_summary: text('error_summary'),
-  watchdog_events: jsonb('watchdog_events'),
+  watchdog_events: jsonb('watchdog_events').$type<Record<string, unknown>[]>(),
   verification_evidence: jsonb('verification_evidence'),
-  execution_log: jsonb('execution_log'),
+  execution_log: jsonb('execution_log').$type<Record<string, unknown>[]>(),
   created_at: timestamp('created_at', { withTimezone: true }).defaultNow(),
 }, (t) => [
   index('idx_executions_task').on(t.task_id),
@@ -234,7 +234,7 @@ export const learnings = pgTable('learnings', {
   task_id: uuid('task_id').references(() => tasks.id),
   agent_id: integer('agent_id').references(() => agents.id),
   category: varchar('category', { length: 100 }),
-  tags: text('tags'), // stored as JSON array string
+  tags: jsonb('tags').$type<string[]>(), // string array stored as JSON
   content: text('content').notNull(),
   confidence: varchar('confidence', { length: 20 }).default('medium'),
   created_at: timestamp('created_at', { withTimezone: true }).defaultNow(),
@@ -312,7 +312,7 @@ export const adCampaigns = pgTable('ad_campaigns', {
   ctr: decimal('ctr', { precision: 5, scale: 4 }),
   cpc: decimal('cpc', { precision: 10, scale: 2 }),
   creative_url: varchar('creative_url', { length: 500 }),
-  placements: text('placements'), // stored as JSON
+  placements: jsonb('placements').$type<string[]>(), // stored as JSON array
   created_at: timestamp('created_at', { withTimezone: true }).defaultNow(),
   updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow(),
 });
@@ -386,8 +386,8 @@ export const nightShiftCycles = pgTable('night_shift_cycles', {
   cycle_number: integer('cycle_number'),
   company_stage: varchar('company_stage', { length: 50 }),
   trust_score: decimal('trust_score', { precision: 3, scale: 2 }),
-  planned_tasks: text('planned_tasks'), // UUID[] stored as JSON
-  executed_tasks: text('executed_tasks'),
+  planned_tasks: jsonb('planned_tasks').$type<string[]>(), // UUID[] stored as JSON
+  executed_tasks: jsonb('executed_tasks').$type<string[]>(),
   summary: text('summary'),
   started_at: timestamp('started_at', { withTimezone: true }),
   completed_at: timestamp('completed_at', { withTimezone: true }),
@@ -405,7 +405,6 @@ export const emailThreads = pgTable('email_threads', {
   from_address: varchar('from_address', { length: 255 }),
   to_address: varchar('to_address', { length: 255 }),
   direction: varchar('direction', { length: 10 }),
-  content: text('content'),
   body: text('body'),
   external_id: varchar('external_id', { length: 255 }),
   is_read: boolean('is_read').default(false),
@@ -457,8 +456,8 @@ export const failureFingerprints = pgTable('failure_fingerprints', {
   category: varchar('category', { length: 100 }),
   description: text('description'),
   occurrence_count: integer('occurrence_count').default(1),
-  affected_agents: text('affected_agents'), // int[] as JSON
-  affected_tools: text('affected_tools'),   // text[] as JSON
+  affected_agents: jsonb('affected_agents').$type<number[]>(), // int[] stored as JSON
+  affected_tools: jsonb('affected_tools').$type<string[]>(),  // text[] stored as JSON
   fix_status: varchar('fix_status', { length: 50 }).default('open'),
   regression_sensitive: boolean('regression_sensitive').default(false),
   first_seen_at: timestamp('first_seen_at', { withTimezone: true }).defaultNow(),
@@ -522,7 +521,7 @@ export const chatSessions = pgTable('chat_sessions', {
   id: uuid('id').primaryKey().defaultRandom(),
   company_id: uuid('company_id').notNull().references(() => companies.id),
   user_id: uuid('user_id').notNull().references(() => users.id),
-  messages: jsonb('messages'),
+  messages: jsonb('messages').$type<Record<string, unknown>[]>(),
   message_count: integer('message_count').default(0),
   is_active: boolean('is_active').default(true),
   created_at: timestamp('created_at', { withTimezone: true }).defaultNow(),

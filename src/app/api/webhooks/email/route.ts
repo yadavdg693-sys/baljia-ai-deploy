@@ -11,6 +11,19 @@ import { createLogger } from '@/lib/logger';
 const log = createLogger('WebhookEmail');
 
 export async function POST(request: NextRequest) {
+  // Verify webhook authenticity via Postmark's basic auth or shared secret
+  const webhookSecret = process.env.POSTMARK_WEBHOOK_SECRET;
+  if (webhookSecret) {
+    const authHeader = request.headers.get('authorization');
+    const expected = `Basic ${Buffer.from(webhookSecret).toString('base64')}`;
+    if (authHeader !== expected) {
+      log.warn('Email webhook: invalid auth header');
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+  } else {
+    log.warn('POSTMARK_WEBHOOK_SECRET not set — email webhook is unauthenticated');
+  }
+
   let body: Record<string, unknown>;
   try {
     body = await request.json();

@@ -88,7 +88,7 @@ export async function storeLearnings(
         category: l.category,
         content: l.content,
         confidence: l.confidence,
-        tags: JSON.stringify(l.tags),
+        tags: l.tags,
       });
       stored++;
     } catch { /* skip duplicates */ }
@@ -141,11 +141,11 @@ export async function getRelevantLearnings(
   tag: string,
   limit = 5
 ): Promise<Learning[]> {
-  // Use ilike on tags JSON string to find tag matches
+  // Cast jsonb tags to text for pattern matching
   const data = await db.select().from(learnings)
     .where(and(
       eq(learnings.company_id, companyId),
-      ilike(learnings.tags, `%${tag}%`)
+      sql`${learnings.tags}::text ILIKE ${'%' + tag + '%'}`
     ))
     .orderBy(desc(learnings.confidence))
     .limit(limit);

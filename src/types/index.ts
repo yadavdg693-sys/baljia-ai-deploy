@@ -68,9 +68,11 @@ export interface Company {
   company_stage: CompanyStage;
   subdomain: string | null;
   email_identity: string | null;
+  company_email: string | null;     // Drizzle: company_email VARCHAR(255)
   github_repo: string | null;
   render_service_id: string | null;
   neon_database_id: string | null;
+  neon_connection_string: string | null;
   custom_domain: string | null;
   timezone: string | null;
   created_at: string;
@@ -310,7 +312,7 @@ export interface Subscription {
   company_id: string | null;      // DB: company_id UUID (nullable)
   stripe_subscription_id: string | null;
   stripe_customer_id: string | null;
-  plan_type: 'trial' | 'full' | 'keep_live';  // DB: plan_type (not plan_tier)
+  plan_type: PlanTier;             // Matches runtime: trial | starter | growth | scale
   status: 'active' | 'past_due' | 'cancelled' | 'expired';  // DB: includes 'expired'
   trial_ends_at: string | null;   // DB: trial_ends_at TIMESTAMPTZ
   night_shifts_remaining: number;
@@ -388,9 +390,10 @@ export interface EmailThread {
   from_address: string;
   to_address: string;
   direction: 'inbound' | 'outbound';
-  content: string | null;           // DB: content TEXT (not body)
-  is_read: boolean;                 // DB: is_read BOOLEAN DEFAULT false
-  parent_id: string | null;         // DB: parent_id UUID REFERENCES email_threads
+  body: string | null;              // Drizzle: body TEXT
+  external_id: string | null;       // Drizzle: external_id VARCHAR(255)
+  is_read: boolean;                 // Drizzle: is_read BOOLEAN DEFAULT false
+  parent_id: string | null;         // Drizzle: parent_id UUID
   created_at: string;
 }
 
@@ -422,21 +425,23 @@ export interface BrowserCredential {
 export interface AdCampaign {
   id: string;
   company_id: string;
-  meta_campaign_id: string | null;  // DB: meta_campaign_id (not campaign_id)
-  meta_adset_id: string | null;     // DB: meta_adset_id (not adset_id)
-  meta_ad_id: string | null;        // DB: meta_ad_id (not ad_id)
-  status: 'draft' | 'active' | 'paused' | 'completed';  // DB: no 'failed'
+  meta_campaign_id: string | null;
+  meta_adset_id: string | null;
+  meta_ad_id: string | null;
+  external_id: string | null;       // Drizzle: external_id VARCHAR(255)
+  platform: string | null;          // Drizzle: platform VARCHAR(50) DEFAULT 'meta'
+  status: 'draft' | 'active' | 'paused' | 'completed';
   daily_budget: number;
-  total_spend: number;              // DB: total_spend (not spend)
+  total_spend: number;
+  spend: number;                    // Drizzle: spend DECIMAL
   impressions: number;
   clicks: number;
   ctr: number | null;
   cpc: number | null;
   creative_url: string | null;
-  placements: string[] | null;      // DB: placements VARCHAR(50)[]
+  placements: string[] | null;
   created_at: string;
   updated_at: string;
-  // NOTE: DB has no 'platform' column — it's Meta-specific
 }
 
 export interface Referral {

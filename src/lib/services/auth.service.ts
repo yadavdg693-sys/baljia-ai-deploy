@@ -80,11 +80,15 @@ export async function verifyMagicLink(token: string): Promise<{ userId: string; 
 
   if (!record) return null;
 
-  // Mark token as used
-  await db
+  // Atomically mark token as used — prevents race condition where
+  // two concurrent requests both see the token as unused
+  const [claimed] = await db
     .update(magicLinkTokens)
     .set({ used_at: new Date() })
-    .where(eq(magicLinkTokens.id, record.id));
+    .where(and(eq(magicLinkTokens.id, record.id), isNull(magicLinkTokens.used_at)))
+    .returning({ id: magicLinkTokens.id });
+
+  if (!claimed) return null; // Another request already used this token
 
   // Mark user email as verified
   await db

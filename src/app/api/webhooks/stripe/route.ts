@@ -9,12 +9,23 @@ import {
   handleInvoicePaymentSucceeded,
   handleInvoicePaymentFailed,
 } from '@/lib/services/billing.service';
+import { db, platformEvents } from '@/lib/db';
+import { eq, sql } from 'drizzle-orm';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-02-24.acacia',
 });
 
 const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET!;
+
+// Simple in-DB deduplication for Stripe event IDs
+async function isEventProcessed(eventId: string): Promise<boolean> {
+  const [existing] = await db.select({ id: platformEvents.id })
+    .from(platformEvents)
+    .where(sql`${platformEvents.payload}->>'stripe_event_id' = ${eventId}`)
+    .limit(1);
+  return !!existing;
+}
 
 export async function POST(request: NextRequest) {
   const body = await request.text();
@@ -28,9 +39,13 @@ export async function POST(request: NextRequest) {
   try {
     event = stripe.webhooks.constructEvent(body, signature, webhookSecret);
   } catch (err) {
-    // I3 FIX: Log detail internally, return generic error to prevent info leakage
     console.error('[Stripe Webhook] Signature verification failed:', err instanceof Error ? err.message : 'Unknown');
     return NextResponse.json({ error: 'Webhook signature verification failed' }, { status: 400 });
+  }
+
+  // Deduplication: skip if we've already processed this event
+  if (await isEventProcessed(event.id)) {
+    return NextResponse.json({ received: true, deduplicated: true });
   }
 
   try {
@@ -80,8 +95,15 @@ export async function POST(request: NextRequest) {
         // Acknowledge unhandled events
         break;
     }
+
+    // Record that we processed this event (for deduplication)
+    await db.insert(platformEvents).values({
+      event_type: 'stripe_webhook_processed',
+      company_id: null,
+      payload: { stripe_event_id: event.id, stripe_event_type: event.type },
+      is_public_safe: false,
+    });
   } catch (err) {
-    // I3 FIX: Log detail internally, return generic error
     console.error('[Stripe Webhook] Handler error:', err instanceof Error ? err.message : 'Unknown');
     return NextResponse.json({ error: 'Webhook processing failed' }, { status: 500 });
   }

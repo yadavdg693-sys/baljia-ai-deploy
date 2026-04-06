@@ -101,8 +101,11 @@ export async function handleSupportTool(
   switch (toolName) {
     case 'get_inbox': {
       const limit = Math.min((input.limit as number) ?? 10, 50);
+      const unreadOnly = input.unread_only !== false; // default true per contract
+      const conditions = [eq(emailThreads.company_id, task.company_id), eq(emailThreads.direction, 'inbound')];
+      if (unreadOnly) conditions.push(eq(emailThreads.is_read, false));
       const data = await db.select().from(emailThreads)
-        .where(and(eq(emailThreads.company_id, task.company_id), eq(emailThreads.direction, 'inbound')))
+        .where(and(...conditions))
         .orderBy(desc(emailThreads.created_at)).limit(limit);
 
       if (data.length === 0) return 'Inbox is empty. No inbound emails to process.';
@@ -128,7 +131,7 @@ export async function handleSupportTool(
         .orderBy(emailThreads.created_at);
 
       if (data.length === 0) return `No messages found in thread ${input.thread_id}`;
-      return data.map((e) => `[${e.direction}] ${e.from_address} → ${e.to_address}\n${e.body ?? e.content ?? '(empty)'}\n---`).join('\n');
+      return data.map((e) => `[${e.direction}] ${e.from_address} → ${e.to_address}\n${e.body ?? '(empty)'}\n---`).join('\n');
     }
 
     case 'escalate_to_owner': {
@@ -153,7 +156,7 @@ export async function handleSupportTool(
         company_id: task.company_id, title: input.title as string, description: input.description as string,
         tag: 'bug-fix', priority: (input.priority as number) ?? 50, source: 'auto_remediation',
         status: 'created', queue_order: 999, estimated_credits: 1, max_turns: 200,
-        executability_type: 'can_run_now', related_task_ids: JSON.stringify([task.id]),
+        executability_type: 'can_run_now', related_task_ids: [task.id],
       }).returning({ id: tasksTable.id });
 
       return `Engineering task created (ID: ${newTask.id}): "${input.title}" — awaiting founder approval.`;

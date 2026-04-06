@@ -74,7 +74,7 @@ export async function appendMessages(
   const messages = [...parseMessages(session.messages), ...newMessages];
 
   const [updated] = await db.update(chatSessions)
-    .set({ messages, message_count: messages.length, updated_at: new Date() })
+    .set({ messages: messages as unknown as Record<string, unknown>[], message_count: messages.length, updated_at: new Date() })
     .where(eq(chatSessions.id, sessionId))
     .returning();
 

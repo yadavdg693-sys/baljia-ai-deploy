@@ -93,9 +93,15 @@ export async function handleSubscriptionCreated(subscription: Stripe.Subscriptio
 
   const plan = PLAN_CONFIG[planTier];
 
-  // Upsert subscription — Drizzle handles onConflictDoUpdate
+  // Resolve owner_id from company for the user_id FK
+  const [companyRow] = await db.select({ owner_id: companies.owner_id })
+    .from(companies).where(eq(companies.id, companyId)).limit(1);
+  const ownerId = companyRow?.owner_id;
+  if (!ownerId) { log.error('handleSubscriptionCreated: company not found', { companyId }); return; }
+
+  // Upsert subscription
   await db.insert(subscriptions).values({
-    user_id: companyId, // placeholder, will be resolved from company
+    user_id: ownerId,
     company_id: companyId,
     stripe_customer_id: subscription.customer as string,
     stripe_subscription_id: subscription.id,

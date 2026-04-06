@@ -3,7 +3,9 @@ import { NextResponse } from 'next/server';
 import { clearSessionCookie } from '@/lib/auth';
 
 export async function POST() {
-  const response = NextResponse.redirect(new URL('/login', process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000'));
+  // Return JSON with redirect URL instead of a 307 redirect from a POST
+  // (307 preserves POST method, which is wrong for logout → login flow)
+  const response = NextResponse.json({ ok: true, redirect: '/login' });
   clearSessionCookie(response);
   return response;
 }
