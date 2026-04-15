@@ -2,12 +2,14 @@ import { NextRequest, NextResponse } from 'next/server';
 import * as taskService from '@/lib/services/task.service';
 import * as eventService from '@/lib/services/event.service';
 import { requireAuth, requireCompanyOwnership, isApiError } from '@/lib/api-utils';
+import { isValidUUID } from '@/lib/uuid-validation';
 
 export async function POST(
   _request: NextRequest,
   { params }: { params: Promise<{ taskId: string }> }
 ) {
   const { taskId } = await params;
+  if (!isValidUUID(taskId)) return NextResponse.json({ error: 'Invalid taskId format' }, { status: 400 });
   const auth = await requireAuth();
   if (isApiError(auth)) return auth;
 

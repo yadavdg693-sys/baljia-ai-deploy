@@ -9,8 +9,8 @@ import {
   handleInvoicePaymentSucceeded,
   handleInvoicePaymentFailed,
 } from '@/lib/services/billing.service';
-import { db, platformEvents } from '@/lib/db';
-import { eq, sql } from 'drizzle-orm';
+import { db, platformEvents, referrals, users, companies } from '@/lib/db';
+import { eq, and, sql } from 'drizzle-orm';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-02-24.acacia',
@@ -71,9 +71,63 @@ export async function POST(request: NextRequest) {
         break;
       }
 
-      case 'customer.subscription.created':
+      case 'customer.subscription.created': {
         await handleSubscriptionCreated(event.data.object as Stripe.Subscription);
+
+        // Referral claim flow: grant 25 credits to referrer on first subscription
+        // Spec: "25 credits on subscription" (referrals table, Domain 8.4)
+        const sub = event.data.object as Stripe.Subscription;
+        const subscriberEmail = (sub.metadata?.user_email ?? '') as string;
+        if (subscriberEmail) {
+          const [referredUser] = await db
+            .select({ id: users.id, referred_by: users.referred_by })
+            .from(users)
+            .where(eq(users.email, subscriberEmail))
+            .limit(1);
+
+          if (referredUser?.referred_by) {
+            // Find the pending referral record
+            const [referral] = await db
+              .select({ id: referrals.id, referrer_id: referrals.referrer_id })
+              .from(referrals)
+              .where(and(
+                eq(referrals.referred_id, referredUser.id),
+                eq(referrals.status, 'trial'), // trial → subscribed
+              ))
+              .limit(1);
+
+            if (referral) {
+              // Get referrer's company to credit
+              const [referrerCompany] = await db
+                .select({ id: companies.id })
+                .from(companies)
+                .where(eq(companies.owner_id, referral.referrer_id))
+                .orderBy(companies.created_at)
+                .limit(1);
+
+              if (referrerCompany) {
+                await creditService.addCredit(
+                  referrerCompany.id,
+                  25,
+                  'referral_bonus',
+                  `Referral reward: your referred user subscribed`,
+                );
+
+                // Mark referral as credited
+                await db.update(referrals)
+                  .set({ status: 'credited', credits_awarded: 25, converted_at: new Date() })
+                  .where(eq(referrals.id, referral.id));
+
+                await eventService.emit(referrerCompany.id, 'referral_credited', {
+                  referred_user_email: subscriberEmail,
+                  credits: 25,
+                });
+              }
+            }
+          }
+        }
         break;
+      }
 
       case 'customer.subscription.updated':
         await handleSubscriptionUpdated(event.data.object as Stripe.Subscription);

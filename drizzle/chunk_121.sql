@@ -1,0 +1,1 @@
+CREATE INDEX "idx_milestones_status" ON "milestones" USING btree ("status");

@@ -1,0 +1,1 @@
+CREATE INDEX "idx_events_company" ON "platform_events" USING btree ("company_id");

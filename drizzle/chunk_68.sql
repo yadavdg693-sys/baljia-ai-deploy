@@ -1,0 +1,1 @@
+ALTER TABLE "milestone_criteria" ADD CONSTRAINT "milestone_criteria_milestone_id_milestones_id_fk" FOREIGN KEY ("milestone_id") REFERENCES "public"."milestones"("id") ON DELETE cascade ON UPDATE no action;

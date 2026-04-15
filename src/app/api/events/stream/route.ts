@@ -43,7 +43,7 @@ export async function GET(request: NextRequest) {
         if (publicOnly) {
           const [metrics, runningTasks] = await Promise.all([
             getLiveWallMetrics(),
-            getRunningTasks(),
+            getRunningTasks(publicOnly),
           ]);
           snapshot.metrics = metrics;
           snapshot.runningTasks = runningTasks;
@@ -85,7 +85,7 @@ export async function GET(request: NextRequest) {
           // Send heartbeat — only include global running tasks for public wall
           const heartbeat: Record<string, unknown> = { type: 'heartbeat', timestamp: new Date().toISOString() };
           if (publicOnly) {
-            heartbeat.runningTasks = await getRunningTasks();
+            heartbeat.runningTasks = await getRunningTasks(publicOnly);
           }
           controller.enqueue(encoder.encode(
             `data: ${JSON.stringify(heartbeat)}\n\n`

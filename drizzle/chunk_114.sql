@@ -1,0 +1,1 @@
+CREATE INDEX "idx_magic_link_token" ON "magic_link_tokens" USING btree ("token");

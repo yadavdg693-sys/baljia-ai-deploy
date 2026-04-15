@@ -1,0 +1,1 @@
+CREATE INDEX "idx_artifacts_run" ON "artifacts" USING btree ("run_id");

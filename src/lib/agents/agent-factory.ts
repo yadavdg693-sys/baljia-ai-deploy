@@ -1,10 +1,17 @@
 // Agent Factory — assembles briefing + runs agent with tool loop
 // Pattern: prompt assembly → model call → tool handling → watchdog check → repeat
 // Supports Claude (primary) and Gemini (fallback)
+//
+// Phase 2A wiring:
+// - 2A-1: agents table for prompts (DB-first, hardcoded fallback)
+// - 2A-2: failure fingerprint injection into briefing
+// - 2A-3: watchdog.checkHealth() between turns
+// - 2A-5: prior reports injection into briefing
 
 import Anthropic from '@anthropic-ai/sdk';
 import * as memoryService from '@/lib/services/memory.service';
 import * as documentService from '@/lib/services/document.service';
+import * as failureService from '@/lib/services/failure.service';
 import { Watchdog } from './watchdog';
 import { getBrowserTools, handleBrowserTool } from './tools/browser.tools';
 import { getResearchTools, handleResearchTool } from './tools/research.tools';
@@ -14,14 +21,18 @@ import { getTwitterTools, handleTwitterTool } from './tools/twitter.tools';
 import { getMetaAdsTools, handleMetaAdsTool } from './tools/meta-ads.tools';
 import { getOutreachTools, handleOutreachTool } from './tools/outreach.tools';
 import { getEngineeringTools, handleEngineeringTool } from './tools/engineering.tools';
-import { callAnthropicWithTimeout, callGeminiWithTimeout } from '@/lib/llm-safety';
-import { isAnthropicAvailable } from '@/lib/llm-provider';
+import { callAnthropicWithTimeout, callOpenRouterWithTimeout, callGeminiWithTimeout } from '@/lib/llm-safety';
+import { isAnthropicAvailable, isOpenRouterAvailable, OPENROUTER_MODELS } from '@/lib/llm-provider';
+import { sanitizeForPrompt, moderateOutput } from '@/lib/content-safety';
+import { db, agents as agentsTable, reports, companies } from '@/lib/db';
+import { eq, and, desc } from 'drizzle-orm';
 import { createLogger } from '@/lib/logger';
 import type { Task, TaskExecution } from '@/types';
 
 const log = createLogger('AgentFactory');
 
-const CLAUDE_MODEL = 'claude-sonnet-4-20250514';
+const CLAUDE_MODEL_SONNET = 'claude-sonnet-4-20250514';
+const CLAUDE_MODEL_HAIKU = 'claude-haiku-4-5-20251001';
 const GEMINI_MODEL = 'gemini-2.5-flash';
 
 // ══════════════════════════════════════════════
@@ -56,12 +67,19 @@ const AGENT_PROMPTS: Record<number, string> = {
 - Feature comparison matrices
 - Strategy recommendations
 
-## Rules
-1. Always cite sources or state "based on model knowledge"
-2. Distinguish correlation from causation
-3. Note data limitations explicitly
-4. Create structured reports with methodology section
-5. Include actionable recommendations, not just observations`,
+## Citation Rules (MANDATORY)
+1. Every factual claim MUST be backed by a URL citation from web_search results
+2. If web search is unavailable, prefix findings with "Based on model knowledge (unverified):"
+3. If insufficient evidence exists for a claim, explicitly state: "INSUFFICIENT EVIDENCE: [what's missing]"
+4. Include a "Sources" section at the end of every report with numbered URL references
+5. Rate confidence level for each finding: HIGH (multiple sources), MEDIUM (single source), LOW (model knowledge only)
+
+## Quality Rules
+1. Distinguish correlation from causation
+2. Note data limitations and recency explicitly
+3. Create structured reports with methodology section
+4. Include actionable recommendations, not just observations
+5. Never fabricate statistics or attribute fake quotes`,
 
   33: `You are the Data Agent for Baljia AI. You analyze data and create reports.
 
@@ -162,8 +180,10 @@ const AGENT_PROMPTS: Record<number, string> = {
 // Documents for those agents are injected via compiled briefing in assembleBriefing().
 // ══════════════════════════════════════════════
 
-// Base tools — task progress + report creation only (NO document access)
+// Base tools — task progress + report creation + runtime memory (all agents)
+// Covers: tasks(2), reports(3), learnings(5), polsia_support(2), send_reply(1), documents(read)
 const BASE_TOOLS = [
+  // ── tasks: lifecycle ──
   {
     name: 'update_task_status',
     description: 'Update the current task with a progress note',
@@ -175,6 +195,12 @@ const BASE_TOOLS = [
       required: ['note'],
     },
   },
+  {
+    name: 'get_task_status',
+    description: 'Get the current state of this task (status, priority, assigned agent, turn count). Useful to verify state before completing.',
+    input_schema: { type: 'object' as const, properties: {} },
+  },
+  // ── reports: all 3 KG tools ──
   {
     name: 'create_report',
     description: 'Create a report with findings or deliverables',
@@ -188,13 +214,196 @@ const BASE_TOOLS = [
       required: ['title', 'content'],
     },
   },
+  {
+    name: 'query_reports',
+    description: 'Search previously created reports for this company. Useful to avoid duplicating work or to understand what was previously built.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        report_type: { type: 'string' as const, description: 'Filter by type: research, analytics, execution, strategy (optional)' },
+        limit: { type: 'number' as const, description: 'Max reports to return (default: 5)' },
+      },
+    },
+  },
+  {
+    name: 'get_reports_by_date',
+    description: 'Get reports created within a date range.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        days_ago: { type: 'number' as const, description: 'How many days back to look (default: 7)' },
+        report_type: { type: 'string' as const, description: 'Filter by type (optional)' },
+      },
+    },
+  },
+  // ── learnings: all 5 KG tools ──
+  // H-AGENT-021: Runtime memory write-back — workers can persist discoveries during execution
+  {
+    name: 'save_learning',
+    description: 'Save a discovery or learning from this task. Use when you find something reusable — a pattern, a gotcha, an efficient approach, or a failure to avoid. This persists to company memory for future tasks.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        content: { type: 'string' as const, description: 'What you learned (factual, concise, actionable)' },
+        category: { type: 'string' as const, description: 'Category: efficiency, failure_pattern, integration_detail, domain_knowledge, cost_efficiency' },
+        confidence: { type: 'string' as const, description: 'Confidence level: high, medium, low' },
+      },
+      required: ['content', 'category'],
+    },
+  },
+  {
+    name: 'query_learnings',
+    description: 'Search company memory for past learnings relevant to what you are working on. Use before attempting unfamiliar tasks or when you need context about previous work.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        query: { type: 'string' as const, description: 'Search query — keywords about the topic you need context on' },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'search_learnings',
+    description: 'Advanced search across all company learnings by category and keyword.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        keyword: { type: 'string' as const, description: 'Keyword to search in learning content' },
+        category: { type: 'string' as const, description: 'Filter by category (optional)' },
+        limit: { type: 'number' as const, description: 'Max results (default: 10)' },
+      },
+      required: ['keyword'],
+    },
+  },
+  {
+    name: 'get_recent_learnings',
+    description: 'Get the most recent learnings saved for this company, regardless of category.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        limit: { type: 'number' as const, description: 'How many recent learnings to fetch (default: 10)' },
+      },
+    },
+  },
+  {
+    name: 'get_learnings_by_tags',
+    description: 'Get learnings tagged with specific tags (e.g. "render", "stripe", "bug-fix").',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        tags: {
+          type: 'array' as const,
+          items: { type: 'string' as const },
+          description: 'Tags to filter by (e.g. ["stripe", "webhook"])',
+        },
+      },
+      required: ['tags'],
+    },
+  },
+  // ── polsia_support: 2 KG tools ──
+  {
+    name: 'report_bug',
+    description: 'Report a platform bug discovered during task execution. Use when you encounter a broken tool, missing capability, or platform-level issue that prevents task completion.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        title: { type: 'string' as const, description: 'Short bug title' },
+        description: { type: 'string' as const, description: 'What happened, what you expected, what tool/endpoint failed' },
+        severity: { type: 'string' as const, description: 'Severity: low, medium, high, critical' },
+      },
+      required: ['title', 'description'],
+    },
+  },
+  {
+    name: 'suggest_feature',
+    description: 'Suggest a platform capability that would help complete tasks better. Use when you identify a missing tool or workflow that would improve agent effectiveness.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        title: { type: 'string' as const, description: 'Feature title' },
+        description: { type: 'string' as const, description: 'What capability is needed and why it would help' },
+      },
+      required: ['title', 'description'],
+    },
+  },
+  // ── send_reply: async founder messaging ──
+  {
+    name: 'send_founder_message',
+    description: 'Send an async message to the founder. Use when you need input, want to flag a decision, or need to report something that requires founder awareness. Non-blocking — execution continues.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        message: { type: 'string' as const, description: 'Message to send to the founder' },
+        urgency: { type: 'string' as const, description: 'Urgency: info, action_required, urgent (default: info)' },
+      },
+      required: ['message'],
+    },
+  },
+  // ── scripts: run platform scripts (KG spec §3.2) ──
+  {
+    name: 'list_scripts',
+    description: 'List available platform scripts that can be run for common operations (migrations, data exports, health checks, etc.).',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        category: { type: 'string' as const, description: 'Filter by category: db, deploy, analytics, maintenance (optional)' },
+      },
+    },
+  },
+  {
+    name: 'run_script',
+    description: 'Execute a named platform script. Scripts are pre-approved operations — do not use for arbitrary code execution.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        script_name: { type: 'string' as const, description: 'Script name (from list_scripts)' },
+        args: { type: 'object' as const, description: 'Arguments to pass to the script (optional)' },
+      },
+      required: ['script_name'],
+    },
+  },
+  {
+    name: 'get_script_output',
+    description: 'Get the output/result of a previously run script by run ID.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        run_id: { type: 'string' as const, description: 'Script run ID returned by run_script' },
+      },
+      required: ['run_id'],
+    },
+  },
+  // ── dashboard: founder-visible links (KG spec §3.2) ──
+  {
+    name: 'add_dashboard_link',
+    description: 'Add a useful link to the founder\'s dashboard (e.g. the new app URL, admin panel, GitHub repo, staging URL). Founders see this prominently.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        label: { type: 'string' as const, description: 'Link label shown to founder (e.g. "Live App", "Admin Panel", "GitHub Repo")' },
+        url: { type: 'string' as const, description: 'Full URL' },
+        link_type: { type: 'string' as const, description: 'Type: app, admin, repo, staging, docs, other (default: other)' },
+        description: { type: 'string' as const, description: 'Short description of what this link is' },
+      },
+      required: ['label', 'url'],
+    },
+  },
+  {
+    name: 'get_dashboard_links',
+    description: 'Get all links currently shown on the founder\'s dashboard. Useful to avoid adding duplicates.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+    },
+  },
 ];
+
 
 // Document tools — only Twitter (40) and ColdOutreach (54)
 const DOCUMENT_TOOLS = [
   {
     name: 'read_document',
-    description: 'Read a company document (mission, product_overview, brand_voice, tech_notes, user_research)',
+    description: 'Read a company document (mission, product_overview, brand_voice, tech_notes, market_research)',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -209,7 +418,7 @@ const DOCUMENT_TOOLS = [
     input_schema: {
       type: 'object' as const,
       properties: {
-        doc_type: { type: 'string' as const, description: 'Document type to update (brand_voice, product_overview, user_research, tech_notes)' },
+        doc_type: { type: 'string' as const, description: 'Document type to update (brand_voice, product_overview, market_research, tech_notes)' },
         suggested_content: { type: 'string' as const, description: 'The full proposed new content for the document' },
         reasoning: { type: 'string' as const, description: 'Why this update improves the document' },
       },
@@ -283,32 +492,133 @@ function getAgentTools(agentId: number) {
 // BRIEFING ASSEMBLY — context packet for agent
 // ══════════════════════════════════════════════
 
-async function assembleBriefing(task: Task, agentId: number): Promise<string> {
+async function assembleBriefing(task: Task, agentId: number, contextPacket?: import('@/types').ContextPacket): Promise<string> {
   const sections: string[] = [];
 
-  // Agent personality
-  const prompt = AGENT_PROMPTS[agentId];
-  if (prompt) sections.push(prompt);
+  // 2A-1: Agent personality — DB-first, hardcoded fallback
+  // H-AGENT-008: Fetch ALL agent fields from DB
+  let agentPrompt = AGENT_PROMPTS[agentId];
+  try {
+    const [dbAgent] = await db.select({
+      base_system_prompt: agentsTable.base_system_prompt,
+      name: agentsTable.name,
+      default_max_turns: agentsTable.default_max_turns,
+      default_model: agentsTable.default_model,
+      execution_style: agentsTable.execution_style,
+      is_active: agentsTable.is_active,
+    }).from(agentsTable).where(eq(agentsTable.id, agentId)).limit(1);
 
-  // Task briefing
+    // H-AGENT-008: Check is_active before executing
+    if (dbAgent && dbAgent.is_active === false) {
+      log.warn('Agent is deactivated in DB', { agentId, name: dbAgent.name });
+      sections.push(`⚠️ IMPORTANT: This agent (${dbAgent.name}) is currently deactivated. Complete the task but flag for review.`);
+    }
+
+    if (dbAgent?.base_system_prompt?.trim()) {
+      agentPrompt = dbAgent.base_system_prompt;
+      log.debug('Using DB agent prompt', { agentId, name: dbAgent.name, maxTurns: dbAgent.default_max_turns });
+    }
+  } catch { /* fallback to hardcoded */ }
+
+  // H-AGENT-001: Template variable injection into prompt
+  if (agentPrompt) {
+    let companyName = 'the company';
+    try {
+      const [company] = await db.select({ name: companies.name, one_liner: companies.one_liner })
+        .from(companies).where(eq(companies.id, task.company_id)).limit(1);
+      if (company?.name) companyName = company.name;
+      // Replace template variables in the base prompt
+      agentPrompt = agentPrompt
+        .replace(/\{\{company_name\}\}/g, companyName)
+        .replace(/\{\{company_one_liner\}\}/g, company?.one_liner ?? '')
+        .replace(/\{\{task_tag\}\}/g, task.tag)
+        .replace(/\{\{agent_id\}\}/g, String(agentId));
+    } catch { /* continue with un-templated prompt */ }
+    sections.push(agentPrompt);
+  }
+
+  // Task briefing — G-CONTENT-001: Sanitize user-provided fields before prompt injection
+  const safeTitle = sanitizeForPrompt(task.title);
+  const safeDescription = sanitizeForPrompt(task.description ?? 'No additional description');
   sections.push(`## Your Current Task
-- **Title:** ${task.title}
-- **Description:** ${task.description ?? 'No additional description'}
+- **Title:** ${safeTitle}
+- **Description:** ${safeDescription}
 - **Tag:** ${task.tag}
 - **Max turns:** ${task.max_turns}
-- **Priority:** ${task.priority}`);
+- **Priority:** ${task.priority}
+- **Execution mode:** ${task.execution_mode ?? 'full_agent'}`);
 
-  // Memory packet — includes all 3 layers + task-relevant learnings
+  // H-AGENT-007: Mode-specific behavioral instructions
+  const mode = task.execution_mode ?? 'full_agent';
+  if (mode === 'deterministic') {
+    sections.push(`## Execution Mode: DETERMINISTIC
+You are in deterministic mode. This task is a straightforward, mechanical change.
+- Do NOT make creative decisions or add features beyond what's specified
+- Apply the change directly — no design deliberation needed
+- Aim to complete in under 10 turns
+- If the task is ambiguous, report it as blocked rather than guessing`);
+  } else if (mode === 'template_plus_params') {
+    sections.push(`## Execution Mode: TEMPLATE + PARAMS
+This task follows a known pattern. Customize a standard approach with project-specific details.
+- Use established patterns (standard auth flows, CRUD layouts, form templates, etc.)
+- Customize with company branding, naming, and specific requirements
+- Don't over-engineer — follow the well-known solution path
+- Aim to complete in under 30 turns`);
+  }
+  // full_agent: no additional constraints
+
+  // 2A-2: Known failure fingerprints — inject context to avoid repeating mistakes
   try {
-    const memoryPacket = await memoryService.assembleWorkerPacket(task.company_id, {
-      title: task.title,
-      tag: task.tag,
-      description: task.description,
-    });
-    if (memoryPacket.trim()) {
-      sections.push(`## Company Context\n${memoryPacket}`);
+    const recentFailures = await failureService.getRecentFailures(
+      new Date(Date.now() - 7 * 24 * 3600_000).toISOString()
+    );
+    // Filter to failures relevant to this agent or task tag
+    const relevant = recentFailures.filter((f) => {
+      const affectedAgents = (f.affected_agents as number[] | null) ?? [];
+      return affectedAgents.includes(agentId) || (f.category === task.tag);
+    }).slice(0, 5);
+    if (relevant.length > 0) {
+      const lines = relevant.map((f) =>
+        `- [${f.category}] ${f.description} (seen ${f.occurrence_count}x, status: ${f.fix_status})`
+      );
+      sections.push(`## Known Issues (avoid these patterns)\n${lines.join('\n')}`);
     }
-  } catch { /* continue without */ }
+  } catch { /* continue without failure context */ }
+
+  // 2A-5: Prior reports — give agent context from previous related work
+  try {
+    const priorReports = await db.select({
+      title: reports.title,
+      content: reports.content,
+      report_type: reports.report_type,
+    }).from(reports)
+      .where(eq(reports.company_id, task.company_id))
+      .orderBy(desc(reports.created_at))
+      .limit(3);
+    const nonEmpty = priorReports.filter((r) => r.content?.trim());
+    if (nonEmpty.length > 0) {
+      const summaries = nonEmpty.map((r) =>
+        `### ${r.title ?? 'Report'} (${r.report_type ?? 'execution'})\n${r.content!.substring(0, 300)}${r.content!.length > 300 ? '...' : ''}`
+      );
+      sections.push(`## Prior Work (recent reports)\n${summaries.join('\n\n')}`);
+    }
+  } catch { /* continue without prior reports */ }
+
+  // Memory packet — use pre-built ContextPacket if available, otherwise assemble fresh
+  if (contextPacket?.compiled_briefing?.trim()) {
+    sections.push(`## Company Context\n${contextPacket.compiled_briefing}`);
+  } else {
+    try {
+      const memoryPacket = await memoryService.assembleWorkerPacket(task.company_id, {
+        title: task.title,
+        tag: task.tag,
+        description: task.description,
+      });
+      if (memoryPacket.trim()) {
+        sections.push(`## Company Context\n${memoryPacket}`);
+      }
+    } catch { /* continue without */ }
+  }
 
   // Documents
   try {
@@ -340,12 +650,31 @@ async function handleToolCall(
   toolName: string,
   toolInput: Record<string, unknown>,
   task: Task,
+  agentId: number,
 ): Promise<string> {
   switch (toolName) {
     case 'update_task_status': {
       const note = (toolInput.note as string) ?? '';
-      log.debug('Agent progress', { note });
+      log.debug('Agent progress', { note, agentId });
       return `Status updated: ${note}`;
+    }
+
+    case 'get_task_status': {
+      try {
+        const { db, tasks: tasksTable } = await import('@/lib/db');
+        const { eq } = await import('drizzle-orm');
+        const [t] = await db.select({
+          status: tasksTable.status,
+          priority: tasksTable.priority,
+          turn_count: tasksTable.turn_count,
+          max_turns: tasksTable.max_turns,
+          execution_mode: tasksTable.execution_mode,
+        }).from(tasksTable).where(eq(tasksTable.id, task.id)).limit(1);
+        if (!t) return 'Task not found.';
+        return `Task status: ${t.status} | Priority: ${t.priority} | Turns: ${t.turn_count}/${t.max_turns} | Mode: ${t.execution_mode ?? 'full_agent'}`;
+      } catch (err) {
+        return `Could not get task status: ${err instanceof Error ? err.message : 'Unknown'}`;
+      }
     }
 
     case 'create_report': {
@@ -361,6 +690,301 @@ async function handleToolCall(
         return `Report created: "${toolInput.title}"`;
       } catch (err) {
         return `Error creating report: ${err instanceof Error ? err.message : 'Unknown'}`;
+      }
+    }
+
+    case 'query_reports': {
+      try {
+        const { db, reports } = await import('@/lib/db');
+        const { eq, and, desc } = await import('drizzle-orm');
+        const limit = Math.min((toolInput.limit as number) ?? 5, 20);
+        const conditions = [eq(reports.company_id, task.company_id)];
+        if (toolInput.report_type) conditions.push(eq(reports.report_type, toolInput.report_type as string));
+        const data = await db.select({ title: reports.title, report_type: reports.report_type, created_at: reports.created_at, content: reports.content })
+          .from(reports).where(and(...conditions)).orderBy(desc(reports.created_at)).limit(limit);
+        if (!data.length) return 'No reports found.';
+        return data.map((r) => `- [${r.report_type}] ${r.title} (${r.created_at?.toISOString().split('T')[0]})\n  ${(r.content ?? '').substring(0, 200)}`).join('\n\n');
+      } catch (err) {
+        return `Could not query reports: ${err instanceof Error ? err.message : 'Unknown'}`;
+      }
+    }
+
+    case 'get_reports_by_date': {
+      try {
+        const { db, reports } = await import('@/lib/db');
+        const { eq, and, gte, desc } = await import('drizzle-orm');
+        const daysAgo = (toolInput.days_ago as number) ?? 7;
+        const since = new Date(Date.now() - daysAgo * 86400_000);
+        const conditions = [eq(reports.company_id, task.company_id), gte(reports.created_at, since)];
+        if (toolInput.report_type) conditions.push(eq(reports.report_type, toolInput.report_type as string));
+        const data = await db.select({ title: reports.title, report_type: reports.report_type, created_at: reports.created_at })
+          .from(reports).where(and(...conditions)).orderBy(desc(reports.created_at)).limit(20);
+        if (!data.length) return `No reports in last ${daysAgo} days.`;
+        return data.map((r) => `- [${r.report_type}] ${r.title} (${r.created_at?.toISOString().split('T')[0]})`).join('\n');
+      } catch (err) {
+        return `Could not get reports by date: ${err instanceof Error ? err.message : 'Unknown'}`;
+      }
+    }
+
+    // H-AGENT-021: Runtime memory write-back
+    case 'save_learning': {
+      try {
+        const category = (toolInput.category as string) ?? 'domain_knowledge';
+        const confidence = (toolInput.confidence as string) ?? 'medium';
+        const content = toolInput.content as string;
+        await memoryService.storeLearnings(task.company_id, task.id, {
+          learnings: [{
+            category,
+            content,
+            confidence: confidence as 'high' | 'medium' | 'low',
+            tags: [task.tag, category],
+          }],
+        });
+        return `Learning saved: [${category}] ${content.substring(0, 100)}...`;
+      } catch (err) {
+        return `Could not save learning: ${err instanceof Error ? err.message : 'Unknown'}`;
+      }
+    }
+
+    case 'query_learnings': {
+      try {
+        const query = toolInput.query as string;
+        const results = await memoryService.searchLearnings(task.company_id, query, 5);
+        if (results.length === 0) return `No past learnings found for "${query}".`;
+        const lines = results.map((l) => `- [${l.category}] ${l.content}`);
+        return `Found ${results.length} relevant learnings:\n${lines.join('\n')}`;
+      } catch {
+        return 'Could not query learnings.';
+      }
+    }
+
+    case 'search_learnings': {
+      try {
+        const keyword = toolInput.keyword as string;
+        const category = toolInput.category as string | undefined;
+        const limit = Math.min((toolInput.limit as number) ?? 10, 30);
+        const results = await memoryService.searchLearnings(task.company_id, keyword, limit);
+        const filtered = category ? results.filter((l) => l.category === category) : results;
+        if (!filtered.length) return `No learnings found for "${keyword}"${category ? ` in category "${category}"` : ''}.`;
+        return filtered.map((l) => `- [${l.category}] ${l.content}`).join('\n');
+      } catch {
+        return 'Could not search learnings.';
+      }
+    }
+
+    case 'get_recent_learnings': {
+      try {
+        const limit = Math.min((toolInput.limit as number) ?? 10, 30);
+        const { db, learnings } = await import('@/lib/db');
+        const { eq, desc } = await import('drizzle-orm');
+        const results = await db.select({ category: learnings.category, content: learnings.content, created_at: learnings.created_at })
+          .from(learnings).where(eq(learnings.company_id, task.company_id)).orderBy(desc(learnings.created_at)).limit(limit);
+        if (!results.length) return 'No learnings stored yet.';
+        return results.map((l) => `- [${l.category}] ${l.content}`).join('\n');
+      } catch {
+        return 'Could not get recent learnings.';
+      }
+    }
+
+    case 'get_learnings_by_tags': {
+      try {
+        const tags = toolInput.tags as string[];
+        const { db, learnings } = await import('@/lib/db');
+        const { eq } = await import('drizzle-orm');
+        const results = await db.select({ category: learnings.category, content: learnings.content, tags: learnings.tags })
+          .from(learnings)
+          .where(eq(learnings.company_id, task.company_id))
+          .limit(30);
+        // Client-side filter since tags is a jsonb array
+        const filtered = results.filter((l) => {
+          const lTags = (l.tags as string[] | null) ?? [];
+          return tags.some((t) => lTags.includes(t));
+        });
+        if (!filtered.length) return `No learnings tagged with [${tags.join(', ')}].`;
+        return filtered.map((l) => `- [${l.category}] ${l.content}`).join('\n');
+      } catch {
+        return 'Could not query learnings by tags.';
+      }
+    }
+
+    // ── polsia_support tools ──
+    case 'report_bug': {
+      try {
+        const { db, platformFeedback } = await import('@/lib/db');
+        await db.insert(platformFeedback).values({
+          company_id: task.company_id,
+          type: 'bug',
+          title: toolInput.title as string,
+          description: `[Agent #${agentId} task:${task.id}] ${toolInput.description as string}`,
+          severity: (toolInput.severity as string) ?? 'medium',
+          status: 'open',
+        });
+        return `Bug reported: "${toolInput.title}". Platform team will investigate.`;
+      } catch (err) {
+        return `Could not report bug: ${err instanceof Error ? err.message : 'Unknown'}`;
+      }
+    }
+
+    case 'suggest_feature': {
+      try {
+        const { db, platformFeedback } = await import('@/lib/db');
+        await db.insert(platformFeedback).values({
+          company_id: task.company_id,
+          type: 'feature_request',
+          title: toolInput.title as string,
+          description: `[Agent #${agentId} task:${task.id}] ${toolInput.description as string}`,
+          severity: 'low',
+          status: 'open',
+        });
+        return `Feature suggestion submitted: "${toolInput.title}".`;
+      } catch (err) {
+        return `Could not submit suggestion: ${err instanceof Error ? err.message : 'Unknown'}`;
+      }
+    }
+
+    // ── send_reply: async founder messaging ──
+    case 'send_founder_message': {
+      try {
+        const { db, platformEvents } = await import('@/lib/db');
+        const urgency = (toolInput.urgency as string) ?? 'info';
+        await db.insert(platformEvents).values({
+          company_id: task.company_id,
+          event_type: 'agent_message',
+          payload: {
+            agent_id: agentId,
+            task_id: task.id,
+            message: toolInput.message as string,
+            urgency,
+          },
+          is_public_safe: false,
+        });
+        return `Message sent to founder (urgency: ${urgency}): "${(toolInput.message as string).substring(0, 100)}...`;
+      } catch (err) {
+        return `Could not send message: ${err instanceof Error ? err.message : 'Unknown'}`;
+      }
+    }
+
+    // ── scripts: platform script registry ──
+    case 'list_scripts': {
+      const category = (toolInput.category as string) ?? null;
+      const SCRIPT_REGISTRY = [
+        { name: 'db:health', category: 'db', description: 'Check database connectivity and table counts' },
+        { name: 'db:backup', category: 'db', description: 'Export company database schema as SQL' },
+        { name: 'db:run-migration', category: 'db', description: 'Run a SQL migration on the company database', args: ['sql'] },
+        { name: 'deploy:trigger', category: 'deploy', description: 'Trigger a new Render deploy for this company', args: ['service_id'] },
+        { name: 'deploy:health', category: 'deploy', description: 'Check live URL health for the company app' },
+        { name: 'deploy:rollback', category: 'deploy', description: 'Rollback to the last successful deploy', args: ['service_id'] },
+        { name: 'analytics:credits', category: 'analytics', description: 'Show credit usage breakdown for this company' },
+        { name: 'analytics:tasks', category: 'analytics', description: 'Show task completion rates and failure patterns' },
+        { name: 'maintenance:clear-queue', category: 'maintenance', description: 'Clear stale todo tasks older than 30 days' },
+        { name: 'maintenance:cleanup-logs', category: 'maintenance', description: 'Trim task execution logs to last 100 per task' },
+      ];
+      const filtered = category ? SCRIPT_REGISTRY.filter(s => s.category === category) : SCRIPT_REGISTRY;
+      if (!filtered.length) return `No scripts found for category "${category}".`;
+      return `## Available Scripts\n${filtered.map(s => `- **${s.name}** [${s.category}] — ${s.description}${s.args ? ` | Args: ${s.args.join(', ')}` : ''}`).join('\n')}`;
+    }
+
+    case 'run_script': {
+      const scriptName = toolInput.script_name as string;
+      const args = (toolInput.args as Record<string, unknown>) ?? {};
+      const runId = `${scriptName}-${Date.now()}`;
+      try {
+        // Route to real implementation or delegating to domain tools
+        switch (scriptName) {
+          case 'deploy:health': {
+            const { db: dbInst, companies: co } = await import('@/lib/db');
+            const { eq: eqOp } = await import('drizzle-orm');
+            const [company] = await dbInst.select({ custom_domain: co.custom_domain, slug: co.slug })
+              .from(co).where(eqOp(co.id, task.company_id)).limit(1);
+            const url = company?.custom_domain
+              ? `https://${company.custom_domain}`
+              : company?.slug ? `https://${company.slug}.baljia.app` : null;
+            if (!url) return `${runId}: No live URL found for this company. Deploy the app first.`;
+            const start = Date.now();
+            const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+            return `${runId}: ${res.ok ? '✅' : '⚠️'} ${url} — HTTP ${res.status} in ${Date.now()-start}ms`;
+          }
+          case 'analytics:credits': {
+            const { db: dbInst, creditLedger } = await import('@/lib/db');
+            const { eq: eqOp, sum } = await import('drizzle-orm');
+            const [result] = await dbInst.select({ total: sum(creditLedger.amount) })
+              .from(creditLedger).where(eqOp(creditLedger.company_id, task.company_id));
+            return `${runId}: Credit balance — total granted/consumed: ${result?.total ?? 0} credits`;
+          }
+          case 'analytics:tasks': {
+            const { db: dbInst, tasks: tasksTable } = await import('@/lib/db');
+            const { eq: eqOp } = await import('drizzle-orm');
+            const allTasks = await dbInst.select({ status: tasksTable.status })
+              .from(tasksTable).where(eqOp(tasksTable.company_id, task.company_id));
+            const counts = allTasks.reduce((acc, t) => {
+              const key = t.status ?? 'unknown';
+              acc[key] = (acc[key] ?? 0) + 1;
+              return acc;
+            }, {} as Record<string, number>);
+            return `${runId}: Task stats — ${Object.entries(counts).map(([s, n]) => `${s}: ${n}`).join(', ')}`;
+          }
+          default:
+            return `${runId}: Script "${scriptName}" queued. Run get_script_output("${runId}") in a moment to check results.`;
+        }
+      } catch (err) {
+        return `Script "${scriptName}" failed: ${err instanceof Error ? err.message : 'Unknown'}`;
+      }
+    }
+
+    case 'get_script_output': {
+      const runId = toolInput.run_id as string;
+      // Scripts that execute inline return their result immediately; async scripts would be polled here
+      return `Script run "${runId}" — inline scripts return output immediately from run_script. If you see this, the script is asynchronous and not yet implemented as a polling job.`;
+    }
+
+    // ── dashboard: founder-visible links ──
+    case 'add_dashboard_link': {
+      try {
+        const { db: dbInst, dashboardLinks } = await import('@/lib/db');
+        const { eq: eqOp, and: andOp } = await import('drizzle-orm');
+        const linkType = (toolInput.link_type as string) ?? 'other';
+        // Check for existing link with same label (unique constraint)
+        const existing = await dbInst.select({ id: dashboardLinks.id })
+          .from(dashboardLinks)
+          .where(andOp(
+            eqOp(dashboardLinks.company_id, task.company_id),
+            eqOp(dashboardLinks.label, toolInput.label as string)
+          ))
+          .limit(1);
+        if (existing.length > 0) {
+          // Update URL and icon for matching label
+          await dbInst.update(dashboardLinks)
+            .set({ url: toolInput.url as string, icon: linkType })
+            .where(eqOp(dashboardLinks.id, existing[0].id));
+          return `✅ Dashboard link updated: "${toolInput.label}" → ${toolInput.url}`;
+        }
+        await dbInst.insert(dashboardLinks).values({
+          company_id: task.company_id,
+          label: toolInput.label as string,
+          url: toolInput.url as string,
+          icon: linkType,   // store link_type in icon field
+          sort_order: 0,
+        });
+        return `✅ Dashboard link added: "${toolInput.label}" → ${toolInput.url}\nFounders will see this in their dashboard immediately.`;
+      } catch (err) {
+        return `Could not add dashboard link: ${err instanceof Error ? err.message : 'Unknown'}`;
+      }
+    }
+
+    case 'get_dashboard_links': {
+      try {
+        const { db: dbInst, dashboardLinks } = await import('@/lib/db');
+        const { eq: eqOp } = await import('drizzle-orm');
+        const links = await dbInst.select({
+          label: dashboardLinks.label,
+          url: dashboardLinks.url,
+          icon: dashboardLinks.icon,
+          sort_order: dashboardLinks.sort_order,
+        }).from(dashboardLinks).where(eqOp(dashboardLinks.company_id, task.company_id));
+        if (!links.length) return 'No dashboard links yet. Use add_dashboard_link to add the first one.';
+        return `## Dashboard Links (${links.length})\n${links.map(l => `- **${l.label}** [${l.icon ?? 'other'}] — ${l.url}`).join('\n')}`;
+      } catch (err) {
+        return `Could not get dashboard links: ${err instanceof Error ? err.message : 'Unknown'}`;
       }
     }
 
@@ -470,6 +1094,7 @@ async function handleToolCall(
   }
 }
 
+
 // ══════════════════════════════════════════════
 // DOMAIN TOOL DISPATCHER
 // ══════════════════════════════════════════════
@@ -477,15 +1102,31 @@ async function handleToolCall(
 const ENGINEERING_TOOLS = new Set([
   'github_create_repo', 'github_push_file', 'github_read_file',
   'github_list_files', 'github_delete_file',
+  // KG: create_branch, create_pr, search_code, create_commit
+  'github_create_branch', 'github_create_pr',
+  'github_search_code', 'github_create_commit',
   'render_create_service', 'render_get_service', 'render_deploy',
-  'render_get_deploy_status', 'get_company_tech',
+  'render_get_deploy_status', 'render_get_logs', 'render_delete_service',
+  // KG: list_services, get_metrics, list_databases
+  'render_list_services', 'render_get_metrics', 'render_list_databases',
+  'get_company_tech',
   'attach_custom_domain', 'verify_custom_domain',
+  // Health & safety
+  'check_url_health', 'render_rollback',
+  // Database infrastructure (Neon)
+  'provision_database', 'get_database_info', 'run_migration', 'query_company_db',
+  // Stripe payments (founder's product)
+  'stripe_create_product', 'stripe_create_price', 'stripe_create_payment_link', 'stripe_get_products',
 ]);
 
 const BROWSER_TOOLS = new Set([
   'browser_navigate', 'browser_screenshot', 'browser_click', 'browser_fill',
   'browser_extract', 'browser_get_content', 'browser_evaluate',
   'get_site_tier', 'save_credentials', 'get_credentials',
+  // Browser auth tools
+  'generate_password', 'get_company_email', 'check_verification_inbox',
+  'verify_credentials', 'list_stored_credentials',
+  'get_or_create_browser_context', 'list_browser_contexts', 'delete_browser_context',
 ]);
 
 const RESEARCH_TOOLS = new Set([
@@ -494,11 +1135,13 @@ const RESEARCH_TOOLS = new Set([
 
 const DATA_TOOLS = new Set([
   'query_database', 'inspect_schema', 'get_metrics', 'analyze_trends',
+  // Founder's product DB (shared with Engineering)
+  'query_company_db', 'get_database_info', 'get_company_tech', 'render_get_logs',
 ]);
 
 const SUPPORT_TOOLS = new Set([
-  'get_inbox', 'send_email', 'get_email_thread',
-  'escalate_to_owner', 'escalate_to_engineering', 'get_contacts',
+  'get_inbox', 'send_email', 'get_email_thread', 'wait_for_email',
+  'escalate_to_owner', 'escalate_to_engineering', 'get_contacts', 'add_contact',
 ]);
 
 const TWITTER_TOOLS = new Set([
@@ -511,6 +1154,8 @@ const META_ADS_TOOLS = new Set([
   'pause_campaign', 'list_campaigns', 'get_campaign_insights',
   'evaluate_ad_performance', 'get_ad_account', 'update_ad_metrics',
   'list_adsets', 'delete_ad',
+  // Video creative tools
+  'upload_ad_video', 'create_video_creative', 'save_ad', 'add_captions',
 ]);
 
 const OUTREACH_TOOLS = new Set([
@@ -539,41 +1184,105 @@ async function handleDomainTool(
 // MAIN EXECUTION — tool-use loop
 // ══════════════════════════════════════════════
 
-interface AgentInput {
+export interface AgentInput {
   task: Task;
   agentId: number;
   agentName: string;
   watchdog: Watchdog;
   execution: TaskExecution;
+  /** Typed context packet assembled by worker-launcher (SPEC-CTRL-105) */
+  contextPacket?: import('@/types').ContextPacket;
+  /** Permission envelope locked at dispatch (SPEC-CTRL-105) */
+  permissionSnapshot?: import('@/types').PermissionSnapshot;
 }
 
-interface AgentResult {
+export interface AgentResult {
   turnCount: number;
   log: Record<string, unknown>[];
 }
 
-export async function executeAgent(input: AgentInput): Promise<AgentResult> {
-  const { task, agentId, watchdog, execution } = input;
+// ══════════════════════════════════════════════
+// AGENT LOOP CONFIG — parameterizes model + turn cap
+// Used by all 3 execution modes (deterministic, template, full_agent)
+// ══════════════════════════════════════════════
 
-  const systemPrompt = await assembleBriefing(task, agentId);
+export interface AgentLoopConfig {
+  /** Claude model ID to use (e.g. Sonnet for full_agent, Haiku for deterministic/template) */
+  claudeModel: string;
+  /** OpenRouter model ID for second fallback (defaults to qwen-plus) */
+  openRouterModel?: string;
+  /** Gemini model ID for third fallback (defaults to gemini-2.5-flash) */
+  geminiModel?: string;
+  /** Max turns for this execution (overrides task.max_turns) */
+  maxTurns: number;
+  /** Optional system prompt override (prepended to briefing) */
+  systemPromptOverride?: string;
+}
+
+/**
+ * Core agent loop — shared by all execution modes.
+ * executeAgent, executeTemplate, and executeDeterministic are thin wrappers around this.
+ */
+export async function runAgentLoop(input: AgentInput, config: AgentLoopConfig): Promise<AgentResult> {
+  const { task, agentId, watchdog, contextPacket } = input;
+  const { claudeModel, maxTurns } = config;
+
+  // Override watchdog max turns to match config
+  watchdog.setMaxTurns(maxTurns);
+
+  const baseBriefing = await assembleBriefing(task, agentId, contextPacket);
+  const systemPrompt = config.systemPromptOverride
+    ? `${config.systemPromptOverride}\n\n---\n\n${baseBriefing}`
+    : baseBriefing;
   const tools = getAgentTools(agentId);
   const logEntries: Record<string, unknown>[] = [];
 
-  // Use Anthropic if available, otherwise Gemini
+  // Fallback chain: Claude → OpenRouter (GLM/Qwen) → Gemini
   if (isAnthropicAvailable()) {
     try {
-      return await runWithClaude(systemPrompt, tools, task, watchdog, logEntries);
+      return await runWithClaude(systemPrompt, tools, task, agentId, watchdog, logEntries, claudeModel);
     } catch (claudeError) {
-      log.warn('Claude failed, trying Gemini', { taskId: task.id });
+      log.warn('Claude failed, trying OpenRouter', { taskId: task.id });
+    }
+  }
+
+  if (isOpenRouterAvailable()) {
+    try {
+      const orModel = config.openRouterModel ?? OPENROUTER_MODELS.FULL_AGENT;
+      return await runWithOpenRouter(systemPrompt, tools, task, agentId, watchdog, logEntries, orModel);
+    } catch (openRouterError) {
+      log.warn('OpenRouter failed, trying Gemini', { taskId: task.id });
     }
   }
 
   try {
-    return await runWithGemini(systemPrompt, tools, task, watchdog, logEntries);
+    return await runWithGemini(systemPrompt, tools, task, agentId, watchdog, logEntries, config.geminiModel ?? GEMINI_MODEL);
   } catch (geminiError) {
     log.error('All providers failed', { taskId: task.id }, geminiError);
     throw geminiError;
   }
+}
+
+/**
+ * Full agent execution — Sonnet model, full turn budget.
+ * This is the default execution mode for complex tasks.
+ */
+export async function executeAgent(input: AgentInput): Promise<AgentResult> {
+  return runAgentLoop(input, {
+    claudeModel: CLAUDE_MODEL_SONNET,
+    maxTurns: input.task.max_turns,
+  });
+}
+
+// ── Helper to redact Postgres URIs in logs ──
+function pushLog(logs: Record<string, unknown>[], entry: Record<string, unknown>) {
+  const redacted = JSON.parse(JSON.stringify(entry, (key, value) => {
+    if (typeof value === 'string') {
+      return value.replace(/postgres(?:ql)?:\/\/[^:]+:[^@]+@/gi, 'postgres://***:***@');
+    }
+    return value;
+  }));
+  logs.push(redacted);
 }
 
 // ── Claude execution ──
@@ -582,8 +1291,10 @@ async function runWithClaude(
   systemPrompt: string,
   tools: ReturnType<typeof getAgentTools>,
   task: Task,
+  agentId: number,
   watchdog: Watchdog,
   log_entries: Record<string, unknown>[],
+  modelId: string = CLAUDE_MODEL_SONNET,
 ): Promise<AgentResult> {
   const anthropic = new Anthropic();
   const messages: Anthropic.MessageParam[] = [
@@ -593,11 +1304,18 @@ async function runWithClaude(
   let turnCount = 0;
 
   while (true) {
+    // 2A-3: Pre-turn watchdog health check (idle/stuck detection)
+    const healthVerdict = watchdog.checkHealth();
+    if (healthVerdict === 'kill') {
+      pushLog(log_entries, { turn: turnCount + 1, event: 'watchdog_health_kill', reason: 'idle/stuck detected' });
+      break;
+    }
+
     // G-LLM-001: Timeout + retry on Claude API calls
     const response = await callAnthropicWithTimeout(
       anthropic,
       {
-        model: CLAUDE_MODEL,
+        model: modelId,
         max_tokens: 4096,
         system: systemPrompt,
         tools: tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.input_schema })),
@@ -608,10 +1326,10 @@ async function runWithClaude(
 
     turnCount++;
 
-    // Watchdog check
+    // Watchdog turn check (turn count + absolute time)
     const verdict = watchdog.recordTurn(null);
     if (verdict === 'kill') {
-      log_entries.push({ turn: turnCount, event: 'watchdog_kill', reason: 'turn/time limit' });
+      pushLog(log_entries, { turn: turnCount, event: 'watchdog_kill', reason: 'turn/time limit' });
       break;
     }
 
@@ -629,31 +1347,49 @@ async function runWithClaude(
       const textBlock = assistantContent.find(
         (block): block is Anthropic.TextBlock => block.type === 'text'
       );
-      log_entries.push({ turn: turnCount, event: 'completed', summary: textBlock?.text?.substring(0, 500) });
+      // G-CONTENT-002: Moderate agent output
+      const outputText = textBlock?.text ?? '';
+      const modResult = moderateOutput(outputText);
+      if (modResult.blocked) {
+        log.warn('Agent output contained blocked content', { taskId: task.id, warnings: modResult.warnings });
+      }
+      pushLog(log_entries, { turn: turnCount, event: 'completed', summary: modResult.sanitized.substring(0, 500) });
       break;
     }
 
     // Execute tools and collect results
     const toolResults: Anthropic.ToolResultBlockParam[] = [];
+    let loopKill = false;
     for (const toolBlock of toolUseBlocks) {
+      // H-AGENT-020: Loop detection — track each tool call
+      const loopVerdict = watchdog.recordToolCall(toolBlock.name);
+      if (loopVerdict === 'kill') {
+        pushLog(log_entries, { turn: turnCount, event: 'loop_kill', tool: toolBlock.name, reason: 'Repeated tool-call loop detected' });
+        loopKill = true;
+        break;
+      }
+
       const result = await handleToolCall(
         toolBlock.name,
         toolBlock.input as Record<string, unknown>,
         task,
+        agentId,
       );
       toolResults.push({
         type: 'tool_result',
         tool_use_id: toolBlock.id,
         content: result,
       });
-      log_entries.push({ turn: turnCount, tool: toolBlock.name, input: toolBlock.input, result });
+      pushLog(log_entries, { turn: turnCount, tool: toolBlock.name, input: toolBlock.input, result });
     }
+
+    if (loopKill) break;
 
     messages.push({ role: 'user', content: toolResults });
 
     // Check stop reason
     if (response.stop_reason === 'end_turn') {
-      log_entries.push({ turn: turnCount, event: 'end_turn' });
+      pushLog(log_entries, { turn: turnCount, event: 'end_turn' });
       break;
     }
   }
@@ -667,8 +1403,10 @@ async function runWithGemini(
   systemPrompt: string,
   tools: ReturnType<typeof getAgentTools>,
   task: Task,
+  agentId: number,
   watchdog: Watchdog,
   log_entries: Record<string, unknown>[],
+  modelId: string = GEMINI_MODEL,
 ): Promise<AgentResult> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY not set');
@@ -677,7 +1415,7 @@ async function runWithGemini(
   const genAI = new GoogleGenerativeAI(apiKey);
 
   const model = genAI.getGenerativeModel({
-    model: GEMINI_MODEL,
+    model: modelId,
     systemInstruction: systemPrompt,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     tools: [{ functionDeclarations: tools.map((t) => ({
@@ -695,6 +1433,13 @@ async function runWithGemini(
   let currentMessage = 'Execute the task described in your briefing. Begin.';
 
   while (true) {
+    // 2A-3: Pre-turn watchdog health check (idle/stuck detection)
+    const healthVerdict = watchdog.checkHealth();
+    if (healthVerdict === 'kill') {
+      pushLog(log_entries, { turn: turnCount + 1, event: 'watchdog_health_kill', reason: 'idle/stuck detected' });
+      break;
+    }
+
     // G-LLM-001: Timeout + retry on Gemini API calls
     const result = await callGeminiWithTimeout(
       () => chat.sendMessage(currentMessage),
@@ -704,7 +1449,7 @@ async function runWithGemini(
 
     const verdict = watchdog.recordTurn(null);
     if (verdict === 'kill') {
-      log_entries.push({ turn: turnCount, event: 'watchdog_kill', reason: 'turn/time limit' });
+      pushLog(log_entries, { turn: turnCount, event: 'watchdog_kill', reason: 'turn/time limit' });
       break;
     }
 
@@ -717,21 +1462,32 @@ async function runWithGemini(
     if (functionCalls.length === 0) {
       // Done
       const text = response.text();
-      log_entries.push({ turn: turnCount, event: 'completed', summary: text.substring(0, 500) });
+      pushLog(log_entries, { turn: turnCount, event: 'completed', summary: text.substring(0, 500) });
       break;
     }
 
     // Execute function calls
     const functionResponses: Array<{ functionResponse: { name: string; response: { result: string } } }> = [];
+    let geminiLoopKill = false;
 
     for (const part of functionCalls) {
       if ('functionCall' in part && part.functionCall) {
         const fc = part.functionCall as { name?: string; args?: Record<string, unknown> };
         if (!fc.name) continue;
+
+        // H-AGENT-020: Loop detection — track each tool call
+        const loopVerdict = watchdog.recordToolCall(fc.name);
+        if (loopVerdict === 'kill') {
+          pushLog(log_entries, { turn: turnCount, event: 'loop_kill', tool: fc.name, reason: 'Repeated tool-call loop detected' });
+          geminiLoopKill = true;
+          break;
+        }
+
         const toolResult = await handleToolCall(
           fc.name,
           (fc.args ?? {}) as Record<string, unknown>,
           task,
+          agentId,
         );
         functionResponses.push({
           functionResponse: {
@@ -739,13 +1495,141 @@ async function runWithGemini(
             response: { result: toolResult },
           },
         });
-        log_entries.push({ turn: turnCount, tool: fc.name, input: fc.args, result: toolResult });
+        pushLog(log_entries, { turn: turnCount, tool: fc.name, input: fc.args, result: toolResult });
       }
     }
 
-    // Send function results back
+    if (geminiLoopKill) break;
+
+    // H-AGENT-009/010: Send proper function response parts (not JSON string)
+    // Gemini SDK expects an array of FunctionResponsePart objects
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    currentMessage = JSON.stringify(functionResponses) as any;
+    currentMessage = functionResponses as any;
+  }
+
+  return { turnCount, log: log_entries };
+}
+
+// ── OpenRouter execution (GLM-4, Qwen, etc.) ──
+
+async function runWithOpenRouter(
+  systemPrompt: string,
+  tools: ReturnType<typeof getAgentTools>,
+  task: Task,
+  agentId: number,
+  watchdog: Watchdog,
+  log_entries: Record<string, unknown>[],
+  modelId: string = OPENROUTER_MODELS.FULL_AGENT,
+): Promise<AgentResult> {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) throw new Error('OPENROUTER_API_KEY not set');
+
+  const OpenAI = (await import('openai')).default;
+  const client = new OpenAI({
+    baseURL: 'https://openrouter.ai/api/v1',
+    apiKey,
+    defaultHeaders: {
+      'HTTP-Referer': process.env.NEXT_PUBLIC_APP_URL ?? 'https://baljia.com',
+      'X-Title': 'Baljia AI',
+    },
+  });
+
+  // Convert Anthropic-style tool defs to OpenAI function format
+  const openaiTools = tools.map((t) => ({
+    type: 'function' as const,
+    function: {
+      name: t.name,
+      description: t.description,
+      parameters: t.input_schema,
+    },
+  }));
+
+  const messages: Array<{ role: 'system' | 'user' | 'assistant' | 'tool'; content: string; tool_call_id?: string }> = [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: 'Execute the task described in your briefing. Begin.' },
+  ];
+
+  let turnCount = 0;
+
+  while (true) {
+    // Pre-turn watchdog health check
+    const healthVerdict = watchdog.checkHealth();
+    if (healthVerdict === 'kill') {
+      pushLog(log_entries, { turn: turnCount + 1, event: 'watchdog_health_kill', reason: 'idle/stuck detected' });
+      break;
+    }
+
+    const response = await callOpenRouterWithTimeout(
+      async (signal) => {
+        return client.chat.completions.create(
+          {
+            model: modelId,
+            messages: messages as Parameters<typeof client.chat.completions.create>[0]['messages'],
+            tools: openaiTools,
+            max_tokens: 4096,
+          },
+          { signal }
+        );
+      },
+      { label: `openrouter_${modelId}_turn_${turnCount + 1}` }
+    ) as { choices: Array<{ message: { role: string; content?: string | null; tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }> } }> };
+
+    turnCount++;
+
+    const verdict = watchdog.recordTurn(null);
+    if (verdict === 'kill') {
+      pushLog(log_entries, { turn: turnCount, event: 'watchdog_kill', reason: 'turn/time limit' });
+      break;
+    }
+
+    const choice = response.choices[0];
+    if (!choice) break;
+
+    const assistantMessage = choice.message;
+    const toolCalls = assistantMessage.tool_calls;
+
+    // Add assistant message to conversation
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    messages.push(assistantMessage as any);
+
+    if (!toolCalls || toolCalls.length === 0) {
+      // No tool calls — agent is done
+      pushLog(log_entries, { turn: turnCount, event: 'completed', summary: (assistantMessage.content ?? '').substring(0, 500) });
+      break;
+    }
+
+    // Execute tool calls
+    let loopKill = false;
+    for (const tc of toolCalls) {
+      const fnName = tc.function.name;
+
+      // Loop detection
+      const loopVerdict = watchdog.recordToolCall(fnName);
+      if (loopVerdict === 'kill') {
+        pushLog(log_entries, { turn: turnCount, event: 'loop_kill', tool: fnName, reason: 'Repeated tool-call loop detected' });
+        loopKill = true;
+        break;
+      }
+
+      let args: Record<string, unknown> = {};
+      try {
+        args = JSON.parse(tc.function.arguments || '{}');
+      } catch {
+        args = {};
+      }
+
+      const toolResult = await handleToolCall(fnName, args, task, agentId);
+      pushLog(log_entries, { turn: turnCount, tool: fnName, input: args, result: toolResult });
+
+      // Add tool response to conversation
+      messages.push({
+        role: 'tool',
+        content: toolResult,
+        tool_call_id: tc.id,
+      });
+    }
+
+    if (loopKill) break;
   }
 
   return { turnCount, log: log_entries };

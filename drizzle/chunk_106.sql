@@ -1,0 +1,1 @@
+CREATE INDEX "idx_companies_lifecycle" ON "companies" USING btree ("lifecycle");

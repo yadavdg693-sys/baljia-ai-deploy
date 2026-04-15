@@ -1,13 +1,6 @@
 // Cron: Nightly night shift runner
 // Called by Render cron or Upstash QStash at a set schedule (e.g. 2am UTC)
 // Auth: CRON_SECRET header (prevents unauthorized triggers)
-//
-// Render cron config (render.yaml):
-//   services:
-//     - type: cron
-//       schedule: "0 2 * * *"
-//       buildCommand: ""
-//       startCommand: "curl -X POST $BASE_URL/api/cron/night-shift -H 'x-cron-secret: $CRON_SECRET'"
 
 import { NextRequest, NextResponse } from 'next/server';
 import { db, companies } from '@/lib/db';

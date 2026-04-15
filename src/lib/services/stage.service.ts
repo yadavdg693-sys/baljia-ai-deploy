@@ -35,7 +35,7 @@ export async function evaluateStage(companyId: string): Promise<{
     db.select({ company_stage: companies.company_stage, onboarding_status: companies.onboarding_status, render_service_id: companies.render_service_id, subdomain: companies.subdomain })
       .from(companies).where(eq(companies.id, companyId)).limit(1),
     db.select({ count: sql<number>`count(*)` }).from(tasks)
-      .where(and(eq(tasks.company_id, companyId), inArray(tasks.status, ['completed_verified', 'completed_unverified']))),
+      .where(and(eq(tasks.company_id, companyId), eq(tasks.status, 'completed'))),
     db.select({ count: sql<number>`count(*)` }).from(creditLedger)
       .where(and(eq(creditLedger.company_id, companyId), eq(creditLedger.entry_type, 'addon_purchase'))),
     db.select({ count: sql<number>`count(*)` }).from(adCampaigns)

@@ -1,0 +1,1 @@
+CREATE INDEX "idx_sessions_task" ON "sessions" USING btree ("task_id");

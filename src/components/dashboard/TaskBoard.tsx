@@ -14,30 +14,38 @@ interface TaskBoardProps {
 
 const STATUS_TABS = [
   { value: 'all', label: 'All' },
-  { value: 'created', label: 'Pending' },
   { value: 'todo', label: 'To Do' },
+  { value: 'recurring', label: 'Recurring' },
   { value: 'in_progress', label: 'Running' },
-  { value: 'completed_verified', label: 'Done' },
+  { value: 'verifying', label: 'Verifying' },
+  { value: 'completed', label: 'Done' },
+  { value: 'rejected', label: 'Rejected' },
   { value: 'failed', label: 'Failed' },
 ] as const;
 
 const EMPTY_STATES: Record<string, { icon: string; message: string }> = {
   all: { icon: '📋', message: 'No tasks yet. Chat with the CEO to get started!' },
-  created: { icon: '⏳', message: 'No tasks waiting for approval.' },
-  todo: { icon: '📝', message: 'No tasks queued. Approve pending tasks to add them.' },
+  todo: { icon: '📝', message: 'No tasks queued.' },
+  recurring: { icon: '🔄', message: 'No recurring tasks set up yet.' },
   in_progress: { icon: '⚡', message: 'Nothing running right now.' },
-  completed_verified: { icon: '🎉', message: 'No completed tasks yet. They\'ll show up here.' },
+  verifying: { icon: '🔍', message: 'No tasks being verified.' },
+  completed: { icon: '🎉', message: 'No completed tasks yet. They\'ll show up here.' },
+  rejected: { icon: '🚫', message: 'No rejected tasks.' },
   failed: { icon: '✅', message: 'No failed tasks. Everything\'s running smoothly!' },
 };
 
 export function TaskBoard({ tasks, onTaskClick, onApprove, onReject }: TaskBoardProps) {
   const [activeTab, setActiveTab] = useState('all');
 
-  const filterTasks = (status: string) =>
-    tasks.filter((t) => (status === 'all' ? true : t.status === status));
+  const filterTasks = (status: string) => {
+    if (status === 'all') return tasks;
+    if (status === 'recurring') return tasks.filter((t) => t.source === 'recurring');
+    if (status === 'rejected') return tasks.filter((t) => t.status === 'rejected');
+    return tasks.filter((t) => t.status === status);
+  };
 
-  // Count pending tasks that need attention
-  const pendingCount = filterTasks('created').length;
+  // Count tasks in todo that need attention
+  const pendingCount = filterTasks('todo').length;
   const runningCount = filterTasks('in_progress').length;
   const totalCreditsUsed = tasks.reduce((sum, t) => sum + t.actual_credits_charged, 0);
 
@@ -102,8 +110,8 @@ export function TaskBoard({ tasks, onTaskClick, onApprove, onReject }: TaskBoard
                     key={task.id}
                     task={task}
                     onClick={() => onTaskClick?.(task)}
-                    onApprove={task.status === 'created' ? onApprove : undefined}
-                    onReject={task.status === 'created' ? onReject : undefined}
+                    onApprove={task.status === 'todo' ? onApprove : undefined}
+                    onReject={task.status === 'todo' ? onReject : undefined}
                   />
                 ))
               )}

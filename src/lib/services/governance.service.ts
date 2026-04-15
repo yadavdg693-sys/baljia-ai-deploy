@@ -10,11 +10,13 @@
 //   Domain 5.4: 4-hour max per task, 1 credit deducted at start_task
 
 import Anthropic from '@anthropic-ai/sdk';
-import type { GovernanceDecision, ExecutionMode, VerificationLevel } from '@/types';
+import type { GovernanceDecision, ExecutionMode, VerificationLevel, PermissionSnapshot, CreditQuote } from '@/types';
 import * as creditService from './credit.service';
 import { callAnthropicWithTimeout, callGeminiWithTimeout } from '@/lib/llm-safety';
 import { isAnthropicAvailable } from '@/lib/llm-provider';
 import { createLogger } from '@/lib/logger';
+import { db, failureFingerprints } from '@/lib/db';
+import { eq, and, gte, sql } from 'drizzle-orm';
 
 const log = createLogger('Governance');
 
@@ -349,7 +351,9 @@ function classifyRefundPolicy(tag: string): 'auto_eligible' | 'manual_review' | 
   const normalized = tag.toLowerCase().trim();
   if (NO_REFUND_TAGS.has(normalized)) return 'no_refund';
   if (MANUAL_REVIEW_TAGS.has(normalized)) return 'manual_review';
-  return 'auto_eligible';
+  // Spec: "Failed tasks consume credit (no auto-refund)". Default to manual_review
+  // so refunds require explicit human decision rather than happening silently.
+  return 'manual_review';
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -444,8 +448,8 @@ async function classifyWithLLM(input: {
 const SAFE_DEFAULTS: LLMClassification = {
   execution_mode: 'full_agent',
   verification_level: 'none',
-  refund_policy: 'auto_eligible',
-  reasoning: 'Could not classify — using safe defaults (full agent, no auto-verify).',
+  refund_policy: 'manual_review',
+  reasoning: 'Could not classify — using safe defaults (full agent, no auto-verify, manual refund review).',
 };
 
 const CLASSIFIER_SYSTEM_PROMPT = `You classify tasks for Baljia AI. Respond ONLY with valid JSON, no markdown.
@@ -463,7 +467,7 @@ ad campaign setup, cold outreach sequences, tweets.
 
 execution_mode: "deterministic" (config, CSS, SEO, deploy), "template_plus_params" (pages, forms, APIs, templates), "full_agent" (features, bugs, research, integrations, automation)
 verification_level: "none" (research/reports), "deterministic" (APIs, DB, payments — run tests), "browser_flow" (UI — screenshot), "quality_review" (content — read it)
-refund_policy: "auto_eligible" (default), "manual_review" (sent emails/tweets, external actions), "no_refund" (ad spend)`;
+refund_policy: "manual_review" (default — failed tasks consume credit, refund needs human review), "auto_eligible" (only for pure infra errors where nothing ran), "no_refund" (ad spend, sent emails, external actions)`;
 
 function buildClassifierPrompt(input: { tag: string; title: string; description: string }): string {
   return `Classify: Tag="${input.tag}" Title="${input.title}" Description="${input.description}"
@@ -478,7 +482,7 @@ function validateClassification(parsed: LLMClassification): LLMClassification {
   return {
     execution_mode: validModes.includes(parsed.execution_mode) ? parsed.execution_mode : 'full_agent',
     verification_level: validVerify.includes(parsed.verification_level) ? parsed.verification_level : 'none',
-    refund_policy: validRefund.includes(parsed.refund_policy) ? parsed.refund_policy as LLMClassification['refund_policy'] : 'auto_eligible',
+    refund_policy: validRefund.includes(parsed.refund_policy) ? parsed.refund_policy as LLMClassification['refund_policy'] : 'manual_review',
     reasoning: parsed.reasoning ?? 'Classified by AI',
   };
 }
@@ -560,7 +564,7 @@ export async function evaluateTask(input: {
       estimated_credits: 1,
       verification_level: classifyVerificationLevel(tag) ?? 'none',
       blocker_reason: blockerReason,
-      refund_policy: 'auto_eligible',
+      refund_policy: 'no_refund',
       founder_safe_explanation: blockerReason,
     };
   }
@@ -588,10 +592,40 @@ export async function evaluateTask(input: {
       estimated_credits: 1,
       verification_level: classifyVerificationLevel(tag) ?? 'none',
       blocker_reason: 'Insufficient credits.',
-      refund_policy: 'auto_eligible',
+      refund_policy: 'no_refund',
       founder_safe_explanation:
         `You need at least 1 credit but your balance is ${balance}. Planning stays free — only execution pauses. Buy more credits to continue.`,
     };
+  }
+
+  // Step 3b: Failure feedback — check if this tag has a pattern of repeated failures.
+  // If the same type of task has failed 3+ times (open fingerprints), force full_agent mode
+  // and reduce max_turns to encourage a more careful, narrower approach.
+  let failureWarning: string | null = null;
+  let forceFullAgent = false;
+  try {
+    const since30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const [tagFailures] = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(failureFingerprints)
+      .where(
+        and(
+          sql`${failureFingerprints.affected_agents} @> '[]'::jsonb`, // any agent
+          eq(failureFingerprints.fix_status, 'open'),
+          gte(failureFingerprints.last_seen_at, since30d),
+          sql`${failureFingerprints.category} IN ('tool_failure', 'timeout', 'scope')`,
+        )
+      );
+
+    const openFailures = Number(tagFailures?.count ?? 0);
+    if (openFailures >= 3) {
+      forceFullAgent = true;
+      failureWarning = `⚠️ Similar tasks have failed ${openFailures}× recently. Running in careful full-agent mode.`;
+      log.warn('Failure feedback: forcing full_agent mode', { tag, openFailures });
+    }
+  } catch (err) {
+    // Non-blocking: governance should never fail due to fingerprint lookup errors
+    log.warn('Failure feedback lookup failed', { tag, error: err instanceof Error ? err.message : 'Unknown' });
   }
 
   // Step 4: Classification — deterministic or LLM fallback
@@ -601,16 +635,20 @@ export async function evaluateTask(input: {
   let explanation: string;
 
   if (isKnownTag(tag)) {
-    executionMode = classifyExecutionMode(tag) ?? 'full_agent';
+    executionMode = forceFullAgent ? 'full_agent' : (classifyExecutionMode(tag) ?? 'full_agent');
     verificationLevel = classifyVerificationLevel(tag) ?? 'none';
     refundPolicy = classifyRefundPolicy(tag);
-    explanation = `1 credit. Runs in ${executionMode.replace(/_/g, ' ')} mode with ${verificationLevel === 'none' ? 'no' : verificationLevel.replace(/_/g, ' ')} verification.`;
+    const modeLabel = executionMode.replace(/_/g, ' ');
+    const verifyLabel = verificationLevel === 'none' ? 'no' : verificationLevel.replace(/_/g, ' ');
+    explanation = `1 credit. Runs in ${modeLabel} mode with ${verifyLabel} verification.${
+      failureWarning ? `\n\n${failureWarning}` : ''
+    }`;
   } else {
     const llmResult = await classifyWithLLM({ title, description, tag });
-    executionMode = llmResult.execution_mode;
+    executionMode = forceFullAgent ? 'full_agent' : llmResult.execution_mode;
     verificationLevel = llmResult.verification_level;
     refundPolicy = llmResult.refund_policy;
-    explanation = `1 credit. ${llmResult.reasoning}`;
+    explanation = `1 credit. ${llmResult.reasoning}${failureWarning ? `\n\n${failureWarning}` : ''}`;
   }
 
   return {
@@ -620,5 +658,210 @@ export async function evaluateTask(input: {
     verification_level: verificationLevel,
     refund_policy: refundPolicy,
     founder_safe_explanation: explanation,
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════
+// CREDIT QUOTING (SPEC-CEO-001)
+// 5-field structured quote: credits_required, task_split,
+// founder_safe_reason, included_scope, blockers.
+// CEO calls this BEFORE evaluateTask to present the quote to the founder.
+// ══════════════════════════════════════════════════════════════════
+
+/** Suggest how to split a bundled task into individual deliverables */
+function suggestSplit(title: string, description: string, tag: string): Array<{ title: string; description: string; tag: string }> {
+  const combined = `${title} ${description}`;
+  const splits: Array<{ title: string; description: string; tag: string }> = [];
+
+  // Extract deliverables by splitting on "and" conjunctions at sentence level
+  const deliverables = combined
+    .split(/\b(?:and|plus|additionally|also)\b/i)
+    .map(s => s.trim())
+    .filter(s => s.length > 10);
+
+  if (deliverables.length >= 2) {
+    for (const d of deliverables) {
+      // Derive a tag from the content or fall back to original
+      const inferredTag = inferTagFromContent(d) ?? tag;
+      splits.push({
+        title: d.length > 80 ? d.substring(0, 77) + '...' : d,
+        description: d,
+        tag: inferredTag,
+      });
+    }
+  }
+
+  // If conjunction splitting didn't produce results, try screen/page patterns
+  if (splits.length === 0) {
+    const screenMatch = combined.match(/(\d+)\s*(pages?|screens?|endpoints?)/i);
+    if (screenMatch) {
+      const count = Math.min(parseInt(screenMatch[1], 10), 5);
+      for (let i = 1; i <= count; i++) {
+        splits.push({
+          title: `${title} — part ${i}/${count}`,
+          description: `Part ${i} of ${count} from: ${description}`,
+          tag,
+        });
+      }
+    }
+  }
+
+  return splits;
+}
+
+/** Try to infer a tag from free-text content */
+function inferTagFromContent(text: string): string | null {
+  const lower = text.toLowerCase();
+  if (lower.includes('landing') || lower.includes('page')) return 'landing-page';
+  if (lower.includes('auth') || lower.includes('login') || lower.includes('signup')) return 'auth';
+  if (lower.includes('dashboard')) return 'dashboard';
+  if (lower.includes('billing') || lower.includes('payment') || lower.includes('stripe')) return 'billing';
+  if (lower.includes('deploy')) return 'deploy';
+  if (lower.includes('css') || lower.includes('style')) return 'css';
+  if (lower.includes('seo') || lower.includes('meta tag')) return 'seo';
+  if (lower.includes('api') || lower.includes('endpoint')) return 'api';
+  if (lower.includes('database') || lower.includes('schema')) return 'database';
+  return null;
+}
+
+/** Human-readable scope description for the founder */
+function buildScopeDescription(mode: ExecutionMode, tag: string): string {
+  const modeLabel = mode === 'deterministic' ? 'Quick change'
+    : mode === 'template_plus_params' ? 'Standard build'
+    : 'Full development';
+
+  const tagLabel = tag.replace(/[-_]/g, ' ');
+  return `${modeLabel}: ${tagLabel}. 1 credit covers the full task including verification.`;
+}
+
+/** Founder-safe reason string (never exposes internal details) */
+function buildFounderReason(
+  credits: number,
+  mode: ExecutionMode,
+  blockers: string[],
+): string {
+  if (blockers.length > 0) {
+    return `This task can't run right now: ${blockers.join('; ')}`;
+  }
+
+  if (credits > 1) {
+    return `This looks like ${credits} separate deliverables. Each one costs 1 credit (${credits} total). Want me to split it?`;
+  }
+
+  const speed = mode === 'deterministic' ? 'quickly'
+    : mode === 'template_plus_params' ? 'using a proven pattern'
+    : 'with full attention';
+  return `1 credit. I'll handle this ${speed}.`;
+}
+
+/**
+ * Structured credit quote for the CEO to present to the founder.
+ * Returns the 5-field CreditQuote (SPEC-CEO-001).
+ * CEO calls this BEFORE evaluateTask() — it answers "how much will this cost?"
+ * without creating or committing to anything.
+ */
+export async function quoteTask(input: {
+  title: string;
+  description: string;
+  tag: string;
+  companyId: string;
+}): Promise<CreditQuote> {
+  const { title, description, tag, companyId } = input;
+
+  // 1. Split detection
+  const needsSplit = detectSplit(title, description ?? '');
+  const task_split = needsSplit ? suggestSplit(title, description ?? '', tag) : [];
+
+  // 2. Credits = 1 per task, or N if split
+  const credits_required = needsSplit && task_split.length > 1 ? task_split.length : 1;
+
+  // 3. Blockers (prerequisites + balance)
+  const blockers: string[] = [];
+  const prereq = checkPrerequisites(tag);
+  if (prereq) blockers.push(prereq);
+
+  const balance = await creditService.getBalance(companyId);
+  if (balance < credits_required) {
+    blockers.push(`Need ${credits_required} credit${credits_required > 1 ? 's' : ''}, balance is ${balance}`);
+  }
+
+  // 4. Scope
+  const mode = classifyExecutionMode(tag) ?? 'full_agent';
+  const included_scope = buildScopeDescription(mode, tag);
+
+  // 5. Founder-safe reason
+  const founder_safe_reason = buildFounderReason(credits_required, mode, blockers);
+
+  return { credits_required, task_split, founder_safe_reason, included_scope, blockers };
+}
+
+// ══════════════════════════════════════════════════════════════════
+// PERMISSION SNAPSHOT (SPEC-CTRL-105)
+// Run-level permission envelope — what a worker can do during execution.
+// Built before dispatch and stored on the execution record.
+// ══════════════════════════════════════════════════════════════════
+
+/** Agent ID → tool mount profile (which tool families this agent can use) */
+const AGENT_TOOL_PROFILES: Record<number, string[]> = {
+  30: ['base', 'engineering'],           // Engineering
+  29: ['base', 'research'],              // Research
+  33: ['base', 'data'],                  // Data
+  32: ['base', 'support'],               // Support
+  40: ['base', 'twitter', 'documents'],  // Twitter
+  41: ['base', 'meta-ads'],              // Meta Ads
+  42: ['base', 'browser', 'email'],      // Browser
+  54: ['base', 'outreach', 'documents'], // Cold Outreach
+};
+
+/** Tags that involve external side effects — agents should be warned/restricted */
+const DANGEROUS_ACTION_TAGS = new Set([
+  'meta-ads', 'facebook-ads', 'instagram-ads', 'ad-campaign', 'ad-creative',
+  'outreach', 'cold-email', 'lead-gen', 'prospecting',
+  'tweet', 'social',
+  'account-setup', 'form-fill',
+]);
+
+/**
+ * Build a PermissionSnapshot for a task execution.
+ * Defines the run-level permission envelope: what tools are allowed,
+ * risk ceiling, and turn budget.
+ */
+export function buildPermissionSnapshot(
+  task: { execution_mode?: string | null; max_turns: number; tag: string },
+  agentId: number,
+): PermissionSnapshot {
+  const toolProfile = AGENT_TOOL_PROFILES[agentId] ?? ['base'];
+
+  // Derive allowed tool names from profile
+  const allowedTools = [...toolProfile];
+
+  // Forbidden actions based on tag risk
+  const forbidden: string[] = [];
+  if (!DANGEROUS_ACTION_TAGS.has(task.tag.toLowerCase())) {
+    // If this isn't a dangerous-action task, forbid external mutations
+    forbidden.push('external_write', 'ad_spend', 'send_email_external');
+  }
+
+  // Risk ceiling based on execution mode
+  const mode = task.execution_mode ?? 'full_agent';
+  const riskCeiling: 'low' | 'medium' | 'high' = mode === 'deterministic'
+    ? 'low'
+    : mode === 'template_plus_params'
+      ? 'medium'
+      : 'high';
+
+  // Turn budget — deterministic and template modes cap this
+  const maxTurns = mode === 'deterministic'
+    ? Math.min(task.max_turns, 10)
+    : mode === 'template_plus_params'
+      ? Math.min(task.max_turns, 30)
+      : task.max_turns;
+
+  return {
+    tool_mount_profile: toolProfile,
+    allowed_tools: allowedTools,
+    forbidden_actions: forbidden,
+    risk_ceiling: riskCeiling,
+    max_turns: maxTurns,
   };
 }

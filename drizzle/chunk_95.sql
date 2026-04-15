@@ -1,0 +1,1 @@
+ALTER TABLE "tasks" ADD CONSTRAINT "tasks_assigned_to_agent_id_agents_id_fk" FOREIGN KEY ("assigned_to_agent_id") REFERENCES "public"."agents"("id") ON DELETE no action ON UPDATE no action;

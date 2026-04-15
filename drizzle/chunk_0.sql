@@ -1,0 +1,21 @@
+CREATE TABLE "ad_campaigns" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"company_id" uuid NOT NULL,
+	"meta_campaign_id" varchar(255),
+	"meta_adset_id" varchar(255),
+	"meta_ad_id" varchar(255),
+	"external_id" varchar(255),
+	"platform" varchar(50) DEFAULT 'meta',
+	"status" varchar(50) DEFAULT 'draft',
+	"daily_budget" numeric(10, 2),
+	"total_spend" numeric(10, 2) DEFAULT '0',
+	"spend" numeric(10, 2) DEFAULT '0',
+	"impressions" integer DEFAULT 0,
+	"clicks" integer DEFAULT 0,
+	"ctr" numeric(5, 4),
+	"cpc" numeric(10, 2),
+	"creative_url" varchar(500),
+	"placements" jsonb,
+	"created_at" timestamp with time zone DEFAULT now(),
+	"updated_at" timestamp with time zone DEFAULT now()
+);

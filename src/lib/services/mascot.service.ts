@@ -176,7 +176,7 @@ export class MascotStateMachine {
 
     // Check for blocked tasks
     const blocked = await db.select({ id: tasks.id }).from(tasks)
-      .where(and(eq(tasks.company_id, companyId), eq(tasks.status, 'blocked'))).limit(1);
+      .where(and(eq(tasks.company_id, companyId), inArray(tasks.status, ['blocked_pre_start', 'blocked_in_run']))).limit(1);
 
     if (blocked.length) {
       this.currentState = 'blocked';
@@ -187,7 +187,7 @@ export class MascotStateMachine {
     const recent = await db.select({ id: tasks.id }).from(tasks)
       .where(and(
         eq(tasks.company_id, companyId),
-        inArray(tasks.status, ['completed_verified', 'completed_unverified']),
+        eq(tasks.status, 'completed'),
         gte(tasks.completed_at, new Date(Date.now() - 10000))
       )).limit(1);
 

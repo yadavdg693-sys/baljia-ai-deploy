@@ -1,0 +1,1 @@
+CREATE INDEX "idx_credit_ledger_company" ON "credit_ledger" USING btree ("company_id");

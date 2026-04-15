@@ -20,11 +20,7 @@ const CAPABILITIES_TOOLS = [
       required: ['module_name'],
     },
   },
-  {
-    name: 'list_mcp_servers',
-    description: 'List all integrations and their connection status (configured vs missing API key).',
-    input_schema: { type: 'object' as const, properties: {} },
-  },
+  // list_mcp_servers removed — exposes internal platform integration names/env vars to founder (guardrail)
   {
     name: 'list_available_agents',
     description: 'List all task-driven worker agents with their IDs, roles, and max turns.',
@@ -271,7 +267,7 @@ const COMPANY_TOOLS = [
   },
   {
     name: 'get_document',
-    description: 'Read the full content of a company document (mission, product_overview, brand_voice, tech_notes, user_research).',
+    description: 'Read the full content of a company document (mission, product_overview, brand_voice, tech_notes, market_research).',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -443,4 +439,133 @@ export const CEO_EXTRA_TOOLS = [
   },
 ];
 
-export const ALL_CEO_TOOLS = [...CEO_TOOLS, ...CEO_EXTRA_TOOLS];
+// ── Group 7: Cycle Planning & Task Scoring (6 tools — KG spec) ──
+
+const CYCLE_PLANNING_TOOLS = [
+  {
+    name: 'get_cycle_context',
+    description: 'Get the current work cycle context: stage, active plan, and pending tasks.',
+    input_schema: { type: 'object' as const, properties: {} },
+  },
+  {
+    name: 'create_cycle_plan',
+    description: 'Create a new cycle plan with tasks to execute tonight or this week.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        title: { type: 'string' as const, description: 'Plan title' },
+        tasks: { type: 'array' as const, items: { type: 'string' as const }, description: 'List of task titles to include' },
+        notes: { type: 'string' as const, description: 'Optional planner notes' },
+      },
+      required: ['title', 'tasks'],
+    },
+  },
+  {
+    name: 'update_cycle_plan',
+    description: 'Update an existing cycle plan — add tasks, change status, or add notes.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        plan_id: { type: 'string' as const, description: 'Cycle plan ID to update' },
+        tasks: { type: 'array' as const, items: { type: 'string' as const }, description: 'Updated task list' },
+        notes: { type: 'string' as const, description: 'Updated notes' },
+        status: { type: 'string' as const, enum: ['draft', 'active', 'completed'], description: 'Plan status' },
+      },
+      required: ['plan_id'],
+    },
+  },
+  {
+    name: 'submit_review',
+    description: 'Submit a review or retrospective for a completed cycle.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        plan_id: { type: 'string' as const, description: 'Cycle plan being reviewed' },
+        summary: { type: 'string' as const, description: 'Review summary' },
+        wins: { type: 'string' as const, description: 'What went well' },
+        blockers: { type: 'string' as const, description: 'What was blocked or failed' },
+      },
+      required: ['plan_id', 'summary'],
+    },
+  },
+  {
+    name: 'score_task',
+    description: 'Rate a completed task by quality, speed, and accuracy (1-5 scale).',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        task_id: { type: 'string' as const, description: 'Task ID to score' },
+        quality: { type: 'number' as const, description: 'Quality score 1-5' },
+        speed: { type: 'number' as const, description: 'Speed score 1-5' },
+        accuracy: { type: 'number' as const, description: 'Accuracy score 1-5' },
+        notes: { type: 'string' as const, description: 'Optional scoring notes' },
+      },
+      required: ['task_id', 'quality', 'speed', 'accuracy'],
+    },
+  },
+  {
+    name: 'get_unscored_tasks',
+    description: 'Get a list of recently completed tasks that have not yet been scored.',
+    input_schema: { type: 'object' as const, properties: {} },
+  },
+];
+
+// ── Group 8: Agent Factory (5 tools — KG spec §3.1) ──
+// Platform-internal: used by CEO/onboarding for agent introspection and dynamic agent creation
+
+const AGENT_FACTORY_TOOLS = [
+  {
+    name: 'list_mcp_tools',
+    description: 'List all tools available across the platform by server — for capability introspection during onboarding or task routing.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        server: { type: 'string' as const, description: 'Optional: filter by server name (e.g. "engineering", "browser")' },
+      },
+    },
+  },
+  {
+    name: 'get_mcp_tool_details',
+    description: 'Get detailed schema and description for a specific platform tool by name.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        tool_name: { type: 'string' as const, description: 'Tool name to look up' },
+      },
+      required: ['tool_name'],
+    },
+  },
+  {
+    name: 'create_agent',
+    description: 'Create a new custom agent configuration for a company. Used during onboarding to specialise agents.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        name: { type: 'string' as const, description: 'Display name for the agent' },
+        role: { type: 'string' as const, description: 'Agent role description' },
+        base_prompt: { type: 'string' as const, description: 'System prompt for the agent' },
+        max_turns: { type: 'number' as const, description: 'Max turns (default 200)' },
+      },
+      required: ['name', 'role'],
+    },
+  },
+  {
+    name: 'list_created_agents',
+    description: 'List all active agents in the platform registry with their IDs, roles, and execution style.',
+    input_schema: { type: 'object' as const, properties: {} },
+  },
+  {
+    name: 'get_agent_template',
+    description: 'Get a template/scaffold for a specific agent type to use as a base for customisation.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        agent_type: { type: 'string' as const, description: 'Agent type (e.g. "engineering", "browser", "content", "support")' },
+      },
+      required: ['agent_type'],
+    },
+  },
+];
+
+export const ALL_CEO_TOOLS = [...CEO_TOOLS, ...CEO_EXTRA_TOOLS, ...CYCLE_PLANNING_TOOLS, ...AGENT_FACTORY_TOOLS];
+

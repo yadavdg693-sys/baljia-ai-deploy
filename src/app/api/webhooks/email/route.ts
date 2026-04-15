@@ -4,8 +4,8 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { handleInboundEmail } from '@/lib/services/email.service';
-import { db, companies } from '@/lib/db';
-import { eq } from 'drizzle-orm';
+import { db, companies, contacts } from '@/lib/db';
+import { eq, and } from 'drizzle-orm';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('WebhookEmail');
@@ -13,15 +13,15 @@ const log = createLogger('WebhookEmail');
 export async function POST(request: NextRequest) {
   // Verify webhook authenticity via Postmark's basic auth or shared secret
   const webhookSecret = process.env.POSTMARK_WEBHOOK_SECRET;
-  if (webhookSecret) {
-    const authHeader = request.headers.get('authorization');
-    const expected = `Basic ${Buffer.from(webhookSecret).toString('base64')}`;
-    if (authHeader !== expected) {
-      log.warn('Email webhook: invalid auth header');
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-  } else {
-    log.warn('POSTMARK_WEBHOOK_SECRET not set — email webhook is unauthenticated');
+  if (!webhookSecret) {
+    log.error('POSTMARK_WEBHOOK_SECRET not set — refusing inbound email');
+    return NextResponse.json({ error: 'Webhook not configured' }, { status: 503 });
+  }
+  const authHeader = request.headers.get('authorization');
+  const expected = `Basic ${Buffer.from(webhookSecret).toString('base64')}`;
+  if (authHeader !== expected) {
+    log.warn('Email webhook: invalid auth header');
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   let body: Record<string, unknown>;
@@ -53,6 +53,18 @@ export async function POST(request: NextRequest) {
     { From: from, To: to, Subject: subject, TextBody: textBody, MessageID: messageId },
     companyId
   );
+
+  // G-CONTENT-003: CAN-SPAM unsubscribe detection
+  const combinedText = `${subject} ${textBody}`.toLowerCase();
+  if (combinedText.includes('unsubscribe') || combinedText.includes('opt out') || combinedText.includes('stop emailing')) {
+    try {
+      await db.update(contacts).set({ lead_status: 'unsubscribed' })
+        .where(and(eq(contacts.company_id, companyId), eq(contacts.email, from)));
+      log.info('Contact unsubscribed via email reply', { from, companyId });
+    } catch {
+      log.warn('Failed to update unsubscribe status', { from, companyId });
+    }
+  }
 
   log.info('Inbound email processed', { from, to, subject: subject.substring(0, 50) });
   return NextResponse.json({ ok: true });

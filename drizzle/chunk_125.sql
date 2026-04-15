@@ -1,0 +1,1 @@
+CREATE INDEX "idx_platform_feedback_company" ON "platform_feedback" USING btree ("company_id");

@@ -13,6 +13,7 @@ import {
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { formatRelativeTime } from '@/lib/utils';
+import { FOUNDER_AGENT_LABELS, FOUNDER_SOURCE_LABELS, FOUNDER_FAILURE_LABELS } from '@/lib/founder-labels';
 
 interface TaskDetailDialogProps {
   task: Task | null;
@@ -23,34 +24,33 @@ interface TaskDetailDialogProps {
 }
 
 const statusVariants: Record<string, 'default' | 'success' | 'error' | 'running' | 'blocked' | 'planning' | 'warning'> = {
-  created: 'planning',
   todo: 'default',
   in_progress: 'running',
-  completed_verified: 'success',
-  completed_unverified: 'success',
+  verifying: 'planning',
+  completed: 'success',
   failed: 'error',
+  failed_permanent: 'error',
   rejected: 'error',
-  blocked: 'blocked',
-  partial: 'warning',
+  blocked_pre_start: 'blocked',
+  blocked_in_run: 'blocked',
+  repair: 'warning',
 };
 
-const AGENT_NAMES: Record<number, string> = {
-  0: 'CEO', 29: 'Research', 30: 'Engineering', 32: 'Support',
-  33: 'Data', 40: 'Twitter', 41: 'MetaAds', 42: 'Browser', 54: 'ColdOutreach',
-};
+// Agent labels imported from founder-labels.ts
 
-// Execution timeline steps
+// Execution timeline steps (SPEC-CTRL-102 lifecycle)
 const TIMELINE_STEPS = [
-  { status: 'created', label: 'Proposed', icon: '📝' },
-  { status: 'todo', label: 'Approved', icon: '✓' },
+  { status: 'todo', label: 'Queued', icon: '📝' },
   { status: 'in_progress', label: 'Running', icon: '⚡' },
-  { status: 'completed_verified', label: 'Done', icon: '🎉' },
+  { status: 'verifying', label: 'Verifying', icon: '🔍' },
+  { status: 'completed', label: 'Done', icon: '🎉' },
 ];
 
 const STATUS_ORDER: Record<string, number> = {
-  created: 0, todo: 1, in_progress: 2,
-  completed_verified: 3, completed_unverified: 3,
-  failed: 3, rejected: -1,
+  todo: 0, in_progress: 1, verifying: 2,
+  completed: 3,
+  failed: 3, failed_permanent: 3, rejected: -1,
+  repair: 1, blocked_pre_start: 0, blocked_in_run: 1,
 };
 
 export function TaskDetailDialog({ task, open, onOpenChange, onApprove, onReject }: TaskDetailDialogProps) {
@@ -62,14 +62,22 @@ export function TaskDetailDialog({ task, open, onOpenChange, onApprove, onReject
   const isFailed = task.status === 'failed';
   const isRejected = task.status === 'rejected';
 
+  const [error, setError] = useState<string | null>(null);
+
   const handleApprove = async () => {
     setLoading('approve');
+    setError(null);
     try {
       const res = await fetch(`/api/tasks/${task.id}/approve`, { method: 'POST' });
       if (res.ok) {
         onApprove?.(task.id);
         onOpenChange(false);
+      } else {
+        const body = await res.json().catch(() => ({ error: 'Action failed' }));
+        setError(body.error ?? 'Could not approve task');
       }
+    } catch {
+      setError('Network error — please try again');
     } finally {
       setLoading(null);
     }
@@ -77,12 +85,18 @@ export function TaskDetailDialog({ task, open, onOpenChange, onApprove, onReject
 
   const handleReject = async () => {
     setLoading('reject');
+    setError(null);
     try {
       const res = await fetch(`/api/tasks/${task.id}/reject`, { method: 'POST' });
       if (res.ok) {
         onReject?.(task.id);
         onOpenChange(false);
+      } else {
+        const body = await res.json().catch(() => ({ error: 'Action failed' }));
+        setError(body.error ?? 'Could not reject task');
       }
+    } catch {
+      setError('Network error — please try again');
     } finally {
       setLoading(null);
     }
@@ -90,12 +104,18 @@ export function TaskDetailDialog({ task, open, onOpenChange, onApprove, onReject
 
   const handleRetry = async () => {
     setLoading('retry');
+    setError(null);
     try {
-      // Reset to todo status — will be picked up by worker launcher
-      const res = await fetch(`/api/tasks/${task.id}/approve`, { method: 'POST' });
+      const res = await fetch(`/api/tasks/${task.id}/retry`, { method: 'POST' });
       if (res.ok) {
+        onApprove?.(task.id);
         onOpenChange(false);
+      } else {
+        const body = await res.json().catch(() => ({ error: 'Action failed' }));
+        setError(body.error ?? 'Could not retry task');
       }
+    } catch {
+      setError('Network error — please try again');
     } finally {
       setLoading(null);
     }
@@ -181,11 +201,9 @@ export function TaskDetailDialog({ task, open, onOpenChange, onApprove, onReject
             <div className="grid grid-cols-2 gap-3">
               {[
                 { label: 'Tag', value: task.tag },
-                { label: 'Agent', value: task.assigned_to_agent_id !== null ? AGENT_NAMES[task.assigned_to_agent_id] ?? 'Unknown' : '—' },
+                { label: 'Assigned To', value: task.assigned_to_agent_id !== null ? FOUNDER_AGENT_LABELS[task.assigned_to_agent_id] ?? 'AI Team' : '—' },
                 { label: 'Credits', value: task.actual_credits_charged > 0 ? `${task.actual_credits_charged} used` : `${task.estimated_credits} estimated` },
-                { label: 'Execution Mode', value: task.execution_mode?.replace(/_/g, ' ') ?? '—' },
-                { label: 'Verification', value: task.verification_level?.replace(/_/g, ' ') ?? '—' },
-                { label: 'Source', value: task.source.replace(/_/g, ' ') },
+                { label: 'Source', value: FOUNDER_SOURCE_LABELS[task.source] ?? task.source.replace(/_/g, ' ') },
               ].map(({ label, value }) => (
                 <div key={label} className="rounded-lg bg-surface-secondary p-3">
                   <p className="text-xs text-text-muted mb-1">{label}</p>
@@ -197,7 +215,7 @@ export function TaskDetailDialog({ task, open, onOpenChange, onApprove, onReject
             {/* ── Refund / Failure info ── */}
             {task.failure_class && (
               <div className="rounded-lg bg-status-error/5 border border-status-error/20 p-3">
-                <p className="text-xs text-status-error font-medium mb-1">Failure: {task.failure_class.replace(/_/g, ' ')}</p>
+                <p className="text-xs text-status-error font-medium mb-1">Failure: {FOUNDER_FAILURE_LABELS[task.failure_class] ?? 'System error'}</p>
                 <p className="text-xs text-text-muted">This task failed and consumed 1 credit. You can retry it below.</p>
               </div>
             )}
@@ -220,7 +238,7 @@ export function TaskDetailDialog({ task, open, onOpenChange, onApprove, onReject
                 </p>
                 {task.status === 'in_progress' && (
                   <p className="text-xs text-status-running mt-1">
-                    Turn {task.turn_count} / {task.max_turns}
+                    In progress...
                   </p>
                 )}
               </div>
@@ -228,10 +246,17 @@ export function TaskDetailDialog({ task, open, onOpenChange, onApprove, onReject
           </div>
         </DialogBody>
 
+        {/* ── Error feedback ── */}
+        {error && (
+          <div className="px-4 py-2 text-sm text-red-400 bg-red-500/10 rounded-lg">
+            {error}
+          </div>
+        )}
+
         {/* ── Actions ── */}
         <DialogFooter>
           {/* Approve/reject for created tasks */}
-          {task.status === 'created' && (
+          {task.status === 'todo' && (
             <>
               <Button
                 variant="ghost"

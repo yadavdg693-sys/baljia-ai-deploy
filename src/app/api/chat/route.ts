@@ -9,6 +9,20 @@ import type { ChatMessage, CEOStreamEvent, ChatAction } from '@/types';
 
 const log = createLogger('Chat');
 
+// GET /api/chat?company_id=xxx — fetch active session history
+export async function GET(request: NextRequest) {
+  const companyId = request.nextUrl.searchParams.get('company_id');
+  if (!companyId) return NextResponse.json({ error: 'company_id required' }, { status: 400 });
+
+  const auth = await requireAuthAndCompany(companyId);
+  if (isApiError(auth)) return auth;
+
+  const session = await chatService.getOrCreateSession(companyId, auth.user.id);
+  const messages = await chatService.getMessages(session.id);
+
+  return NextResponse.json({ session_id: session.id, messages });
+}
+
 // POST /api/chat — CEO conversation
 // FIX: G-SEC-003 — rate limited to 20 req/min
 export async function POST(request: NextRequest) {

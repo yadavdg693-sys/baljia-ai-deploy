@@ -2,6 +2,7 @@
 import type { Task } from '@/types';
 import { db, tasks as tasksTable, creditLedger, platformEvents } from '@/lib/db';
 import { eq, gte, and, sql } from 'drizzle-orm';
+import { getCompanyDatabase } from '@/lib/services/neon.service';
 
 export function getDataTools() {
   return [
@@ -48,6 +49,47 @@ export function getDataTools() {
         required: ['metric'],
       },
     },
+    // ── Founder's Product Database (shared with Engineering) ──
+    {
+      name: 'query_company_db',
+      description: 'Run a read-only SELECT query on the founder\'s product database (Neon Postgres). Use for real analytics on their users, orders, events — not Baljia platform tables.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          sql: { type: 'string' as const, description: 'SQL SELECT query (read-only)' },
+        },
+        required: ['sql'],
+      },
+    },
+    {
+      name: 'get_database_info',
+      description: "Get the founder's product database connection details and schema overview.",
+      input_schema: {
+        type: 'object' as const,
+        properties: {},
+      },
+    },
+    // ── Infra Visibility (read-only, shared with Engineering) ──
+    {
+      name: 'get_company_tech',
+      description: 'Get current tech setup for this company: GitHub repo, Render service, Neon DB. Use to understand what infrastructure exists.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {},
+      },
+    },
+    {
+      name: 'render_get_logs',
+      description: 'Get runtime logs from the deployed Render service. Use to diagnose errors and understand real user behaviour patterns.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          service_id: { type: 'string' as const, description: 'Render service ID (from get_company_tech)' },
+          num_lines: { type: 'number' as const, description: 'Number of log lines (default: 100, max: 500)' },
+        },
+        required: ['service_id'],
+      },
+    },
   ];
 }
 
@@ -60,30 +102,54 @@ export async function handleDataTool(
     case 'query_database': {
       const query = (input.query as string).trim();
 
-      // Block all mutation keywords — even inside subqueries or CTEs
-      const MUTATION_KEYWORDS = /\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE|COPY|EXECUTE|CALL)\b/i;
+      // C-SEC-004: Comprehensive SQL injection prevention
+      // 1. Block all mutation keywords — even inside subqueries or CTEs
+      const MUTATION_KEYWORDS = /\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE|COPY|EXECUTE|CALL|SET)\b/i;
       if (MUTATION_KEYWORDS.test(query)) {
         return 'ERROR: Only SELECT queries are allowed. Data agent has read-only access.';
       }
 
-      // Block semicolons to prevent statement chaining
+      // 2. Block semicolons to prevent statement chaining
       if (query.includes(';')) {
         return 'ERROR: Multiple statements are not allowed. Send a single SELECT query.';
       }
 
-      // Enforce tenant scoping: query MUST reference this company_id
-      // (the agent should always filter by company, but we enforce it as a safety net)
+      // 3. Block dangerous constructs
+      const DANGEROUS_PATTERNS = /\b(pg_sleep|pg_read_file|pg_ls_dir|lo_import|lo_export|dblink|copy\s+to|INTO\s+OUTFILE)\b/i;
+      if (DANGEROUS_PATTERNS.test(query)) {
+        return 'ERROR: Query contains banned function or construct.';
+      }
+
+      // 4. Query length limit (prevent resource exhaustion)
+      if (query.length > 2000) {
+        return 'ERROR: Query too long. Maximum 2000 characters.';
+      }
+
+      // 5. Must start with SELECT (no CTEs/WITH)
+      if (!/^SELECT\b/i.test(query)) {
+        return 'ERROR: Query must start with SELECT. CTEs (WITH) and other constructs are not supported.';
+      }
+
+      // 6. Enforce tenant scoping: query MUST explicitly filter by this company_id without OR
       const companyId = task.company_id;
-      const referencesCompany = query.includes(companyId);
-      if (!referencesCompany) {
+      if (!query.includes(companyId)) {
         return `ERROR: Query must filter by company_id = '${companyId}'. Cross-tenant queries are not allowed.`;
+      }
+      if (/\bOR\b/i.test(query)) {
+        return `ERROR: OR conditions are not permitted in data queries for security.`;
+      }
+      if (/--|\/\*/.test(query)) {
+        return `ERROR: SQL comments are not permitted in data queries for security.`;
       }
 
       try {
-        // Use a read-only transaction with statement timeout
-        const result = await db.execute(sql`SET LOCAL statement_timeout = '5000'`);
-        const queryResult = await db.execute(sql.raw(query));
-        const rows = queryResult.rows ?? [];
+        // Use parameterized timeout + read-only transaction
+        const result = await db.transaction(async (tx) => {
+          await tx.execute(sql`SET LOCAL statement_timeout = '5000'`);
+          await tx.execute(sql`SET TRANSACTION READ ONLY`);
+          return tx.execute(sql.raw(query));
+        });
+        const rows = result.rows ?? [];
         return `Query returned ${rows.length} rows:\n${JSON.stringify(rows.slice(0, 50), null, 2)}${rows.length > 50 ? '\n... (truncated, showing first 50)' : ''}`;
       } catch (error) {
         return `Query failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
@@ -93,10 +159,14 @@ export async function handleDataTool(
     case 'inspect_schema': {
       try {
         if (input.table_name) {
-          // Query real column info from information_schema
-          const cols = await db.execute(sql.raw(
-            `SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = 'public' AND table_name = '${String(input.table_name).replace(/'/g, "''")}' ORDER BY ordinal_position`
-          ));
+          // H-SEC-002: Parameterized query (no string interpolation for user input)
+          const tableName = String(input.table_name).replace(/[^a-zA-Z0-9_]/g, '');
+          const cols = await db.execute(sql`
+            SELECT column_name, data_type, is_nullable, column_default
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = ${tableName}
+            ORDER BY ordinal_position
+          `);
           const rows = cols.rows ?? [];
           if (rows.length === 0) return `Table "${input.table_name}" not found or has no columns.`;
           return `## ${input.table_name} (${rows.length} columns)\n${(rows as Array<{ column_name: string; data_type: string; is_nullable: string; column_default: string | null }>).map((c) => `- ${c.column_name}: ${c.data_type}${c.is_nullable === 'NO' ? ' NOT NULL' : ''}${c.column_default ? ` DEFAULT ${c.column_default}` : ''}`).join('\n')}`;
@@ -218,6 +288,54 @@ ${Object.entries(eventCounts).map(([t, c]) => `- ${t}: ${c}`).join('\n') || 'No 
       } catch (error) {
         return `Trend analysis failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
       }
+    }
+
+    // ── Founder's product database ──
+    case 'query_company_db': {
+      const querySql = (input.sql as string)?.trim();
+      if (!querySql) return 'Error: sql query is required.';
+      if (!/^SELECT\b/i.test(querySql)) return 'Error: Only SELECT queries allowed on the product database.';
+      if (/;/.test(querySql)) return 'Error: Multiple statements not allowed.';
+
+      const dbInfo = await getCompanyDatabase(task.company_id);
+      if (!dbInfo) return 'No product database provisioned yet. Ask the founder to have Engineering provision_database first.';
+      if (!dbInfo.connectionUri) return 'Product database exists but connection URI not available.';
+
+      try {
+        const { Pool } = await import('pg');
+        const pool = new Pool({ connectionString: dbInfo.connectionUri, ssl: { rejectUnauthorized: false }, statement_timeout: 10000 });
+        try {
+          const result = await pool.query(querySql);
+          const rows = result.rows ?? [];
+          if (rows.length === 0) return 'Query returned 0 rows.';
+          return `Query returned ${rows.length} rows:\n${JSON.stringify(rows.slice(0, 50), null, 2)}${rows.length > 50 ? '\n... (first 50 shown)' : ''}`;
+        } finally { await pool.end(); }
+      } catch (err) {
+        return `Product DB query failed: ${err instanceof Error ? err.message : 'Unknown error'}`;
+      }
+    }
+
+    case 'get_database_info': {
+      const dbInfo = await getCompanyDatabase(task.company_id);
+      if (!dbInfo) return 'No product database provisioned. Engineering must run provision_database first.';
+      return [
+        `## Founder Product Database`,
+        `Project: ${dbInfo.name}`,
+        `Host: ${dbInfo.host}`,
+        `Connection: ${dbInfo.connectionUri ? 'Available' : 'Pending'}`,
+        '',
+        'Use query_company_db to run analytics queries on this database.',
+      ].join('\n');
+    }
+
+    case 'get_company_tech': {
+      const { handleEngineeringTool } = await import('./engineering.tools');
+      return handleEngineeringTool('get_company_tech', {}, task);
+    }
+
+    case 'render_get_logs': {
+      const { handleEngineeringTool } = await import('./engineering.tools');
+      return handleEngineeringTool('render_get_logs', input, task);
     }
 
     default:

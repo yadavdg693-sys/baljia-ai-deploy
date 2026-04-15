@@ -1,0 +1,1 @@
+CREATE INDEX "idx_approval_records_task" ON "approval_records" USING btree ("task_id");

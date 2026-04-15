@@ -34,7 +34,14 @@ export async function getRecentEvents(options: {
     ? await query.where(and(...conditions))
     : await query;
 
-  return data as unknown as LiveEvent[];
+  return data.map((event) => ({
+    id: event.id,
+    type: event.event_type as EventType,
+    company_id: event.company_id ?? '',
+    payload: options.publicOnly ? {} : (event.payload as Record<string, unknown> ?? {}),
+    is_public_safe: event.is_public_safe ?? false,
+    created_at: event.created_at instanceof Date ? event.created_at.toISOString() : String(event.created_at),
+  }));
 }
 
 export interface LiveWallMetrics {
@@ -86,7 +93,9 @@ export interface LiveTaskCard {
   tag: string;
 }
 
-export async function getRunningTasks(): Promise<LiveTaskCard[]> {
+export async function getRunningTasks(publicOnly = false): Promise<LiveTaskCard[]> {
+  if (publicOnly) return []; // Completely hide runningTasks for public endpoint
+
   // Join tasks with companies for company name
   const data = await db.select({
     id: tasks.id,

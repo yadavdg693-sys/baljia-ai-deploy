@@ -1,0 +1,1 @@
+CREATE INDEX "idx_tweets_company" ON "tweets" USING btree ("company_id");

@@ -40,3 +40,114 @@ services:
         sync: false
       - key: CRON_SECRET
         sync: false
+      - key: ADMIN_EMAILS
+        sync: false
+      - key: NEON_API_KEY
+        sync: false
+      - key: RENDER_API_KEY
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: BROWSERBASE_API_KEY
+        sync: false
+      - key: BROWSERBASE_PROJECT_ID
+        sync: false
+
+  # ── Cron: Night Shift ──
+  # Runs for ALL active companies every night at 2am UTC.
+  # Executes todo tasks, retries failures, probes deployed URLs for health.
+  - type: cron
+    name: baljia-night-shift
+    runtime: node
+    region: oregon
+    schedule: "0 2 * * *"
+    buildCommand: ""
+    startCommand: >
+      curl -s -o /dev/null -w "%{http_code}" -X POST
+      "$NEXT_PUBLIC_APP_URL/api/cron/night-shift"
+      -H "x-cron-secret: $CRON_SECRET"
+      -H "Content-Type: application/json"
+    envVars:
+      - key: NEXT_PUBLIC_APP_URL
+        sync: false
+      - key: CRON_SECRET
+        sync: false
+
+  # ── Cron: Recurring Tasks ──
+  # Materialises daily/weekly/monthly recurring task instances every 6 hours.
+  - type: cron
+    name: baljia-recurring
+    runtime: node
+    region: oregon
+    schedule: "0 */6 * * *"
+    buildCommand: ""
+    startCommand: >
+      curl -s -o /dev/null -w "%{http_code}" -X POST
+      "$NEXT_PUBLIC_APP_URL/api/cron/recurring"
+      -H "x-cron-secret: $CRON_SECRET"
+      -H "Content-Type: application/json"
+    envVars:
+      - key: NEXT_PUBLIC_APP_URL
+        sync: false
+      - key: CRON_SECRET
+        sync: false
+
+  # ── Cron: Trial Expiry ──
+  # Suspends expired trials and past-due subscriptions every day at 3am UTC.
+  - type: cron
+    name: baljia-trial-expiry
+    runtime: node
+    region: oregon
+    schedule: "0 3 * * *"
+    buildCommand: ""
+    startCommand: >
+      curl -s -o /dev/null -w "%{http_code}"
+      "$NEXT_PUBLIC_APP_URL/api/cron/trial-expiry"
+      -H "x-cron-secret: $CRON_SECRET"
+    envVars:
+      - key: NEXT_PUBLIC_APP_URL
+        sync: false
+      - key: CRON_SECRET
+        sync: false
+
+  # ── Cron: Platform Ops ──
+  # Runs infra health checks every 15 min. Billing audit runs daily at 05:00 UTC.
+  # SPEC-OPS-001: regression guard, known issue registry, infra watchdog, billing auditor.
+  - type: cron
+    name: baljia-platform-ops
+    runtime: node
+    region: oregon
+    schedule: "*/15 * * * *"
+    buildCommand: ""
+    startCommand: >
+      curl -s -o /dev/null -w "%{http_code}"
+      "$NEXT_PUBLIC_APP_URL/api/cron/platform-ops"
+      -H "x-cron-secret: $CRON_SECRET"
+    envVars:
+      - key: NEXT_PUBLIC_APP_URL
+        sync: false
+      - key: CRON_SECRET
+        sync: false
+
+  # ── Cron: Credit Renewal Safety Net ──
+  # Catches any companies that should have had credits renewed but didn't
+  # (e.g. missed Stripe webhook). Runs daily at 4am UTC.
+  - type: cron
+    name: baljia-credit-renewal
+    runtime: node
+    region: oregon
+    schedule: "0 4 * * *"
+    buildCommand: ""
+    startCommand: >
+      curl -s -o /dev/null -w "%{http_code}" -X POST
+      "$NEXT_PUBLIC_APP_URL/api/cron/credit-renewal"
+      -H "x-cron-secret: $CRON_SECRET"
+      -H "Content-Type: application/json"
+    envVars:
+      - key: NEXT_PUBLIC_APP_URL
+        sync: false
+      - key: CRON_SECRET
+        sync: false
+

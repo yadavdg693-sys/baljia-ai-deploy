@@ -1,46 +1,21 @@
-// Redis Rate Limiter — persistent rate limiting via Upstash Redis
+// Redis Rate Limiter — persistent rate limiting via Redis Cloud (ioredis)
 // Replaces in-memory rate limiter for multi-server / serverless deployments
 // FIX: G-SEC-003 — rate limits now survive restarts and work across replicas
 //
-// Falls back to in-memory if UPSTASH_REDIS_REST_URL is not configured.
+// Falls back to in-memory if REDIS_URL is not configured.
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/lib/logger';
+import { getRedis as getRedisClient } from '@/lib/redis';
 
 const log = createLogger('RateLimit');
 
 // ══════════════════════════════════════════════
-// REDIS CLIENT (lazy init)
+// REDIS CLIENT (lazy init via shared singleton)
 // ══════════════════════════════════════════════
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let redisClient: any = null;
-
-let redisInitAttempted = false;
-
-async function getRedis() {
-  if (redisClient) return redisClient;
-  if (redisInitAttempted) return null;
-
-  redisInitAttempted = true;
-
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-
-  if (!url || !token) {
-    log.info('Upstash Redis not configured, using in-memory rate limiter');
-    return null;
-  }
-
-  try {
-    const { Redis } = await import('@upstash/redis');
-    redisClient = new Redis({ url, token });
-    log.info('Redis rate limiter initialized');
-    return redisClient;
-  } catch (error) {
-    log.warn('Failed to init Redis, using in-memory fallback');
-    return null;
-  }
+function getRedis() {
+  return getRedisClient();
 }
 
 // ══════════════════════════════════════════════
@@ -86,20 +61,25 @@ function checkMemoryLimit(key: string, maxRequests: number, windowMs: number): N
 // REDIS-BACKED LIMIT CHECK
 // ══════════════════════════════════════════════
 
+// Lua script for atomic INCR + EXPIRE — eliminates the race condition where
+// a crash between INCR and SET leaves a key with no TTL (permanent lockout).
+const LUA_RATE_LIMIT = `
+local c = redis.call('INCR', KEYS[1])
+if c == 1 then
+  redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+return c
+`;
+
 async function checkRedisLimit(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  redis: any,
+  redis: ReturnType<typeof getRedis> & object,
   key: string,
   maxRequests: number,
   windowSec: number
 ): Promise<NextResponse | null> {
   try {
-    const count = await redis.incr(key);
-
-    // First request in window — set expiry
-    if (count === 1) {
-      await redis.set(key, '1', { ex: windowSec });
-    }
+    const count = await (redis as unknown as { eval: (script: string, numKeys: number, ...args: (string | number)[]) => Promise<number> })
+      .eval(LUA_RATE_LIMIT, 1, key, windowSec);
 
     if (count > maxRequests) {
       const ttl = await redis.ttl(key);
@@ -205,6 +185,209 @@ export function checkCompanyRateLimit(
   const windowMs = options?.windowMs ?? 60000;
   const key = `rl:company:${companyId}`;
   return checkMemoryLimit(key, maxRequests, windowMs);
+}
+
+/**
+ * Check a custom rate limit key (e.g. for email limits).
+ */
+export async function checkCustomRateLimitAsync(
+  customKey: string,
+  options?: Omit<RateLimitOptions, 'keyPrefix'>
+): Promise<NextResponse | null> {
+  const maxRequests = options?.maxRequests ?? 10;
+  const windowMs = options?.windowMs ?? 60000;
+  const windowSec = Math.ceil(windowMs / 1000);
+  const key = `rl:custom:${customKey}`;
+
+  const redis = await getRedis();
+  if (redis) {
+    return checkRedisLimit(redis, key, maxRequests, windowSec);
+  }
+
+  return checkMemoryLimit(key, maxRequests, windowMs);
+}
+
+// ══════════════════════════════════════════════
+// ESCALATION LADDER (SPEC-CEO-001)
+// 6-step escalation: observe → soft-limit → degrade → cooldown → flag → suspend
+// Tracked per company in Redis. De-escalates after cooldown window passes.
+// ══════════════════════════════════════════════
+
+export type EscalationLevel = 'observe' | 'soft_limit' | 'degrade' | 'cooldown' | 'flag' | 'suspend';
+
+const ESCALATION_ORDER: EscalationLevel[] = ['observe', 'soft_limit', 'degrade', 'cooldown', 'flag', 'suspend'];
+
+interface EscalationState {
+  level: EscalationLevel;
+  violation_count: number;
+  last_violation_at: number;
+  level_changed_at: number;
+}
+
+// Thresholds: violations needed to escalate, within a time window (ms)
+const ESCALATION_THRESHOLDS: Record<EscalationLevel, { violations: number; windowMs: number }> = {
+  observe:    { violations: 3,  windowMs: 5 * 60_000 },     // 3 in 5 min → soft_limit
+  soft_limit: { violations: 5,  windowMs: 10 * 60_000 },    // 5 in 10 min → degrade
+  degrade:    { violations: 10, windowMs: 15 * 60_000 },     // 10 in 15 min → cooldown
+  cooldown:   { violations: 3,  windowMs: 60 * 60_000 },     // 3 cooldown triggers in 1 hr → flag
+  flag:       { violations: 5,  windowMs: 24 * 60 * 60_000 }, // 5 flags in 24 hr → suspend
+  suspend:    { violations: Infinity, windowMs: 0 },          // terminal — manual unblock
+};
+
+// De-escalation: how long without violations before stepping down one level
+const DE_ESCALATION_MS: Record<EscalationLevel, number> = {
+  observe:    0,                    // baseline — no de-escalation needed
+  soft_limit: 10 * 60_000,         // 10 min clean → observe
+  degrade:    15 * 60_000,         // 15 min clean → soft_limit
+  cooldown:   30 * 60_000,         // 30 min clean → degrade
+  flag:       60 * 60_000,         // 1 hr clean → cooldown
+  suspend:    Infinity,            // manual only
+};
+
+// In-memory fallback for escalation state
+const memoryEscalation = new Map<string, EscalationState>();
+
+function defaultEscalationState(): EscalationState {
+  return { level: 'observe', violation_count: 0, last_violation_at: 0, level_changed_at: Date.now() };
+}
+
+/** Get current escalation state for a company */
+async function getEscalationState(companyId: string): Promise<EscalationState> {
+  const key = `rl:escalation:${companyId}`;
+  const redis = await getRedis();
+
+  if (redis) {
+    try {
+      const data = await redis.get(key);
+      if (data) {
+        return typeof data === 'string' ? JSON.parse(data) as EscalationState : data as EscalationState;
+      }
+    } catch { /* fall through to memory */ }
+  }
+
+  return memoryEscalation.get(companyId) ?? defaultEscalationState();
+}
+
+/** Persist escalation state */
+async function setEscalationState(companyId: string, state: EscalationState): Promise<void> {
+  const key = `rl:escalation:${companyId}`;
+  const redis = await getRedis();
+
+  if (redis) {
+    try {
+      // TTL of 24 hours — escalation state doesn't need to persist forever
+      await redis.set(key, JSON.stringify(state), 'EX', 86400);
+      return;
+    } catch { /* fall through to memory */ }
+  }
+
+  memoryEscalation.set(companyId, state);
+}
+
+/** Check for de-escalation (time-based decay) */
+function checkDeEscalation(state: EscalationState): EscalationState {
+  const now = Date.now();
+  const currentIdx = ESCALATION_ORDER.indexOf(state.level);
+  if (currentIdx <= 0) return state; // already at observe
+
+  const timeSinceViolation = now - state.last_violation_at;
+  const deEscMs = DE_ESCALATION_MS[state.level];
+
+  if (timeSinceViolation >= deEscMs && deEscMs < Infinity) {
+    const newLevel = ESCALATION_ORDER[currentIdx - 1];
+    log.info('Rate limit de-escalation', { level: state.level, newLevel, timeSinceViolation });
+    return { level: newLevel, violation_count: 0, last_violation_at: state.last_violation_at, level_changed_at: now };
+  }
+
+  return state;
+}
+
+/** Record a violation and potentially escalate */
+function recordViolation(state: EscalationState): EscalationState {
+  const now = Date.now();
+  const threshold = ESCALATION_THRESHOLDS[state.level];
+  const currentIdx = ESCALATION_ORDER.indexOf(state.level);
+
+  // Reset violation counter if outside the window
+  const inWindow = (now - state.level_changed_at) <= threshold.windowMs;
+  const newCount = inWindow ? state.violation_count + 1 : 1;
+
+  // Check if we should escalate
+  if (newCount >= threshold.violations && currentIdx < ESCALATION_ORDER.length - 1) {
+    const newLevel = ESCALATION_ORDER[currentIdx + 1];
+    log.warn('Rate limit escalation', { level: state.level, newLevel, violations: newCount });
+    return { level: newLevel, violation_count: 0, last_violation_at: now, level_changed_at: now };
+  }
+
+  return { ...state, violation_count: newCount, last_violation_at: now };
+}
+
+/**
+ * Rate limit check with 6-step escalation ladder.
+ * Call this for company-scoped endpoints (chat, task creation, etc.)
+ * Returns null if allowed, or a NextResponse (429/warning) if limited.
+ */
+export async function checkRateLimitWithEscalation(
+  companyId: string,
+  options?: Omit<RateLimitOptions, 'keyPrefix'> & { endpoint?: string },
+): Promise<NextResponse | null> {
+  const maxRequests = options?.maxRequests ?? 30;
+  const windowMs = options?.windowMs ?? 60000;
+
+  // 1. Check base rate limit (count-based)
+  const baseResult = await checkCompanyRateLimitAsync(companyId, { maxRequests, windowMs });
+
+  // 2. Get escalation state (with de-escalation check)
+  let state = await getEscalationState(companyId);
+  state = checkDeEscalation(state);
+
+  // 3. If base limit exceeded, record violation and escalate
+  if (baseResult !== null) {
+    state = recordViolation(state);
+    await setEscalationState(companyId, state);
+  }
+
+  // 4. Apply escalation-level behavior
+  switch (state.level) {
+    case 'observe':
+      // No action — just return base result
+      return baseResult;
+
+    case 'soft_limit': {
+      // Add warning header but allow the request
+      if (baseResult) return baseResult;
+      // No 429, but warn via header
+      return null; // Caller should check getEscalationLevel() to add headers
+    }
+
+    case 'degrade': {
+      // Block non-essential endpoints only
+      const essential = !options?.endpoint || ['chat', 'tasks'].includes(options.endpoint);
+      if (!essential) {
+        return make429Response(maxRequests, 60);
+      }
+      return baseResult;
+    }
+
+    case 'cooldown':
+      // Full 429 for all endpoints
+      return baseResult ?? make429Response(maxRequests, 120);
+
+    case 'flag':
+      // Full 429 + logged for manual review
+      log.error('Rate limit FLAGGED for manual review', { companyId, violations: state.violation_count });
+      return make429Response(maxRequests, 300);
+
+    case 'suspend':
+      // Persistent block
+      return make429Response(maxRequests, 3600);
+  }
+}
+
+/** Get the current escalation level for a company (for header injection) */
+export async function getEscalationLevel(companyId: string): Promise<EscalationLevel> {
+  const state = await getEscalationState(companyId);
+  return checkDeEscalation(state).level;
 }
 
 // ══════════════════════════════════════════════

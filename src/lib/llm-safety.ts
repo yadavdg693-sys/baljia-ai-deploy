@@ -18,6 +18,77 @@ const LLM_CALL_TIMEOUT_MS = parseInt(process.env.LLM_TIMEOUT_MS ?? '60000', 10);
 const MAX_RETRIES = 2;
 const RETRY_BACKOFF_MS = 1000; // 1s, 2s, 4s exponential
 
+// G-EXEC-002: Circuit Breaker — prevents burning credits during API outages
+// Opens after FAILURE_THRESHOLD consecutive failures, auto-resets after COOLDOWN_MS
+const FAILURE_THRESHOLD = 5;
+const COOLDOWN_MS = 30_000; // 30 second cooldown when circuit is open
+const WINDOW_MS = 120_000;  // Only count failures within 2 min window
+
+interface CircuitState {
+  failures: number;
+  lastFailure: number;
+  isOpen: boolean;
+  openedAt: number;
+}
+
+// Per-provider circuit breakers
+const circuits: Record<string, CircuitState> = {};
+
+function getCircuit(provider: string): CircuitState {
+  if (!circuits[provider]) {
+    circuits[provider] = { failures: 0, lastFailure: 0, isOpen: false, openedAt: 0 };
+  }
+  return circuits[provider];
+}
+
+/**
+ * Check if a provider's circuit breaker is currently open (blocking calls).
+ * Auto-resets after cooldown period.
+ */
+export function isCircuitOpen(provider: string): boolean {
+  const circuit = getCircuit(provider);
+  if (!circuit.isOpen) return false;
+
+  // Check if cooldown has elapsed — auto-reset (half-open → try again)
+  if (Date.now() - circuit.openedAt > COOLDOWN_MS) {
+    log.info(`Circuit breaker half-open for ${provider}, allowing retry`);
+    circuit.isOpen = false;
+    circuit.failures = 0;
+    return false;
+  }
+
+  return true;
+}
+
+function recordSuccess(provider: string): void {
+  const circuit = getCircuit(provider);
+  circuit.failures = 0;
+  circuit.isOpen = false;
+}
+
+function recordFailure(provider: string): void {
+  const circuit = getCircuit(provider);
+  const now = Date.now();
+
+  // Reset failure count if outside window
+  if (now - circuit.lastFailure > WINDOW_MS) {
+    circuit.failures = 0;
+  }
+
+  circuit.failures++;
+  circuit.lastFailure = now;
+
+  if (circuit.failures >= FAILURE_THRESHOLD) {
+    circuit.isOpen = true;
+    circuit.openedAt = now;
+    log.error(`Circuit breaker OPEN for ${provider} — ${circuit.failures} consecutive failures`, {
+      provider,
+      failures: circuit.failures,
+      cooldownMs: COOLDOWN_MS,
+    });
+  }
+}
+
 /**
  * Wrap any async function with a timeout.
  * Uses AbortSignal for proper cleanup (Anthropic SDK supports this).
@@ -54,16 +125,25 @@ export async function withLLMTimeout<T>(
 
 /**
  * Determine if an error is transient (retryable).
+ * Covers rate limits (429), server errors (500/502/503/529),
+ * connection resets, and SDK-specific error objects.
  */
 function isTransientError(error: unknown): boolean {
   if (error instanceof Error) {
     const msg = error.message.toLowerCase();
     // Rate limit, server error, overloaded
-    if (msg.includes('429') || msg.includes('rate limit')) return true;
+    if (msg.includes('429') || msg.includes('rate limit') || msg.includes('rate_limit')) return true;
     if (msg.includes('500') || msg.includes('internal server error')) return true;
+    if (msg.includes('502') || msg.includes('bad gateway')) return true;
+    if (msg.includes('503') || msg.includes('service unavailable')) return true;
     if (msg.includes('529') || msg.includes('overloaded')) return true;
-    if (msg.includes('connection') || msg.includes('econnreset')) return true;
+    if (msg.includes('connection') || msg.includes('econnreset') || msg.includes('epipe')) return true;
+    if (msg.includes('fetch failed') || msg.includes('network')) return true;
     if (msg.includes('timeout') && !msg.includes('timed out after')) return true;
+
+    // Anthropic/Google SDK may include numeric status on the error object
+    const statusCode = (error as { status?: number }).status;
+    if (statusCode && [429, 500, 502, 503, 529].includes(statusCode)) return true;
   }
   return false;
 }
@@ -81,6 +161,11 @@ export async function callAnthropicWithTimeout(
   const label = options?.label ?? 'anthropic.messages.create';
   const timeoutMs = options?.timeoutMs ?? LLM_CALL_TIMEOUT_MS;
 
+  // G-EXEC-002: Circuit breaker check
+  if (isCircuitOpen('anthropic')) {
+    throw new Error(`Circuit breaker OPEN for Anthropic — too many consecutive failures. Retry after cooldown.`);
+  }
+
   let lastError: unknown;
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
@@ -90,11 +175,13 @@ export async function callAnthropicWithTimeout(
         timeoutMs,
         `${label} (attempt ${attempt + 1})`
       );
+      recordSuccess('anthropic');
       return result;
     } catch (error) {
       lastError = error;
 
       if (attempt < MAX_RETRIES && isTransientError(error)) {
+        recordFailure('anthropic');
         const backoff = RETRY_BACKOFF_MS * Math.pow(2, attempt);
         log.warn(`${label} transient failure, retrying in ${backoff}ms`, {
           attempt: attempt + 1,
@@ -104,6 +191,57 @@ export async function callAnthropicWithTimeout(
         continue;
       }
 
+      if (isTransientError(error)) recordFailure('anthropic');
+      throw error;
+    }
+  }
+
+  throw lastError;
+}
+
+/**
+ * Call OpenRouter with timeout + retry.
+ * Uses OpenAI SDK pointed at OpenRouter base URL.
+ * Supports GLM-4, Qwen, and any OpenRouter model.
+ */
+export async function callOpenRouterWithTimeout(
+  callFn: (signal: AbortSignal) => Promise<unknown>,
+  options?: { timeoutMs?: number; label?: string }
+): Promise<unknown> {
+  const label = options?.label ?? 'openrouter.chat.completions';
+  const timeoutMs = options?.timeoutMs ?? LLM_CALL_TIMEOUT_MS;
+
+  // G-EXEC-002: Circuit breaker check
+  if (isCircuitOpen('openrouter')) {
+    throw new Error(`Circuit breaker OPEN for OpenRouter — too many consecutive failures. Retry after cooldown.`);
+  }
+
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const result = await withLLMTimeout(
+        (signal) => callFn(signal),
+        timeoutMs,
+        `${label} (attempt ${attempt + 1})`
+      );
+      recordSuccess('openrouter');
+      return result;
+    } catch (error) {
+      lastError = error;
+
+      if (attempt < MAX_RETRIES && isTransientError(error)) {
+        recordFailure('openrouter');
+        const backoff = RETRY_BACKOFF_MS * Math.pow(2, attempt);
+        log.warn(`${label} transient failure, retrying in ${backoff}ms`, {
+          attempt: attempt + 1,
+          maxRetries: MAX_RETRIES,
+        });
+        await new Promise((resolve) => setTimeout(resolve, backoff));
+        continue;
+      }
+
+      if (isTransientError(error)) recordFailure('openrouter');
       throw error;
     }
   }
@@ -122,6 +260,11 @@ export async function callGeminiWithTimeout(
   const label = options?.label ?? 'gemini.generate';
   const timeoutMs = options?.timeoutMs ?? LLM_CALL_TIMEOUT_MS;
 
+  // G-EXEC-002: Circuit breaker check
+  if (isCircuitOpen('gemini')) {
+    throw new Error(`Circuit breaker OPEN for Gemini — too many consecutive failures. Retry after cooldown.`);
+  }
+
   let lastError: unknown;
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
@@ -136,11 +279,13 @@ export async function callGeminiWithTimeout(
           )
         ),
       ]);
+      recordSuccess('gemini');
       return result;
     } catch (error) {
       lastError = error;
 
       if (attempt < MAX_RETRIES && isTransientError(error)) {
+        recordFailure('gemini');
         const backoff = RETRY_BACKOFF_MS * Math.pow(2, attempt);
         log.warn(`${label} transient failure, retrying in ${backoff}ms`, {
           attempt: attempt + 1,
@@ -150,6 +295,7 @@ export async function callGeminiWithTimeout(
         continue;
       }
 
+      if (isTransientError(error)) recordFailure('gemini');
       throw error;
     }
   }

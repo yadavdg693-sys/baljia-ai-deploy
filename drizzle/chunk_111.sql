@@ -1,0 +1,1 @@
+CREATE INDEX "idx_documents_company" ON "documents" USING btree ("company_id");

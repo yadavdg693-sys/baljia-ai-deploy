@@ -40,7 +40,8 @@ export function CreditLedger({ companyId, initialEntries = [] }: CreditLedgerPro
         const res = await fetch(`/api/credits/ledger?companyId=${companyId}`);
         if (res.ok) {
           const data = await res.json();
-          setEntries(data.entries ?? []);
+          // H-LOGIC-018: API returns { balance, ledger } — not { entries }
+          setEntries(data.ledger ?? data.entries ?? []);
         }
       } finally {
         setLoading(false);

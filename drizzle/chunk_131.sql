@@ -1,0 +1,1 @@
+CREATE INDEX "idx_runs_task" ON "runs" USING btree ("task_id");

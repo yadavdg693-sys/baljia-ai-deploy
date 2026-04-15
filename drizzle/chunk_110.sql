@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "idx_dashboard_links_unique" ON "dashboard_links" USING btree ("company_id","label");

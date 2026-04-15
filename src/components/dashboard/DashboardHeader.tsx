@@ -2,6 +2,8 @@
 
 import { useState, useRef, useEffect } from 'react';
 import type { Company, User } from '@/types';
+import { CompanySettingsOverlay } from './CompanySettingsOverlay';
+import { ProfileSettingsOverlay } from './ProfileSettingsOverlay';
 
 interface DashboardHeaderProps {
   company: Company;
@@ -11,6 +13,8 @@ interface DashboardHeaderProps {
 
 export function DashboardHeader({ company, user, creditBalance }: DashboardHeaderProps) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [companySettingsOpen, setCompanySettingsOpen] = useState(false);
+  const [profileSettingsOpen, setProfileSettingsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   // Close on outside click
@@ -30,7 +34,7 @@ export function DashboardHeader({ company, user, creditBalance }: DashboardHeade
     });
   }
 
-  return (
+  return (<>
     <header className="flex items-center justify-between px-4 py-3 border-b border-border-default bg-surface-primary sticky top-0 z-20">
       {/* Company name */}
       <h1 className="text-xl font-bold font-[family-name:var(--font-display)] text-text-primary truncate">
@@ -64,15 +68,25 @@ export function DashboardHeader({ company, user, creditBalance }: DashboardHeade
                 <span className="text-text-secondary">Task Credits</span>
                 <span className="text-baljia-gold font-semibold">{creditBalance}</span>
               </div>
-              <MenuLink href="#">Upgrade</MenuLink>
+              <MenuLink href="#" comingSoon>Upgrade</MenuLink>
 
               <div className="my-1 border-t border-border-subtle" />
 
-              <MenuLink href="#">Company Settings</MenuLink>
-              <MenuLink href="#">Profile Settings</MenuLink>
-              <MenuLink href="#">About</MenuLink>
-              <MenuLink href="#">FAQ</MenuLink>
-              <MenuLink href="#">Refer &amp; Earn</MenuLink>
+              <button
+                onClick={() => { setMenuOpen(false); setCompanySettingsOpen(true); }}
+                className="w-full text-left block px-4 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors"
+              >
+                Company Settings
+              </button>
+              <button
+                onClick={() => { setMenuOpen(false); setProfileSettingsOpen(true); }}
+                className="w-full text-left block px-4 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-surface-hover transition-colors"
+              >
+                Profile Settings
+              </button>
+              <MenuLink href="#" comingSoon>About</MenuLink>
+              <MenuLink href="/faq">FAQ</MenuLink>
+              <MenuLink href="#" comingSoon>Refer &amp; Earn</MenuLink>
 
               <div className="my-1 border-t border-border-subtle" />
 
@@ -87,10 +101,41 @@ export function DashboardHeader({ company, user, creditBalance }: DashboardHeade
         </div>
       </div>
     </header>
-  );
+
+    {/* Overlays — rendered outside header to escape stacking context */}
+    <CompanySettingsOverlay
+      company={company}
+      open={companySettingsOpen}
+      onOpenChange={setCompanySettingsOpen}
+    />
+    <ProfileSettingsOverlay
+      user={user}
+      open={profileSettingsOpen}
+      onOpenChange={setProfileSettingsOpen}
+    />
+  </>);
 }
 
-function MenuLink({ href, children }: { href: string; children: React.ReactNode }) {
+function MenuLink({
+  href,
+  children,
+  comingSoon = false,
+}: {
+  href: string;
+  children: React.ReactNode;
+  comingSoon?: boolean;
+}) {
+  if (comingSoon) {
+    return (
+      <span
+        title="Coming soon"
+        className="block px-4 py-2 text-sm text-text-muted cursor-not-allowed select-none"
+      >
+        {children}
+        <span className="ml-1.5 text-[10px] uppercase tracking-wide opacity-50">soon</span>
+      </span>
+    );
+  }
   return (
     <a
       href={href}

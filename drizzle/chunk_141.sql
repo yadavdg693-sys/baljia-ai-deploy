@@ -1,0 +1,1 @@
+CREATE INDEX "idx_tasks_company_order" ON "tasks" USING btree ("company_id","queue_order");

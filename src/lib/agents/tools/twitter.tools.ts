@@ -186,14 +186,19 @@ export async function handleTwitterTool(
       }
       if (/#\w+/.test(text)) return 'Tweet contains hashtags. Remove them — company voice rules prohibit hashtags.';
 
-      // Dedup check against DB
+      // H-LOGIC-005: Dedup against tweet_posted events (not task_completed noise)
       const recent = await db.select({ payload: platformEvents.payload })
         .from(platformEvents)
-        .where(and(eq(platformEvents.company_id, task.company_id), eq(platformEvents.event_type, 'task_completed')))
-        .orderBy(desc(platformEvents.created_at)).limit(20);
+        .where(and(
+          eq(platformEvents.company_id, task.company_id),
+          eq(platformEvents.event_type, 'task_completed'),
+        ))
+        .orderBy(desc(platformEvents.created_at)).limit(50);
 
       const recentTexts = (recent ?? [])
-        .map((e) => (e.payload as Record<string, unknown>)?.tweet_text as string)
+        .map((e) => (e.payload as Record<string, unknown>))
+        .filter((p) => p?.type === 'tweet_posted')
+        .map((p) => p?.tweet_text as string)
         .filter(Boolean);
 
       const isDuplicate = recentTexts.some((t) =>

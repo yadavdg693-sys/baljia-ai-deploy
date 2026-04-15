@@ -1,0 +1,1 @@
+CREATE INDEX "idx_contacts_company" ON "contacts" USING btree ("company_id");

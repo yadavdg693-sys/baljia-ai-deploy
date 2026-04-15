@@ -1,0 +1,1 @@
+CREATE INDEX "idx_artifacts_task" ON "artifacts" USING btree ("task_id");

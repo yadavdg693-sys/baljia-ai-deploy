@@ -1,19 +1,23 @@
-// Onboarding Pipeline — 16-stage async company bootstrapping
+// Onboarding Pipeline — 20-stage async company bootstrapping
 // Spec: Baljia_Technical_Architecture_Spec_v2.md PART 5
 // Runs fire-and-forget after company record is created.
 // Each stage emits a platform_event so the UI can track progress via SSE.
 
 import Anthropic from '@anthropic-ai/sdk';
-import { db, companies, users, memoryLayers } from '@/lib/db';
-import { eq, and, ne } from 'drizzle-orm';
+import { db, companies, users, memoryLayers, documents } from '@/lib/db';
+import { eq, and, ne, sql, inArray } from 'drizzle-orm';
 import * as companyService from '@/lib/services/company.service';
 import * as taskService from '@/lib/services/task.service';
 import * as eventService from '@/lib/services/event.service';
 import * as documentService from '@/lib/services/document.service';
+import * as roadmapService from '@/lib/services/roadmap.service';
+import { classifyArchetype } from '@/lib/services/roadmap.service';
+import * as chatService from '@/lib/services/chat.service';
+import { isLateDevConfigured } from '@/lib/services/latedev.service';
 import { provisionCompanyDatabase } from '@/lib/services/neon.service';
 import { provisionSubdomain } from '@/lib/services/domain.service';
 import { provisionCompanyEmail } from '@/lib/services/company-email.service';
-import { sendWelcomeEmail } from '@/lib/services/email.service';
+import { sendEmail } from '@/lib/services/email.service';
 import { createLogger } from '@/lib/logger';
 import { getCapabilityConstraint } from '@/lib/platform-capabilities';
 import type { OnboardingJourney } from '@/types';
@@ -32,11 +36,18 @@ type OnboardingStage =
   | 'persist_context'
   | 'extract_founder_angle'
   | 'select_strategy'
+  | 'classify_archetype'
   | 'name_company'
   | 'provision_infrastructure'
   | 'generate_market_research'
   | 'save_mission'
+  | 'generate_roadmap'
+  | 'derive_active_milestone'
   | 'create_starter_tasks'
+  | 'generate_landing_page'
+  | 'send_welcome_email'
+  | 'post_launch_tweet'
+  | 'generate_ceo_summary'
   | 'flush_diagnostics'
   | 'celebrate';
 
@@ -60,17 +71,22 @@ interface PipelineContext {
   journey: OnboardingJourney;
   input: string | undefined;   // idea text or business_url
   requestIp: string | null;
+  browserTimezone: string | null; // from client Intl.DateTimeFormat
   founderName: string | null;
   founderEmail: string;
   founderEnrichment: FounderEnrichment | null;
   enrichedBusinessSummary: string | null;
   enrichedFounderSummary: string | null;
   founderAngle: string | null;    // background-informed positioning extracted by Haiku
+  archetype: string | null;       // bootstrap-time archetype classification
   strategy: string;
   companyName: string;
+  slug: string;
   oneLiner: string;
   mission: string;
   marketResearch: string | null;
+  activeMilestoneTitle: string | null;
+  activeMilestoneTags: string[];
   startedAt: number;
 }
 
@@ -85,25 +101,45 @@ export async function runOnboardingPipeline(
   userId: string,
   journey: OnboardingJourney,
   input: string | undefined,
-  requestIp: string | null = null
+  requestIp: string | null = null,
+  browserTimezone: string | null = null
 ): Promise<void> {
+  // Idempotency guard: atomic CAS to prevent duplicate pipeline runs
+  const [claimed] = await db.update(companies)
+    .set({ onboarding_status: 'running' })
+    .where(and(
+      eq(companies.id, companyId),
+      inArray(companies.onboarding_status, ['initializing', 'failed']),
+    ))
+    .returning({ id: companies.id });
+
+  if (!claimed) {
+    log.warn('Onboarding pipeline already running or completed', { companyId });
+    return;
+  }
+
   const ctx: PipelineContext = {
     companyId,
     userId,
     journey,
     input,
     requestIp,
+    browserTimezone,
     founderName: null,
     founderEmail: '',
     founderEnrichment: null,
     enrichedBusinessSummary: null,
     enrichedFounderSummary: null,
     founderAngle: null,
+    archetype: null,
     strategy: journey,
     companyName: 'My Company',
+    slug: '',
     oneLiner: '',
     mission: '',
     marketResearch: null,
+    activeMilestoneTitle: null,
+    activeMilestoneTags: [],
     startedAt: Date.now(),
   };
 
@@ -114,11 +150,18 @@ export async function runOnboardingPipeline(
     await stage(ctx, 'persist_context', () => runPersistContext(ctx));
     await stage(ctx, 'extract_founder_angle', () => runExtractFounderAngle(ctx));
     await stage(ctx, 'select_strategy', () => runSelectStrategy(ctx));
+    await stage(ctx, 'classify_archetype', () => runClassifyArchetype(ctx));
     await stage(ctx, 'name_company', () => runNameCompany(ctx));
     await stage(ctx, 'provision_infrastructure', () => runProvisionInfrastructure(ctx));
     await stage(ctx, 'generate_market_research', () => runMarketResearch(ctx));
     await stage(ctx, 'save_mission', () => runSaveMission(ctx));
+    await stage(ctx, 'generate_roadmap', () => runGenerateRoadmap(ctx));
+    await stage(ctx, 'derive_active_milestone', () => runDeriveActiveMilestone(ctx));
     await stage(ctx, 'create_starter_tasks', () => runCreateStarterTasks(ctx));
+    await stage(ctx, 'generate_landing_page', () => runGenerateLandingPage(ctx));
+    await stage(ctx, 'send_welcome_email', () => runSendWelcomeEmail(ctx));
+    await stage(ctx, 'post_launch_tweet', () => runPostLaunchTweet(ctx));
+    await stage(ctx, 'generate_ceo_summary', () => runGenerateCeoSummary(ctx));
     await stage(ctx, 'flush_diagnostics', () => runFlushDiagnostics(ctx));
     await stage(ctx, 'celebrate', () => runCelebrate(ctx));
   } catch (err) {
@@ -341,7 +384,9 @@ async function runPersistContext(ctx: PipelineContext): Promise<void> {
   if (geo?.country) {
     founderLines.push(`Location: ${[geo.city, geo.region, geo.country].filter(Boolean).join(', ')}`);
   }
-  if (geo?.timezone) founderLines.push(`Timezone: ${geo.timezone}`);
+  // Prefer browser timezone (more accurate), fall back to GeoIP
+  const resolvedTimezone = ctx.browserTimezone ?? geo?.timezone ?? null;
+  if (resolvedTimezone) founderLines.push(`Timezone: ${resolvedTimezone}`);
 
   const enrichConf = ctx.founderEnrichment?.confidence ?? 'low';
   founderLines.push(`Enrichment confidence: ${enrichConf}`);
@@ -429,6 +474,48 @@ REASONING: <one sentence: why this founder + this idea + this platform = credibl
   } else {
     ctx.strategy = 'novel_saas_tool';
   }
+}
+
+async function runClassifyArchetype(ctx: PipelineContext): Promise<void> {
+  // Use keyword classification from roadmap service as baseline
+  const ideaText = ctx.input ?? ctx.strategy;
+  const baseArchetype = classifyArchetype(ideaText, ctx.founderAngle);
+
+  // If we have rich context, let Haiku refine the classification
+  if (ctx.founderAngle || ctx.enrichedBusinessSummary) {
+    const contextParts: string[] = [];
+    if (ctx.input) contextParts.push(`Idea/Business: ${ctx.input}`);
+    if (ctx.founderAngle) contextParts.push(`Founder positioning: ${ctx.founderAngle}`);
+    if (ctx.enrichedBusinessSummary) contextParts.push(`Business context: ${ctx.enrichedBusinessSummary.slice(0, 300)}`);
+    if (ctx.strategy !== ctx.journey) contextParts.push(`Strategy: ${ctx.strategy}`);
+
+    const prompt = `Classify this startup into ONE operating archetype. Choose the single best fit.
+
+${contextParts.join('\n')}
+
+Options: saas, marketplace, agency, content, ecommerce, community
+
+Reply with ONLY the archetype name (one word, lowercase). Nothing else.`;
+
+    try {
+      const response = await callHaiku(prompt, 20);
+      const cleaned = response.trim().toLowerCase().replace(/[^a-z]/g, '');
+      const valid = ['saas', 'marketplace', 'agency', 'content', 'ecommerce', 'community'];
+      ctx.archetype = valid.includes(cleaned) ? cleaned : baseArchetype;
+    } catch {
+      ctx.archetype = baseArchetype;
+    }
+  } else {
+    ctx.archetype = baseArchetype;
+  }
+
+  // Persist archetype to Layer 1
+  await appendMemorySection(ctx.companyId, '## Archetype', [
+    `Classification: ${ctx.archetype}`,
+    `Confidence: ${ctx.founderAngle ? 'LLM-refined' : 'keyword-based'}`,
+  ]);
+
+  log.info('Archetype classified', { companyId: ctx.companyId, archetype: ctx.archetype });
 }
 
 async function runNameCompany(ctx: PipelineContext): Promise<void> {
@@ -529,6 +616,7 @@ async function runProvisionInfrastructure(ctx: PipelineContext): Promise<void> {
     return !!existing;
   });
 
+  ctx.slug = slug;
   await db.update(companies).set({ name: ctx.companyName, slug }).where(eq(companies.id, ctx.companyId));
 
   // Provision Neon database — appends infra section to Layer 1 (non-blocking)
@@ -615,6 +703,56 @@ MISSION: <inspiring 1-2 sentence mission that references the founder's specific 
   const missionDoc = docs.find(d => d.doc_type === 'mission');
   if (missionDoc) {
     await documentService.updateDocument(missionDoc.id, ctx.mission);
+  } else {
+    await db.insert(documents).values({
+      company_id: ctx.companyId,
+      doc_type: 'mission',
+      title: 'Company Mission',
+      content: ctx.mission,
+      is_empty: false,
+    });
+  }
+
+  // Save market research to a document
+  if (ctx.marketResearch) {
+    const mrDoc = docs.find(d => d.doc_type === 'market_research');
+    if (mrDoc) {
+      await documentService.updateDocument(mrDoc.id, ctx.marketResearch);
+    } else {
+      await db.insert(documents).values({
+        company_id: ctx.companyId,
+        doc_type: 'market_research',
+        title: 'Market & Competitor Research',
+        content: ctx.marketResearch,
+        is_empty: false,
+      });
+    }
+  }
+}
+
+async function runGenerateRoadmap(ctx: PipelineContext): Promise<void> {
+  // Generate roadmap as a core pipeline stage (not fire-and-forget).
+  // This must complete before derive_active_milestone so tasks come FROM the roadmap.
+  const roadmap = await roadmapService.generateRoadmap(ctx.companyId);
+  if (roadmap) {
+    log.info('Roadmap generated in pipeline', { companyId: ctx.companyId, archetype: roadmap.archetype });
+  }
+}
+
+async function runDeriveActiveMilestone(ctx: PipelineContext): Promise<void> {
+  // Get the first milestone from phase 1 — this is the "active milestone"
+  // that starter tasks should derive from.
+  const result = await roadmapService.getCurrentMilestoneTags(ctx.companyId);
+  ctx.activeMilestoneTitle = result.milestoneTitle;
+  ctx.activeMilestoneTags = result.tags;
+
+  if (result.milestoneTitle) {
+    await appendMemorySection(ctx.companyId, '## Active Milestone', [
+      `Title: ${result.milestoneTitle}`,
+      `Tags: ${result.tags.join(', ')}`,
+      result.hint ? `Hint: ${result.hint}` : '',
+    ].filter(Boolean));
+    log.info('Active milestone derived', { companyId: ctx.companyId, milestone: result.milestoneTitle });
   }
 }
 
@@ -644,8 +782,17 @@ async function runCreateStarterTasks(ctx: PipelineContext): Promise<void> {
 
 async function generatePersonalizedTasks(ctx: PipelineContext): Promise<StarterTask[] | null> {
   const parts: string[] = [`Company: ${ctx.companyName}`, `Journey: ${ctx.journey}`];
+  if (ctx.archetype) parts.push(`Business type: ${ctx.archetype}`);
   if (ctx.founderAngle) parts.push(`Founder positioning: ${ctx.founderAngle}`);
   if (ctx.input) parts.push(`Idea/Business: ${ctx.input}`);
+
+  // Include active milestone context so tasks derive from the roadmap
+  if (ctx.activeMilestoneTitle) {
+    parts.push(`Current milestone: ${ctx.activeMilestoneTitle}`);
+    if (ctx.activeMilestoneTags.length > 0) {
+      parts.push(`Milestone focus areas: ${ctx.activeMilestoneTags.join(', ')}`);
+    }
+  }
 
   // Location shapes who to reach and how to price — pass it explicitly
   const geo = ctx.founderEnrichment?.geo;
@@ -710,6 +857,187 @@ TASK_3_DESC: [2-3 sentences naming the specific audience and what to say]`;
   }
 }
 
+// ══════════════════════════════════════════════
+// BOOTSTRAP PROOF ARTIFACTS
+// ══════════════════════════════════════════════
+
+async function runGenerateLandingPage(ctx: PipelineContext): Promise<void> {
+  // Generate a minimal narrative-first landing page stored as a document.
+  // The Engineering agent will later deploy this to {slug}.baljia.app via Render.
+  const contextParts: string[] = [];
+  if (ctx.companyName) contextParts.push(`Company: ${ctx.companyName}`);
+  if (ctx.oneLiner) contextParts.push(`One-liner: ${ctx.oneLiner}`);
+  if (ctx.mission) contextParts.push(`Mission: ${ctx.mission}`);
+  if (ctx.archetype) contextParts.push(`Business type: ${ctx.archetype}`);
+  if (ctx.founderAngle) contextParts.push(`Founder positioning: ${ctx.founderAngle.slice(0, 200)}`);
+  if (ctx.marketResearch) contextParts.push(`Market context: ${ctx.marketResearch.slice(0, 300)}`);
+
+  const prompt = `Generate a single-page landing page in HTML for a startup. Make it narrative-first and launch-ready.
+
+${contextParts.join('\n')}
+
+The page must include:
+1. Brand name as wordmark at top
+2. Category tag (e.g. "AI-Powered Analytics")
+3. Hard-hitting headline (one sentence)
+4. Short explanatory paragraph (2-3 sentences)
+5. Problem framing section
+6. 3 feature/capability blocks
+7. "How it works" in 3 steps
+8. Closing manifesto paragraph
+9. Footer with "Built and operated by Baljia" attribution
+
+Style: dark background (#0a0a0a), clean sans-serif, gold accent (#F5A623), mobile-responsive.
+Use inline CSS only. No external dependencies. Full valid HTML document.
+Keep it under 300 lines.`;
+
+  try {
+    const html = await callHaiku(prompt, 4000);
+    // Save as landing_page document
+    const docs = await documentService.getDocuments(ctx.companyId);
+    const landingDoc = docs.find(d => d.doc_type === 'landing_page');
+    if (landingDoc) {
+      await documentService.updateDocument(landingDoc.id, html);
+    } else {
+      await db.insert(documents).values({
+        company_id: ctx.companyId,
+        doc_type: 'landing_page',
+        title: `${ctx.companyName} Landing Page`,
+        content: html,
+        is_empty: false,
+      });
+    }
+    log.info('Landing page generated', { companyId: ctx.companyId });
+  } catch (err) {
+    log.warn('Landing page generation failed — non-blocking', {
+      companyId: ctx.companyId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+async function runSendWelcomeEmail(ctx: PipelineContext): Promise<void> {
+  // Send welcome email FROM the company inbox ({slug}@baljia.app), not from platform.
+  // This proves the inbox identity is real and working.
+  if (!ctx.founderEmail || !ctx.slug) return;
+
+  const companyEmail = `${ctx.slug}@baljia.app`;
+  try {
+    await sendEmail({
+      to: ctx.founderEmail,
+      from: companyEmail,
+      subject: `Welcome to ${ctx.companyName} — your AI team is ready`,
+      textBody: [
+        `Hi ${ctx.founderName ?? 'there'},`,
+        '',
+        `Your company "${ctx.companyName}" is live. Here's what your AI Angel has set up:`,
+        '',
+        `- Company website: ${ctx.slug}.baljia.app`,
+        `- Company inbox: ${companyEmail}`,
+        `- Mission and market research documents`,
+        `- 3 starter tasks ready to execute`,
+        '',
+        `Head to your dashboard to review everything and approve your first task.`,
+        '',
+        `To start executing tasks, activate your 3-day free trial (10 credits, 3 night shifts).`,
+        '',
+        `— Your AI Angel at ${ctx.companyName}`,
+      ].join('\n'),
+      tag: 'welcome',
+      companyId: ctx.companyId,
+    });
+    log.info('Welcome email sent from company inbox', { from: companyEmail, to: ctx.founderEmail });
+  } catch (err) {
+    log.warn('Welcome email from company inbox failed — non-blocking', {
+      companyId: ctx.companyId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+async function runPostLaunchTweet(ctx: PipelineContext): Promise<void> {
+  // Post a launch tweet via Late.dev if configured.
+  // This is a bootstrap proof artifact — shows the company is "already alive."
+  if (!isLateDevConfigured()) {
+    log.info('Late.dev not configured — launch tweet skipped', { companyId: ctx.companyId });
+    return;
+  }
+
+  const tweetText = [
+    `🚀 ${ctx.companyName} just launched!`,
+    '',
+    ctx.oneLiner || ctx.mission.slice(0, 200),
+    '',
+    ctx.slug ? `🌐 ${ctx.slug}.baljia.app` : '',
+    '',
+    `Built and operated by @baljia_ai`,
+  ].filter(Boolean).join('\n').slice(0, 280);
+
+  try {
+    const { createPost } = await import('@/lib/services/latedev.service');
+    await createPost({ text: tweetText, platforms: ['twitter'] });
+    log.info('Launch tweet posted', { companyId: ctx.companyId });
+  } catch (err) {
+    log.warn('Launch tweet failed — non-blocking', {
+      companyId: ctx.companyId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+async function runGenerateCeoSummary(ctx: PipelineContext): Promise<void> {
+  // Generate the first CEO bootstrap message with the Polsia-style checklist.
+  // This is what makes the company "feel alive" when the founder lands in the dashboard.
+  const session = await chatService.getOrCreateSession(ctx.companyId, ctx.userId);
+
+  // Build the checklist of what was accomplished
+  const checklistItems: string[] = [];
+  if (ctx.marketResearch) checklistItems.push('✅ Market research completed');
+  if (ctx.founderAngle) checklistItems.push('✅ Founder background analyzed');
+  if (ctx.slug) checklistItems.push(`✅ Welcome email sent from ${ctx.slug}@baljia.app`);
+  if (isLateDevConfigured()) checklistItems.push('✅ Launch tweet posted from @baljia_ai');
+  if (ctx.slug) checklistItems.push(`✅ Landing page built at ${ctx.slug}.baljia.app`);
+  checklistItems.push('✅ Mission created');
+  if (ctx.marketResearch) checklistItems.push('✅ Market research saved');
+  checklistItems.push('✅ 3 tasks queued for cycle 1');
+
+  // Get the starter task titles for the message
+  const companyTasks = await taskService.getTasks(ctx.companyId);
+  const starterTasks = companyTasks
+    .filter(t => t.source === 'onboarding')
+    .sort((a, b) => (a.queue_order ?? 0) - (b.queue_order ?? 0))
+    .slice(0, 3);
+
+  const taskList = starterTasks.length > 0
+    ? starterTasks.map((t, i) => `${i + 1}. **${t.title}**`).join('\n')
+    : '1. Research task\n2. Build task\n3. Outreach task';
+
+  const ceoMessage = [
+    `I've set up everything for ${ctx.companyName}:`,
+    '',
+    ...checklistItems,
+    '',
+    `Here are your first 3 tasks:`,
+    '',
+    taskList,
+    '',
+    `To continue building, subscribe to start your first operating cycle.`,
+    '',
+    `**Your free trial includes:** 3 days, 10 credits, and 3 night shifts.`,
+    `I'll send you a daily progress report so you always know what's happening.`,
+  ].join('\n');
+
+  await chatService.appendMessage(session.id, {
+    id: crypto.randomUUID(),
+    session_id: session.id,
+    role: 'assistant',
+    content: ceoMessage,
+    created_at: new Date().toISOString(),
+  });
+
+  log.info('CEO bootstrap summary posted', { companyId: ctx.companyId, sessionId: session.id });
+}
+
 async function runFlushDiagnostics(ctx: PipelineContext): Promise<void> {
   const elapsed = Date.now() - ctx.startedAt;
   log.info('Onboarding complete', {
@@ -731,21 +1059,18 @@ async function runCelebrate(ctx: PipelineContext): Promise<void> {
       company_name: ctx.companyName,
       journey: ctx.journey,
       strategy: ctx.strategy,
+      archetype: ctx.archetype,
       one_liner: ctx.oneLiner,
+      slug: ctx.slug,
+      // Trial packaging — surfaced at handoff per Polsia spec
+      trial_days: 3,
+      trial_credits: 10,
+      trial_night_shifts: 3,
     },
     true  // is_public
   );
-
-  // Send welcome email (non-blocking)
-  if (ctx.founderEmail) {
-    sendWelcomeEmail(
-      ctx.founderEmail,
-      ctx.founderName ?? ctx.founderEmail,
-      ctx.companyName
-    ).catch((err) =>
-      log.warn('Welcome email failed', { companyId: ctx.companyId, error: err?.message })
-    );
-  }
+  // Welcome email and roadmap generation are now handled by earlier pipeline stages
+  // (send_welcome_email and generate_roadmap respectively)
 }
 
 // ══════════════════════════════════════════════

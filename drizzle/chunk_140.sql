@@ -1,0 +1,1 @@
+CREATE INDEX "idx_tasks_company_status" ON "tasks" USING btree ("company_id","status");

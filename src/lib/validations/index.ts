@@ -1,9 +1,22 @@
 import { z } from 'zod';
 
+export const waitlistSchema = z.object({
+  email: z.string().email().max(255),
+});
+
+export const quickStartSchema = z.object({
+  email: z.string().email().max(255),
+  journey: z.enum(['surprise_me', 'build_my_idea', 'grow_my_company']),
+  idea: z.string().max(2000).optional(),
+  business_url: z.string().max(500).optional(),
+  timezone: z.string().max(100).optional(),
+});
+
 export const onboardingSchema = z.object({
   journey: z.enum(['surprise_me', 'build_my_idea', 'grow_my_company']),
   idea: z.string().max(2000).optional(),
   business_url: z.string().url().optional(),
+  timezone: z.string().max(100).optional(),
 });
 
 export const createTaskSchema = z.object({

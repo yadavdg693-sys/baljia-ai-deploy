@@ -144,7 +144,7 @@ Created before any paid conversion (no card required):
 - Quick links to generated surfaces
 - Unlimited CEO/chat access
 
-**Empty by default at signup:** `product_overview`, `tech_notes`, `brand_voice`, `user_research`
+**Empty by default at signup:** `product_overview`, `tech_notes`, `brand_voice`, `market_research`
 
 **Note:** `available_documents` surface only shows populated docs. Empty slots may not appear in certain dashboard/agent contexts.
 
@@ -492,7 +492,7 @@ Terminal strip → company name + Menu → mascot/status → trial CTA → Busin
 2. `product_overview` — empty at signup
 3. `tech_notes` — empty at signup
 4. `brand_voice` — empty at signup
-5. `user_research` — empty at signup
+5. `market_research` - empty at signup
 
 **Note:** `user_context` appears in some prompts — may be alias for `user_research` or separate hidden surface (open question). Also: `vision_md` referenced in some contexts.
 
@@ -505,7 +505,7 @@ Market Research Report, strategy reports, analytics reports, execution deliverab
 - Outputs converge toward same mission rhetoric
 - Documents don't auto-update as work proceeds → document rot
 - `product_overview` especially damaging when empty — agents lose shared source of truth
-- Customer intelligence stays trapped in chat instead of being promoted to `user_research`
+- Customer intelligence stays trapped in chat instead of being promoted to `market_research`
 
 **CEO/chat can draft documents in free planning:** brand_voice (tone, language style, personality, target audience, words to use/avoid) and product_overview (what company is, who it serves, service tiers, workflow, planned surfaces)
 

@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "idx_agent_tool_mounts_unique" ON "agent_tool_mounts" USING btree ("agent_id","mcp_server_id");

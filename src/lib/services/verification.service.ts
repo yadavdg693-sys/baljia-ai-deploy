@@ -1,5 +1,6 @@
-// Verification Service — 5-level task verification
-// Domain 5.1: completed_verified vs completed_unverified
+// Verification Service — 5-level task verification (SPEC-CTRL-106)
+// The verifier is the SOLE AUTHORITY for setting final task status.
+// Worker is NOT the final authority — verifier sets completed or failed.
 // Levels: none, deterministic, browser_flow, quality_review, hybrid
 
 import type { Task, VerificationLevel } from '@/types';
@@ -177,6 +178,34 @@ async function verifyBrowserFlow(task: Task): Promise<VerificationResult> {
         passed: response.ok,
         detail: `${domain} returned ${response.status}`,
       });
+
+      // Enhanced: GET request to verify page has real content (not just 200 OK)
+      if (response.ok) {
+        try {
+          const getRes = await fetch(`https://${domain}`, {
+            method: 'GET',
+            signal: AbortSignal.timeout(15000),
+          });
+          const html = await getRes.text();
+          const hasBody = html.includes('<body');
+          const hasContent = html.length > 500;
+          const isErrorPage = /error|not found|500|502|503|default page/i.test(html.slice(0, 2000));
+
+          browserChecks.push({
+            name: 'page_has_content',
+            passed: hasBody && hasContent && !isErrorPage,
+            detail: hasBody && hasContent && !isErrorPage
+              ? `Page has ${html.length} bytes with valid body content.`
+              : `Page issue: body=${hasBody}, size=${html.length}, errorPage=${isErrorPage}`,
+          });
+        } catch {
+          browserChecks.push({
+            name: 'page_has_content',
+            passed: false,
+            detail: 'GET request to verify page content failed.',
+          });
+        }
+      }
     } catch (error) {
       browserChecks.push({
         name: 'site_accessible',
@@ -307,20 +336,23 @@ async function verifyHybrid(task: Task): Promise<VerificationResult> {
 // POST-VERIFICATION — update task status
 // ══════════════════════════════════════════════
 
+/**
+ * Verify a task and set its final status.
+ * This is the SOLE AUTHORITY for transitioning a task from 'verifying'
+ * to 'completed' or 'failed' (SPEC-CTRL-106).
+ */
 export async function verifyAndUpdate(taskId: string): Promise<VerificationResult> {
   const task = await taskService.getTask(taskId);
   if (!task) throw new Error(`Task not found: ${taskId}`);
 
   const result = await verifyTask(task);
 
-  // Update task status based on verification
-  if (result.passed) {
-    await taskService.completeTask(taskId, true); // completed_verified
-  }
-  // If failed, leave as completed_unverified (don't revert to failed)
+  // Verifier is the sole authority for final task status (SPEC-CTRL-106)
+  await taskService.finalizeTask(taskId, result.passed);
 
-  // Emit event
-  await eventService.emit(task.company_id, 'task_completed', {
+  // Emit correct event based on verification outcome
+  const eventType = result.passed ? 'task_completed' : 'task_failed';
+  await eventService.emit(task.company_id, eventType, {
     task_id: taskId,
     title: task.title,
     verification_level: result.level,

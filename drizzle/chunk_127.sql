@@ -1,0 +1,1 @@
+CREATE INDEX "idx_reports_task" ON "reports" USING btree ("task_id");

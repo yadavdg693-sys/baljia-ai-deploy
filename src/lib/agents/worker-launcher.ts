@@ -15,10 +15,16 @@ import * as creditService from '@/lib/services/credit.service';
 import * as eventService from '@/lib/services/event.service';
 import { routeTask, getAgentName } from '@/lib/services/router.service';
 import { verifyAndUpdate } from '@/lib/services/verification.service';
-import { processTaskLearnings } from '@/lib/services/memory.service';
+import { processTaskLearnings, buildContextPacket } from '@/lib/services/memory.service';
+import { buildPermissionSnapshot } from '@/lib/services/governance.service';
 import { remediateFailed } from '@/lib/services/remediation.service';
+import { checkAutoResolve } from '@/lib/services/failure.service';
 import { checkAndUpgrade } from '@/lib/services/stage.service';
+import { canExecuteTask } from '@/lib/services/guardrail.service';
 import { executeAgent } from './agent-factory';
+import { executeDeterministic } from './deterministic-executor';
+import { executeTemplate } from './template-executor';
+import type { AgentInput, AgentResult } from './agent-factory';
 import { Watchdog } from './watchdog';
 import { db, companies, tasks as tasksTable, taskExecutions } from '@/lib/db';
 import { eq, and, gte, inArray, sql } from 'drizzle-orm';
@@ -28,7 +34,8 @@ import type { TaskExecution, Lifecycle } from '@/types';
 const log = createLogger('Worker');
 
 // Max execution time per task (prevents indefinite hangs: G-EXEC-001)
-const MAX_EXECUTION_MS = 10 * 60 * 1000; // 10 minutes
+// Spec SPEC-CTRL-001: absolute time limit is 4 hours
+const MAX_EXECUTION_MS = 4 * 60 * 60 * 1000; // 4 hours
 
 // Max retries for auto-remediation (H-AGENT-017 circuit breaker)
 const MAX_AUTO_RETRIES = 2;
@@ -66,6 +73,13 @@ export async function launchTask(taskId: string): Promise<TaskExecution> {
     throw new Error('Company execution is suspended');
   }
 
+  // Guardrail response ladder check (now async — reads from DB on cold start)
+  const guardrailCheck = await canExecuteTask(task.company_id, task.priority);
+  if (!guardrailCheck.allowed) {
+    await taskService.updateTask(taskId, { status: 'blocked_pre_start' });
+    throw new Error(`Guardrail blocked: ${guardrailCheck.reason}`);
+  }
+
   // H-AGENT-017: Circuit breaker — check retry count for auto-remediation tasks
   if (task.source === 'auto_remediation') {
     const [countResult] = await db.select({ count: sql<number>`count(*)::int` })
@@ -80,7 +94,7 @@ export async function launchTask(taskId: string): Promise<TaskExecution> {
     const count = countResult?.count ?? 0;
 
     if ((count ?? 0) >= MAX_AUTO_RETRIES) {
-      await taskService.updateTask(taskId, { status: 'blocked' });
+      await taskService.updateTask(taskId, { status: 'blocked_pre_start' });
       throw new Error(
         `Auto-remediation circuit breaker: ${count} retries in last 24h (max ${MAX_AUTO_RETRIES}). ` +
         `Task blocked to prevent credit drain.`
@@ -94,27 +108,37 @@ export async function launchTask(taskId: string): Promise<TaskExecution> {
 
   log.info('Launching task', { taskId, title: task.title, agent: agentName, agentId });
 
-  // 2. Deduct credit (Domain 5.4: charge at start_task)
-  const hasCredit = await creditService.deductCredit(
-    task.company_id,
-    task.estimated_credits,
-    task.id,
-    `Task: ${task.title}`
-  );
+  // ATOMIC: Claim slot + claim task + deduct credit in one SQL statement.
+  // Replaces the previous 3-step sequence (slot check → startTask → deductCredit)
+  // that had race condition windows between each step.
+  const claimResult = await creditService.claimSlotAndCharge({
+    companyId: task.company_id,
+    taskId: task.id,
+    amount: task.estimated_credits,
+    description: `Task: ${task.title}`,
+  });
 
-  if (!hasCredit) {
-    await taskService.updateTask(taskId, { status: 'blocked' });
-    await eventService.emit(task.company_id, 'task_failed', {
-      task_id: taskId,
-      title: task.title,
-      reason: 'Insufficient credits',
-    });
-    throw new Error(`Insufficient credits for task "${task.title}"`);
+  if (!claimResult.success) {
+    const reasonMap: Record<string, string> = {
+      slot_occupied: 'Company already has an active execution. Night shift and manual share one slot.',
+      insufficient_credits: `Insufficient credits for task "${task.title}"`,
+      daily_cap: 'Daily spend cap reached',
+      task_not_todo: `Task ${taskId} is not in todo status or already claimed`,
+    };
+    const reason = claimResult.reason ?? 'task_not_todo';
+
+    if (reason === 'insufficient_credits' || reason === 'daily_cap') {
+      await eventService.emit(task.company_id, 'task_failed', {
+        task_id: taskId,
+        title: task.title,
+        reason: reasonMap[reason],
+      });
+    }
+    throw new Error(reasonMap[reason] ?? `Claim failed: ${reason}`);
   }
 
-  // 3. Start task
-  const startedTask = await taskService.startTask(taskId);
-  await taskService.updateTask(taskId, { assigned_to_agent_id: agentId });
+  // Task is now in_progress and credit is deducted — assign agent
+  const startedTask = await taskService.updateTask(taskId, { assigned_to_agent_id: agentId });
 
   await eventService.emit(task.company_id, 'task_started', {
     task_id: taskId,
@@ -123,8 +147,12 @@ export async function launchTask(taskId: string): Promise<TaskExecution> {
     agent_id: agentId,
   });
 
-  // 4. Create watchdog
+  // 4. Create watchdog with active monitoring
   const watchdog = new Watchdog(taskId, task.max_turns, task.company_id);
+  const abortController = new AbortController();
+  watchdog.startActiveMonitor(() => {
+    abortController.abort();
+  });
 
   const executionStartTime = Date.now();
 
@@ -160,67 +188,113 @@ export async function launchTask(taskId: string): Promise<TaskExecution> {
     started_at: new Date(execution.started_at!),
   });
 
+  // Phase 2: Build typed context objects (SPEC-CTRL-105)
+  // These provide structured execution context and permission boundaries.
+  // Non-blocking: if context assembly fails, we still proceed with execution.
+  let contextPacket: Awaited<ReturnType<typeof buildContextPacket>> | undefined;
+  let permissionSnapshot: ReturnType<typeof buildPermissionSnapshot> | undefined;
+  try {
+    contextPacket = await buildContextPacket(task.company_id, {
+      id: task.id,
+      title: task.title,
+      tag: task.tag,
+      description: task.description,
+    });
+    permissionSnapshot = buildPermissionSnapshot(task, agentId);
+    log.info('Context assembled', {
+      taskId,
+      memoryLayers: Object.keys(contextPacket.memory_layers).length,
+      priorReports: contextPacket.prior_reports.length,
+      failureFingerprints: contextPacket.failure_fingerprints.length,
+      riskCeiling: permissionSnapshot.risk_ceiling,
+      maxTurns: permissionSnapshot.max_turns,
+    });
+  } catch (ctxError) {
+    log.warn('Context assembly failed, proceeding without', { taskId, error: ctxError instanceof Error ? ctxError.message : 'Unknown' });
+  }
+
   try {
     // G-EXEC-001: Execute with timeout
+    // Phase 2: 3-way dispatch based on execution_mode (SPEC-CTRL-101)
+    //   deterministic → Haiku, ≤10 turns (CSS, SEO, config, deploy)
+    //   template_plus_params → Haiku, ≤30 turns (landing pages, auth, CRUD)
+    //   full_agent → Sonnet, full turn budget (bugs, features, research)
+    const executorByMode: Record<string, (input: AgentInput) => Promise<AgentResult>> = {
+      deterministic: executeDeterministic,
+      template_plus_params: executeTemplate,
+      full_agent: executeAgent,
+    };
+    const executionMode = task.execution_mode ?? 'full_agent';
+    const executor = executorByMode[executionMode] ?? executeAgent;
+
+    log.info('Dispatching task', { taskId, executionMode, agent: agentName });
+
     const result = await Promise.race([
-      executeAgent({
+      executor({
         task: startedTask,
         agentId,
         agentName,
         watchdog,
         execution,
+        contextPacket,
+        permissionSnapshot,
       }),
-      new Promise<never>((_, reject) =>
-        setTimeout(
+      // Timeout via setTimeout OR via watchdog active monitor (abort signal)
+      new Promise<never>((_, reject) => {
+        const timer = setTimeout(
           () => reject(new Error(`Task execution timed out after ${MAX_EXECUTION_MS / 1000}s`)),
           MAX_EXECUTION_MS
-        )
-      ),
+        );
+        // Listen for watchdog abort (stuck/idle detection)
+        abortController.signal.addEventListener('abort', () => {
+          clearTimeout(timer);
+          reject(new Error('Task killed by watchdog: idle or stuck detected'));
+        });
+      }),
     ]);
 
-    // 6. Complete task
+    // 6. Transition to verifying — worker is NOT the final authority (SPEC-CTRL-106)
     const wallClockSeconds = Math.round((Date.now() - executionStartTime) / 1000);
-    execution.status = 'completed';
-    execution.completed_at = new Date().toISOString();
     execution.turn_count = result.turnCount;
     execution.execution_log = result.log;
     execution.wall_clock_seconds = wallClockSeconds;
 
-    await taskService.completeTask(taskId, false);
+    await taskService.completeTask(taskId); // transitions to 'verifying'
     await taskService.updateTask(taskId, {
       turn_count: result.turnCount,
       actual_credits_charged: task.estimated_credits,
     });
 
-    await eventService.emit(task.company_id, 'task_completed', {
-      task_id: taskId,
-      title: task.title,
-      agent: agentName,
-      turns: result.turnCount,
-    });
+    // 7. Verification is MANDATORY — verifier is the sole authority for final status
+    const verification = await verifyAndUpdate(taskId);
+    execution.verification_evidence = verification as unknown as Record<string, unknown>;
+    execution.status = verification.passed ? 'completed' : 'failed';
+    execution.completed_at = new Date().toISOString();
+    log.info('Task verification', { taskId, passed: verification.passed, level: verification.level });
 
-    // 7. Run verification
-    try {
-      const verification = await verifyAndUpdate(taskId);
-      execution.verification_evidence = verification as unknown as Record<string, unknown>;
-      log.info('Task verification', { taskId, passed: verification.passed, level: verification.level });
-    } catch (verifyError) {
-      log.error('Verification failed', { taskId, title: task.title }, verifyError);
+    // Event emission handled by verifyAndUpdate (sole authority for task_completed/task_failed events)
+
+    // 8. Self-healing auto-resolve: if this task succeeded, mark linked failure fingerprints as fixed
+    if (verification.passed) {
+      try {
+        const resolved = await checkAutoResolve(taskId);
+        if (resolved > 0) log.info('Auto-resolved failure fingerprints', { taskId, resolved });
+      } catch { /* non-blocking */ }
     }
 
-    // 8. Extract learnings
+    // 9. Extract learnings (non-blocking)
     try {
       const learned = await processTaskLearnings(taskId);
       if (learned > 0) log.info('Extracted learnings', { taskId, title: task.title, learned });
     } catch { /* non-blocking */ }
 
-    // 9. Check stage progression
+    // 10. Check stage progression (non-blocking)
     try {
       const newStage = await checkAndUpgrade(task.company_id);
       log.info('Company stage updated', { companyId: task.company_id, stage: newStage });
     } catch { /* non-blocking */ }
 
-    log.info('Task completed', { taskId, title: task.title, turns: result.turnCount, wallClockSeconds });
+    log.info('Task completed', { taskId, title: task.title, turns: result.turnCount, wallClockSeconds, verified: verification.passed });
 
   } catch (error) {
     // Task failed
@@ -234,7 +308,7 @@ export async function launchTask(taskId: string): Promise<TaskExecution> {
     // H-AGENT-011: FIX — classify failure based on watchdog state
     // Was: always 'worker_failure' regardless of watchdog state (copy-paste bug)
     const failureClass = watchdog.wasKilled()
-      ? 'worker_failure' as const      // Agent was killed by watchdog
+      ? 'timeout' as const             // Agent was killed by watchdog (turn/time limit)
       : determineFailureClass(execution.error_summary);
 
     // Check if timed out
@@ -260,8 +334,26 @@ export async function launchTask(taskId: string): Promise<TaskExecution> {
       } catch { /* non-blocking */ }
     }
 
+    // C-CREDIT-004: Auto-refund for eligible failed tasks
+    if (task.refund_policy === 'auto_eligible' && task.estimated_credits > 0) {
+      try {
+        const refunded = await creditService.refundCredit(
+          task.company_id,
+          taskId,
+          task.estimated_credits,
+          `Auto-refund: task "${task.title}" failed (${failureClass})`
+        );
+        if (refunded) {
+          log.info('Auto-refund processed', { taskId, credits: task.estimated_credits });
+        }
+      } catch { /* non-blocking — don't fail the failure handler */ }
+    }
+
     log.error('Task failed', { taskId, title: task.title, failureClass, error: execution.error_summary });
   }
+
+  // Clean up watchdog monitor
+  watchdog.stopMonitor();
 
   // C-TASK-001: Persist final execution state to DB
   try {
@@ -289,33 +381,43 @@ export async function launchTask(taskId: string): Promise<TaskExecution> {
 // FAILURE CLASSIFICATION (H-AGENT-011)
 // ══════════════════════════════════════════════
 
-function determineFailureClass(errorMessage: string): 'founder_ambiguity' | 'missing_prerequisite' | 'platform_scoping' | 'worker_failure' | 'external_dependency' {
+// Canonical 8-class taxonomy (SPEC-CTRL-106)
+function determineFailureClass(errorMessage: string): import('@/types').FailureClass {
   const msg = errorMessage.toLowerCase();
 
-  if (msg.includes('timed out') || msg.includes('timeout')) return 'worker_failure';
-  if (msg.includes('credential') || msg.includes('api key') || msg.includes('auth')) return 'missing_prerequisite';
-  if (msg.includes('network') || msg.includes('fetch') || msg.includes('econnrefused')) return 'external_dependency';
-  if (msg.includes('too large') || msg.includes('scope') || msg.includes('split')) return 'platform_scoping';
-  if (msg.includes('unclear') || msg.includes('ambiguous') || msg.includes('specify')) return 'founder_ambiguity';
+  if (msg.includes('timed out') || msg.includes('timeout') || msg.includes('idle') || msg.includes('stall')) return 'timeout';
+  if (msg.includes('credential') || msg.includes('oauth') || msg.includes('api key') || msg.includes('token expired') || msg.includes('auth')) return 'connector_failure';
+  if (msg.includes('network') || msg.includes('fetch') || msg.includes('econnrefused') || msg.includes('503') || msg.includes('502')) return 'external_block';
+  if (msg.includes('too large') || msg.includes('scope') || msg.includes('split') || msg.includes('decompos')) return 'scope_overflow';
+  if (msg.includes('tool') || msg.includes('rpc') || msg.includes('not supported') || msg.includes('capability')) return 'capability_miss';
+  if (msg.includes('policy') || msg.includes('content safety') || msg.includes('guardrail') || msg.includes('blocked')) return 'policy_violation';
+  if (msg.includes('verification') || msg.includes('verifier') || msg.includes('quality check')) return 'verification_reject';
 
-  return 'worker_failure';
+  return 'infra_error';
 }
 
 // ══════════════════════════════════════════════
 // QUEUE PROCESSOR — processes todo tasks for a company
-// Sequential: one at a time per Domain 5.4
+// H-AGENT-022: Burst concurrency — up to MAX_CONCURRENT parallel per company
+// Safety: atomic startTask (WHERE status='todo') prevents double-launch
 // ══════════════════════════════════════════════
 
+// SPEC-CTRL-001: One active execution slot per company.
+// Night shift and manual execution share the slot — no parallel runs.
+const MAX_CONCURRENT = 1;
+
 export async function processQueue(companyId: string): Promise<number> {
-  const tasks = await taskService.getTasks(companyId);
-  const todoTasks = tasks
+  const allTasks = await taskService.getTasks(companyId);
+  const todoTasks = allTasks
     .filter((t) => t.status === 'todo')
     .sort((a, b) => (a.queue_order ?? 999) - (b.queue_order ?? 999));
 
-  // C-TASK-005: Check if anything is already running
-  const running = tasks.find((t) => t.status === 'in_progress');
-  if (running) {
-    log.info('Company has running task, skipping queue', { companyId, runningTask: running.title });
+  // Count currently running tasks
+  const runningCount = allTasks.filter((t) => t.status === 'in_progress').length;
+  const availableSlots = MAX_CONCURRENT - runningCount;
+
+  if (availableSlots <= 0) {
+    log.info('Company at max concurrency, skipping queue', { companyId, runningCount, maxConcurrent: MAX_CONCURRENT });
     return 0;
   }
 
@@ -323,16 +425,24 @@ export async function processQueue(companyId: string): Promise<number> {
     return 0;
   }
 
-  const nextTask = todoTasks[0];
-  log.info('Processing next task in queue', { companyId, title: nextTask.title });
+  // Launch up to availableSlots tasks
+  const toLaunch = todoTasks.slice(0, availableSlots);
+  let launched = 0;
 
-  try {
-    await launchTask(nextTask.id);
-    return 1;
-  } catch (error) {
-    log.error('Queue processing failed', { companyId, title: nextTask.title }, error);
-    return 0;
+  for (const task of toLaunch) {
+    log.info('Processing next task in queue', { companyId, title: task.title, slot: `${runningCount + launched + 1}/${MAX_CONCURRENT}` });
+
+    try {
+      // launchTask uses atomic startTask (WHERE status='todo') — safe against races
+      await launchTask(task.id);
+      launched++;
+    } catch (error) {
+      log.error('Queue processing failed for task', { companyId, title: task.title }, error);
+      // Continue to next task — one failure shouldn't block the batch
+    }
   }
+
+  return launched;
 }
 
 export { launchTask as launch, processQueue as process };

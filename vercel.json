@@ -1,0 +1,17 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "crons": [
+    {
+      "path": "/api/cron/trial-expiry?key=${CRON_KEY}",
+      "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/cron/night-shift",
+      "schedule": "0 2 * * *"
+    },
+    {
+      "path": "/api/cron/recurring",
+      "schedule": "0 * * * *"
+    }
+  ]
+}

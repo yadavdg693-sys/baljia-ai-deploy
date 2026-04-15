@@ -20,6 +20,9 @@ import { EmailPreview } from './EmailPreview';
 import { AdsPreview } from './AdsPreview';
 import { LinksSection } from './LinksSection';
 import { UpgradeDialog } from './UpgradeDialog';
+import { RoadmapRail } from './RoadmapRail';
+import { OnboardingProgress } from './OnboardingProgress';
+import { DocumentSuggestionPanel } from './DocumentSuggestionPanel';
 
 interface DocumentSuggestion {
   id: string;
@@ -58,34 +61,18 @@ export function DashboardShell({
   const [tasks, setTasks] = useState(initialTasks);
   const [suggestions, setSuggestions] = useState(pendingSuggestions);
 
-  // Optimistic update for task approval
-  const handleApprove = useCallback(async (taskId: string) => {
-    // Optimistic: move to todo
+  // State-only callbacks — TaskDetailDialog owns the API mutation.
+  // These just sync local state after the dialog confirms success.
+  const handleApprove = useCallback((taskId: string) => {
     setTasks((prev) =>
       prev.map((t) => (t.id === taskId ? { ...t, status: 'todo' as const } : t))
     );
-    try {
-      await fetch(`/api/tasks/${taskId}/approve`, { method: 'POST' });
-    } catch {
-      // Revert on failure
-      setTasks((prev) =>
-        prev.map((t) => (t.id === taskId ? { ...t, status: 'created' as const } : t))
-      );
-    }
   }, []);
 
-  // Optimistic update for task rejection
-  const handleReject = useCallback(async (taskId: string) => {
+  const handleReject = useCallback((taskId: string) => {
     setTasks((prev) =>
       prev.map((t) => (t.id === taskId ? { ...t, status: 'rejected' as const } : t))
     );
-    try {
-      await fetch(`/api/tasks/${taskId}/reject`, { method: 'POST' });
-    } catch {
-      setTasks((prev) =>
-        prev.map((t) => (t.id === taskId ? { ...t, status: 'created' as const } : t))
-      );
-    }
   }, []);
 
   // Handle document suggestion actions
@@ -174,6 +161,17 @@ export function DashboardShell({
             <p className="text-sm font-medium capitalize">{company.company_stage}</p>
             <p className="text-xs text-text-muted mt-1 capitalize">{company.lifecycle.replace(/_/g, ' ')}</p>
           </div>
+
+          {/* Onboarding progress — visible while onboarding is still running */}
+          {(company.onboarding_status === 'initializing' || company.onboarding_status === 'running') && (
+            <OnboardingProgress
+              companyId={company.id}
+              status={company.onboarding_status}
+            />
+          )}
+
+          {/* Roadmap */}
+          <RoadmapRail companyId={company.id} />
         </aside>
 
         {/* ── Center Column: Tasks + Documents + Ledger ── */}
@@ -199,41 +197,10 @@ export function DashboardShell({
             />
           </section>
 
-          {/* C5: Document Suggestion Banner */}
-          {suggestions.length > 0 && (
-            <section>
-              <h2 className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-3">AI Suggestions</h2>
-              <div className="space-y-3">
-                {suggestions.map((s) => (
-                  <div key={s.id} className="rounded-xl bg-baljia-gold/10 border border-baljia-gold/30 p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-baljia-gold">📝 Document Update Suggested</p>
-                        {s.reason && <p className="text-xs text-text-muted mt-1 line-clamp-2">{s.reason}</p>}
-                        <p className="text-xs text-text-muted mt-2 line-clamp-3 bg-surface-secondary rounded p-2 font-mono">
-                          {s.suggested_content.slice(0, 200)}{s.suggested_content.length > 200 ? '…' : ''}
-                        </p>
-                      </div>
-                      <div className="flex flex-col gap-1.5 shrink-0">
-                        <button
-                          onClick={() => handleSuggestionAction(s.id, 'accept')}
-                          className="px-3 py-1.5 text-xs font-medium rounded-lg bg-baljia-gold text-surface-primary hover:bg-baljia-gold-light transition-colors"
-                        >
-                          Accept
-                        </button>
-                        <button
-                          onClick={() => handleSuggestionAction(s.id, 'skip')}
-                          className="px-3 py-1.5 text-xs font-medium rounded-lg border border-border-default text-text-muted hover:text-text-primary transition-colors"
-                        >
-                          Skip
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
+          {/* Document Suggestion Review — Accept / Edit / Skip */}
+          <section>
+            <DocumentSuggestionPanel companyId={company.id} />
+          </section>
 
           {/* Documents */}
           <section>

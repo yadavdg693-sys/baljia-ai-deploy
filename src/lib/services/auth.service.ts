@@ -10,6 +10,11 @@ import crypto from 'crypto';
 const log = createLogger('Auth');
 const MAGIC_LINK_EXPIRY_MINUTES = 15;
 
+/** Hash a token with SHA-256 for secure storage. Raw token stays only in the email URL. */
+function hashToken(token: string): string {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
+
 // ── Magic Link ───────────────────────────────────
 
 export async function createMagicLink(email: string): Promise<{ success: boolean }> {
@@ -33,13 +38,14 @@ export async function createMagicLink(email: string): Promise<{ success: boolean
     userId = newUser.id;
   }
 
-  // Generate secure token
+  // Generate secure token — store hash in DB, raw token only in email URL
   const token = crypto.randomBytes(32).toString('base64url');
+  const tokenHash = hashToken(token);
   const expiresAt = new Date(Date.now() + MAGIC_LINK_EXPIRY_MINUTES * 60 * 1000);
 
   await db.insert(magicLinkTokens).values({
     user_id: userId,
-    token,
+    token: tokenHash,
     expires_at: expiresAt,
   });
 
@@ -62,6 +68,9 @@ export async function createMagicLink(email: string): Promise<{ success: boolean
 }
 
 export async function verifyMagicLink(token: string): Promise<{ userId: string; email: string } | null> {
+  // Hash the raw token to match against stored hash
+  const tokenHash = hashToken(token);
+
   const [record] = await db
     .select({
       id: magicLinkTokens.id,
@@ -71,7 +80,7 @@ export async function verifyMagicLink(token: string): Promise<{ userId: string; 
     .from(magicLinkTokens)
     .where(
       and(
-        eq(magicLinkTokens.token, token),
+        eq(magicLinkTokens.token, tokenHash),
         isNull(magicLinkTokens.used_at),
         gt(magicLinkTokens.expires_at, new Date()),
       ),

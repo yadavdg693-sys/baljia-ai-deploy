@@ -1,0 +1,1 @@
+CREATE INDEX "idx_events_type" ON "platform_events" USING btree ("event_type");

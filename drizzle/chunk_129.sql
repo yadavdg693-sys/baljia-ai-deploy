@@ -1,0 +1,1 @@
+CREATE INDEX "idx_roadmaps_status" ON "roadmaps" USING btree ("status");

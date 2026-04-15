@@ -1,0 +1,1 @@
+ALTER TABLE "learnings" ADD CONSTRAINT "learnings_task_id_tasks_id_fk" FOREIGN KEY ("task_id") REFERENCES "public"."tasks"("id") ON DELETE no action ON UPDATE no action;

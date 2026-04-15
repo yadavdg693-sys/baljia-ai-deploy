@@ -1,26 +1,177 @@
 // Credit Service — migrated to Drizzle + Neon
-import { db, creditLedger, platformEvents } from '@/lib/db';
+import { db, creditLedger, platformEvents, subscriptions, tasks as tasksTable } from '@/lib/db';
 import { eq, and, gte, desc, sql } from 'drizzle-orm';
 import { createLogger } from '@/lib/logger';
-import type { LedgerEntryType } from '@/types';
+import type { LedgerEntryType, PlanTier } from '@/types';
 
 const log = createLogger('Credit');
 
-// G-FIN-001: Daily spend cap (configurable per plan)
-const DAILY_SPEND_CAP = 20;
+// G-FIN-001: Per-plan daily spend caps (replaces hardcoded 20)
+const PLAN_SPEND_CAPS: Record<PlanTier, number> = {
+  trial: 10,
+  starter: 30,
+  growth: 75,
+  scale: 200,
+};
+const DEFAULT_SPEND_CAP = 20; // Fallback if plan tier unavailable
 const LOW_BALANCE_THRESHOLD = 5;
 
-export async function getBalance(companyId: string): Promise<number> {
-  const result = await db.select({ total: sql<number>`coalesce(sum(amount), 0)` })
-    .from(creditLedger)
-    .where(eq(creditLedger.company_id, companyId));
-
-  return result[0]?.total ?? 0;
+/**
+ * Look up a company's plan tier from its subscription.
+ * Returns 'trial' if no active subscription found.
+ */
+async function getCompanyPlanTier(companyId: string): Promise<PlanTier> {
+  try {
+    const [sub] = await db.select({ plan_type: subscriptions.plan_type })
+      .from(subscriptions)
+      .where(and(eq(subscriptions.company_id, companyId), eq(subscriptions.status, 'active')))
+      .limit(1);
+    return (sub?.plan_type as PlanTier) ?? 'trial';
+  } catch {
+    return 'trial';
+  }
 }
 
 /**
- * Deduct credits with daily spend cap enforcement.
- * Uses application-level check (atomic PG function can be added later).
+ * Get credit balance scoped to current billing period.
+ * Credits don't roll over between billing periods (spec invariant).
+ */
+export async function getBalance(companyId: string): Promise<number> {
+  const result = await db.execute(sql`
+    SELECT COALESCE(SUM(cl.amount), 0)::int AS total
+    FROM credit_ledger cl
+    LEFT JOIN subscriptions s
+      ON s.company_id = cl.company_id AND s.status = 'active'
+    WHERE cl.company_id = ${companyId}
+      AND (s.id IS NULL OR s.current_period_start IS NULL
+           OR cl.created_at >= s.current_period_start)
+  `);
+
+  const rows = result.rows ?? [];
+  return (rows[0] as { total: number })?.total ?? 0;
+}
+
+/**
+ * Atomic claim-and-charge: checks company slot, claims task, checks daily cap,
+ * and deducts credit — all in a single SQL statement. No partial failure windows.
+ *
+ * This replaces the previous separate calls to:
+ * - worker-launcher slot check (SELECT for in_progress tasks)
+ * - taskService.startTask()
+ * - creditService.deductCredit()
+ */
+export async function claimSlotAndCharge(params: {
+  companyId: string;
+  taskId: string;
+  amount: number;
+  description: string;
+}): Promise<{ success: boolean; reason?: 'slot_occupied' | 'insufficient_credits' | 'daily_cap' | 'task_not_todo' }> {
+  const { companyId, taskId, amount, description } = params;
+  if (amount <= 0) throw new Error('Charge amount must be positive');
+
+  const planTier = await getCompanyPlanTier(companyId);
+  const dailyCap = PLAN_SPEND_CAPS[planTier] ?? DEFAULT_SPEND_CAP;
+  const today = new Date().toISOString().split('T')[0];
+  const idempotencyKey = `deduct:${taskId}:${today}`;
+
+  // Single CTE chain: slot check → claim → cap check → balance check → deduct
+  const result = await db.execute(sql`
+    WITH slot_check AS (
+      SELECT id FROM tasks
+      WHERE company_id = ${companyId} AND status = 'in_progress'
+      LIMIT 1
+    ),
+    claim AS (
+      UPDATE tasks SET
+        status = 'in_progress',
+        started_at = NOW(),
+        updated_at = NOW()
+      WHERE id = ${taskId}
+        AND status = 'todo'
+        AND NOT EXISTS (SELECT 1 FROM slot_check)
+      RETURNING id, company_id
+    ),
+    cap_check AS (
+      SELECT COALESCE(SUM(ABS(amount)), 0)::int AS spent_today
+      FROM credit_ledger
+      WHERE company_id = ${companyId}
+        AND entry_type = 'task_deduction'
+        AND created_at >= ${`${today}T00:00:00Z`}::timestamptz
+    ),
+    balance_check AS (
+      SELECT COALESCE(SUM(cl.amount), 0)::int AS balance
+      FROM credit_ledger cl
+      LEFT JOIN subscriptions s
+        ON s.company_id = cl.company_id AND s.status = 'active'
+      WHERE cl.company_id = ${companyId}
+        AND (s.id IS NULL OR s.current_period_start IS NULL
+             OR cl.created_at >= s.current_period_start)
+    ),
+    deduct AS (
+      INSERT INTO credit_ledger (id, company_id, entry_type, amount, balance_after, task_id, description, idempotency_key, created_at)
+      SELECT
+        gen_random_uuid(),
+        ${companyId},
+        'task_deduction',
+        ${-amount},
+        balance_check.balance - ${amount},
+        ${taskId},
+        ${description},
+        ${idempotencyKey},
+        NOW()
+      FROM claim, cap_check, balance_check
+      WHERE claim.id IS NOT NULL
+        AND balance_check.balance >= ${amount}
+        AND cap_check.spent_today + ${amount} <= ${dailyCap}
+      RETURNING balance_after
+    )
+    SELECT
+      (SELECT COUNT(*) FROM slot_check)::int AS slot_busy,
+      (SELECT COUNT(*) FROM claim)::int AS claimed,
+      (SELECT spent_today FROM cap_check) AS spent_today,
+      (SELECT balance FROM balance_check) AS balance,
+      (SELECT COUNT(*) FROM deduct)::int AS deducted,
+      (SELECT balance_after FROM deduct) AS balance_after
+  `);
+
+  const rows = result.rows ?? [];
+  const row = rows[0] as {
+    slot_busy: number; claimed: number; spent_today: number;
+    balance: number; deducted: number; balance_after: number | null;
+  };
+
+  if (!row) return { success: false, reason: 'task_not_todo' };
+
+  // Determine failure reason from the CTE results
+  if (row.slot_busy > 0) {
+    return { success: false, reason: 'slot_occupied' };
+  }
+  if (row.claimed === 0) {
+    return { success: false, reason: 'task_not_todo' };
+  }
+  if (row.deducted === 0) {
+    // Claimed but couldn't deduct — need to revert the claim
+    await db.execute(sql`
+      UPDATE tasks SET status = 'todo', started_at = NULL, updated_at = NOW()
+      WHERE id = ${taskId} AND status = 'in_progress'
+    `);
+    if (row.balance < amount) {
+      return { success: false, reason: 'insufficient_credits' };
+    }
+    return { success: false, reason: 'daily_cap' };
+  }
+
+  // Success — emit low balance warning if needed
+  if (row.balance_after !== null && row.balance_after <= LOW_BALANCE_THRESHOLD) {
+    await emitLowBalanceWarning(companyId, row.balance_after);
+  }
+
+  return { success: true };
+}
+
+/**
+ * Deduct credits with per-plan daily spend cap enforcement.
+ * Atomic: daily cap check + balance check + insert are in a single CTE.
  */
 export async function deductCredit(
   companyId: string,
@@ -30,47 +181,48 @@ export async function deductCredit(
 ): Promise<boolean> {
   if (amount <= 0) throw new Error('Deduction amount must be positive');
 
-  // G-FIN-001: Check daily spend cap
+  const planTier = await getCompanyPlanTier(companyId);
+  const dailyCap = PLAN_SPEND_CAPS[planTier] ?? DEFAULT_SPEND_CAP;
   const today = new Date().toISOString().split('T')[0];
-  const dailySpend = await db.select({ amount: creditLedger.amount })
-    .from(creditLedger)
-    .where(and(
-      eq(creditLedger.company_id, companyId),
-      eq(creditLedger.entry_type, 'task_deduction'),
-      gte(creditLedger.created_at, new Date(`${today}T00:00:00Z`))
-    ));
+  const idempotencyKey = `deduct:${taskId}:${today}`;
 
-  const spentToday = dailySpend.reduce((sum, e) => sum + Math.abs(e.amount), 0);
-
-  if (spentToday + amount > DAILY_SPEND_CAP) {
-    log.warn('Daily spend cap reached', { companyId, spentToday, cap: DAILY_SPEND_CAP });
-    return false;
-  }
-
-  // Atomic deduction: compute balance and insert in a single statement
-  // Uses a CTE to get the current balance and only insert if sufficient
+  // Atomic: balance check + daily cap check + deduction in single CTE
   const result = await db.execute(sql`
-    WITH current AS (
-      SELECT COALESCE(SUM(amount), 0)::int AS balance
-      FROM credit_ledger WHERE company_id = ${companyId}
+    WITH balance_check AS (
+      SELECT COALESCE(SUM(cl.amount), 0)::int AS balance
+      FROM credit_ledger cl
+      LEFT JOIN subscriptions s
+        ON s.company_id = cl.company_id AND s.status = 'active'
+      WHERE cl.company_id = ${companyId}
+        AND (s.id IS NULL OR s.current_period_start IS NULL
+             OR cl.created_at >= s.current_period_start)
+    ),
+    cap_check AS (
+      SELECT COALESCE(SUM(ABS(amount)), 0)::int AS spent_today
+      FROM credit_ledger
+      WHERE company_id = ${companyId}
+        AND entry_type = 'task_deduction'
+        AND created_at >= ${`${today}T00:00:00Z`}::timestamptz
     )
-    INSERT INTO credit_ledger (id, company_id, entry_type, amount, balance_after, task_id, description, created_at)
+    INSERT INTO credit_ledger (id, company_id, entry_type, amount, balance_after, task_id, description, idempotency_key, created_at)
     SELECT
       gen_random_uuid(),
       ${companyId},
       'task_deduction',
       ${-amount},
-      current.balance - ${amount},
+      balance_check.balance - ${amount},
       ${taskId},
       ${description},
+      ${idempotencyKey},
       NOW()
-    FROM current
-    WHERE current.balance >= ${amount}
+    FROM balance_check, cap_check
+    WHERE balance_check.balance >= ${amount}
+      AND cap_check.spent_today + ${amount} <= ${dailyCap}
     RETURNING balance_after
   `);
 
   const rows = result.rows ?? [];
-  if (rows.length === 0) return false; // insufficient balance
+  if (rows.length === 0) return false;
 
   const balanceAfter = (rows[0] as { balance_after: number }).balance_after;
 
@@ -83,30 +235,41 @@ export async function deductCredit(
 }
 
 /**
- * Add credits. Validates amount > 0.
+ * Add credits with optional idempotency key to prevent duplicate grants.
+ * Validates amount > 0.
  */
 export async function addCredit(
   companyId: string,
   amount: number,
   entryType: LedgerEntryType,
   description: string,
-  taskId?: string
+  taskId?: string,
+  idempotencyKey?: string
 ): Promise<void> {
   if (amount <= 0) {
     throw new Error(`addCredit amount must be positive, got ${amount}. Use deductCredit for deductions.`);
   }
 
-  const currentBalance = await getBalance(companyId);
-  const balanceAfter = currentBalance + amount;
-
-  await writeLedgerEntry({
-    company_id: companyId,
-    amount,
-    balance_after: balanceAfter,
-    entry_type: entryType,
-    description,
-    task_id: taskId,
-  });
+  await db.execute(sql`
+    WITH current AS (
+      SELECT COALESCE(SUM(amount), 0)::int AS balance
+      FROM credit_ledger WHERE company_id = ${companyId}
+    )
+    INSERT INTO credit_ledger (id, company_id, entry_type, amount, balance_after, task_id, description, idempotency_key, created_at)
+    SELECT
+      gen_random_uuid(),
+      ${companyId},
+      ${entryType},
+      ${amount},
+      current.balance + ${amount},
+      ${taskId ?? null},
+      ${description},
+      ${idempotencyKey ?? null},
+      NOW()
+    FROM current
+    ON CONFLICT (idempotency_key) DO NOTHING
+    RETURNING balance_after
+  `);
 }
 
 export async function getLedger(companyId: string, limit = 20) {
@@ -154,4 +317,64 @@ async function writeLedgerEntry(entry: LedgerInput): Promise<void> {
     description: entry.description,
     task_id: entry.task_id ?? null,
   });
+}
+
+/**
+ * C-CREDIT-004: Refund credits for a failed task.
+ * Only processes refunds for tasks with 'auto_eligible' refund policy.
+ * Creates a positive 'refund' ledger entry.
+ */
+export async function refundCredit(
+  companyId: string,
+  taskId: string,
+  amount: number,
+  reason: string
+): Promise<boolean> {
+  if (amount <= 0) return false;
+
+  // Atomic check-and-insert for refunds
+  const result = await db.execute(sql`
+    WITH current AS (
+      SELECT COALESCE(SUM(amount), 0)::int AS balance
+      FROM credit_ledger WHERE company_id = ${companyId}
+    ),
+    existing_refund AS (
+      SELECT id FROM credit_ledger 
+      WHERE company_id = ${companyId} AND task_id = ${taskId} AND entry_type = 'refund'
+      LIMIT 1
+    )
+    INSERT INTO credit_ledger (id, company_id, entry_type, amount, balance_after, task_id, description, created_at)
+    SELECT
+      gen_random_uuid(),
+      ${companyId},
+      'refund',
+      ${amount},
+      current.balance + ${amount},
+      ${taskId},
+      ${`Refund: ${reason}`},
+      NOW()
+    FROM current
+    WHERE NOT EXISTS (SELECT 1 FROM existing_refund)
+    RETURNING balance_after
+  `);
+
+  const rows = result.rows ?? [];
+  if (rows.length === 0) {
+    log.warn('Refund skipped (already refunded or error)', { companyId, taskId });
+    return false;
+  }
+
+  const balanceAfter = (rows[0] as { balance_after: number }).balance_after;
+
+
+  log.info('Credit refunded', { companyId, taskId, amount, balanceAfter });
+
+  await db.insert(platformEvents).values({
+    company_id: companyId,
+    event_type: 'credit_refunded',
+    payload: { task_id: taskId, amount, reason, balance_after: balanceAfter },
+    is_public_safe: false,
+  });
+
+  return true;
 }

@@ -1,6 +1,6 @@
 import { notFound } from 'next/navigation';
 import { db, companies, tasks, reports, platformEvents } from '@/lib/db';
-import { eq, and, inArray, desc, sql } from 'drizzle-orm';
+import { eq, and, desc, sql } from 'drizzle-orm';
 import { CompanyPublicPage } from '@/components/live/CompanyPublicPage';
 import type { Metadata } from 'next';
 
@@ -34,7 +34,7 @@ export default async function PublicCompanyPage({ params }: Props) {
   // Get public stats
   const [[taskCount], [reportCount], recentActivityRows] = await Promise.all([
     db.select({ count: sql<number>`count(*)::int` }).from(tasks)
-      .where(and(eq(tasks.company_id, company.id), inArray(tasks.status, ['completed_verified', 'completed_unverified']))),
+      .where(and(eq(tasks.company_id, company.id), eq(tasks.status, 'completed'))),
     db.select({ count: sql<number>`count(*)::int` }).from(reports)
       .where(eq(reports.company_id, company.id)),
     db.select({

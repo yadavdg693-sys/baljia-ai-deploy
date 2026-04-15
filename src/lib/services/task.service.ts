@@ -10,7 +10,7 @@ interface CreateTaskInput {
   tag: string;
   priority?: number;
   source?: TaskSource;
-  status?: 'created' | 'todo';
+  status?: 'todo';
   queue_order?: number;
   assigned_to_agent_id?: number;
   estimated_credits?: number;
@@ -20,47 +20,60 @@ interface CreateTaskInput {
   verification_level?: VerificationLevel;
   executability_type?: 'can_run_now' | 'needs_new_connection' | 'manual_task';
   related_task_ids?: string[];
+  authorized_by?: string;
+  authorization_reason?: string;
 }
 
 export type UpdateTaskFields = Partial<Pick<Task,
   'title' | 'description' | 'priority' | 'status' | 'queue_order' |
   'complexity' | 'execution_mode' | 'verification_level' | 'failure_class' |
   'started_at' | 'completed_at' | 'turn_count' | 'actual_credits_charged' |
-  'assigned_to_agent_id'
+  'assigned_to_agent_id' | 'authorized_by' | 'authorization_reason' |
+  'repair_attempt_count'
 >>;
 
 export async function createTask(input: CreateTaskInput): Promise<Task> {
-  // Get next queue order
-  const maxRow = await db.select({ queue_order: tasks.queue_order })
-    .from(tasks)
-    .where(eq(tasks.company_id, input.company_id))
-    .orderBy(desc(tasks.queue_order))
-    .limit(1);
+  // Atomic queue_order: compute next order inside the INSERT to prevent
+  // race conditions where two concurrent inserts read the same MAX.
+  const queueOrder = input.queue_order ?? null;
 
-  const nextOrder = ((maxRow[0]?.queue_order) ?? 0) + 1;
+  const result = await db.execute(sql`
+    INSERT INTO tasks (
+      id, company_id, title, description, tag, priority, source, status,
+      queue_order, assigned_to_agent_id, estimated_credits, actual_credits_charged,
+      max_turns, turn_count, executability_type, suggestion_reasoning,
+      execution_mode, verification_level, related_task_ids, created_at, updated_at
+    )
+    SELECT
+      gen_random_uuid(),
+      ${input.company_id},
+      ${input.title},
+      ${input.description ?? null},
+      ${input.tag},
+      ${input.priority ?? 50},
+      ${input.source ?? 'founder_requested'},
+      ${input.status ?? 'todo'},
+      COALESCE(${queueOrder}::int, COALESCE(
+        (SELECT MAX(queue_order) FROM tasks WHERE company_id = ${input.company_id}), 0
+      ) + 1),
+      ${input.assigned_to_agent_id ?? null}::int,
+      ${input.estimated_credits ?? 1},
+      0,
+      ${input.max_turns ?? 200},
+      0,
+      ${input.executability_type ?? 'can_run_now'},
+      ${input.suggestion_reasoning ?? null},
+      ${input.execution_mode ?? null},
+      ${input.verification_level ?? null},
+      ${JSON.stringify(input.related_task_ids ?? [])}::jsonb,
+      NOW(),
+      NOW()
+    RETURNING *
+  `);
 
-  const [task] = await db.insert(tasks).values({
-    company_id: input.company_id,
-    title: input.title,
-    description: input.description ?? null,
-    tag: input.tag,
-    priority: input.priority ?? 50,
-    source: input.source ?? 'founder_requested',
-    status: input.status ?? 'created',
-    queue_order: input.queue_order ?? nextOrder,
-    assigned_to_agent_id: input.assigned_to_agent_id ?? null,
-    estimated_credits: input.estimated_credits ?? 1,
-    actual_credits_charged: 0,
-    max_turns: input.max_turns ?? 200,
-    turn_count: 0,
-    executability_type: input.executability_type ?? 'can_run_now',
-    suggestion_reasoning: input.suggestion_reasoning ?? null,
-    execution_mode: input.execution_mode ?? null,
-    verification_level: input.verification_level ?? null,
-    related_task_ids: input.related_task_ids ?? [],
-  }).returning();
-
-  return task as unknown as Task;
+  const rows = result.rows ?? [];
+  if (rows.length === 0) throw new Error('Failed to create task');
+  return rows[0] as unknown as Task;
 }
 
 export async function getTasks(companyId: string): Promise<Task[]> {
@@ -103,6 +116,22 @@ export async function rejectTask(taskId: string): Promise<Task> {
 }
 
 /**
+ * Retry a failed/failed_permanent task by resetting it to todo.
+ * Only accepts tasks in terminal failure states.
+ */
+export async function retryTask(taskId: string): Promise<Task> {
+  const task = await getTask(taskId);
+  if (!task) throw new Error('Task not found');
+
+  const retryableStatuses = ['failed', 'failed_permanent'];
+  if (!retryableStatuses.includes(task.status)) {
+    throw new Error(`Cannot retry task in "${task.status}" status`);
+  }
+
+  return updateTask(taskId, { status: 'todo' });
+}
+
+/**
  * Atomically claim a task for execution.
  * Uses WHERE status='todo' to prevent double-launch race conditions.
  * Returns null if the task was already claimed by another process.
@@ -121,9 +150,23 @@ export async function startTask(taskId: string): Promise<Task> {
   return task as unknown as Task;
 }
 
-export async function completeTask(taskId: string, verified: boolean): Promise<Task> {
+/**
+ * Transition task to 'verifying' after worker execution completes.
+ * The verifier (verification.service.ts) is the sole authority for
+ * setting the final status to 'completed' or 'failed'.
+ */
+export async function completeTask(taskId: string): Promise<Task> {
+  return updateTask(taskId, { status: 'verifying' });
+}
+
+/**
+ * Called ONLY by the verification service to set final task status.
+ * This is the sole authority for marking a task as completed or failed
+ * after verification (SPEC-CTRL-106: worker is NOT the final authority).
+ */
+export async function finalizeTask(taskId: string, passed: boolean): Promise<Task> {
   return updateTask(taskId, {
-    status: verified ? 'completed_verified' : 'completed_unverified',
+    status: passed ? 'completed' : 'failed',
     completed_at: new Date().toISOString(),
   });
 }

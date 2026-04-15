@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "idx_roadmaps_company" ON "roadmaps" USING btree ("company_id");

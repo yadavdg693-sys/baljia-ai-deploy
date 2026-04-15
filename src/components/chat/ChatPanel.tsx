@@ -14,7 +14,30 @@ export function ChatPanel({ companyId }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessageType[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingText, setStreamingText] = useState('');
+  const [historyLoaded, setHistoryLoaded] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Hydrate chat history from backend on mount
+  useEffect(() => {
+    let cancelled = false;
+    async function loadHistory() {
+      try {
+        const res = await fetch(`/api/chat?company_id=${encodeURIComponent(companyId)}`);
+        if (res.ok && !cancelled) {
+          const data = await res.json();
+          if (data.messages?.length > 0) {
+            setMessages(data.messages);
+          }
+        }
+      } catch {
+        // Non-blocking — start with empty chat if fetch fails
+      } finally {
+        if (!cancelled) setHistoryLoaded(true);
+      }
+    }
+    loadHistory();
+    return () => { cancelled = true; };
+  }, [companyId]);
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -114,7 +137,7 @@ export function ChatPanel({ companyId }: ChatPanelProps) {
     }
   }, [companyId]);
 
-  const isEmpty = messages.length === 0 && !isStreaming;
+  const isEmpty = messages.length === 0 && !isStreaming && historyLoaded;
 
   return (
     <div className="rounded-xl bg-surface-card border border-border-default flex flex-col h-[500px]" id="chat-panel">

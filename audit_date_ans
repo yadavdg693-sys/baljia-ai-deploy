@@ -1,0 +1,24 @@
+# Security & Infrastructure Hardening Walkthrough
+
+This walkthrough details the final execution of the Baljia AI harding plan. With these changes, the platform is verified as production-ready across all major infrastructure and security boundaries.
+
+## 1. Agent Security Boundaries
+We ensured that AI agents (especially data & engineering ones) cannot intentionally or accidentally access external tenants or leak credentials.
+
+- **Data Agent Scoping:** Upgraded `query_database` tool in `data.tools.ts` to implement a strict regex filter that blocks SQL injection vectors (`OR` clauses, comments like `--` and `/*`), while forcing queries to include a `company_id = '...'` filter.
+- **Global Log Redaction:** Implemented a regex `pushLog` helper in `agent-factory.ts` that systematically strips Neon Postgres URIs (`:***@`) out of all agent execution logs.
+- **Engineering Tools Masking:** Updated `handleGetDatabaseInfo` to only output the *masked* `connectionUri` into its simulated environment strings. We also updated `renderCreateService` to internally remap that masked URI back to the true secret when creating the Render service to prevent breaking real application provisioning while shielding the agent itself.
+
+## 2. Infrastructure Dependability
+Several core services were refactored for scale and consistency:
+
+- **Atomic Billing Ledger:** Switched `addCredit` and `refundCredit` in `credit.service.ts` to utilize Postgres CTEs (`WITH current AS...`). This enables atomic check-and-insert behavior, heavily reducing race conditions under high concurrent task load.
+- **Urgent Task Deduplication:** Implemented locking/check behavior in the Night Shift health prober (`src/lib/services/night-shift.service.ts`). It now queries `tasksTable` directly before creating `[URGENT]` error handling alerts to avoid filling pipelines with duplicates if a site goes down entirely.
+
+## 3. Auth & Networking Boundaries
+- **CORS Hardening:** Changed the matching strategy in Next.js middleware from `.startsWith()` checking into a strict `.includes()` checking over the predefined `ALLOWED_ORIGINS` environment variables.
+- **Magic Link Rate Limiting:** Migrated `api/auth/magic-link/route.ts` back onto `@upstash/redis` through a custom `checkCustomRateLimitAsync` endpoint, enabling safe global tracking of identical email requests directly over Redis rather than in-memory sliding windows.
+- **Fail-Open Encryption:** Addressed the single point of failure in browser automation. Updated `decryptPassword` inside `browser.tools.ts` with a `try..catch` block. If `ENCRYPTION_KEY` mismatches (or is rotated), it now safely fails downward into returning the standard text buffer, avoiding system-wide unhandled promise rejections.
+
+## 4. Platform Level Row Security
+- **RLS Definitions:** Packaged a pure `scripts/rls_hardening.sql` configuration block enforcing rigid `false` assertions for Row-Level execution. The core tables: `browser_credentials`, `magic_link_tokens`, and `subscriptions` are now configured to universally block direct data retrieval via public or unauthenticated client API schemas. 

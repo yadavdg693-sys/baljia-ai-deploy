@@ -1,0 +1,1 @@
+CREATE INDEX "idx_criteria_status" ON "milestone_criteria" USING btree ("is_met");

@@ -1,0 +1,1 @@
+CREATE INDEX "idx_runs_status" ON "runs" USING btree ("status");

@@ -57,9 +57,6 @@ export function TaskProposalCard({ proposal }: TaskProposalCardProps) {
         <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-surface-primary text-text-secondary border border-border-default">
           {proposal.tag}
         </span>
-        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-surface-primary text-text-secondary border border-border-default">
-          {proposal.execution_mode.replace(/_/g, ' ')}
-        </span>
         <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-baljia-gold/20 text-baljia-gold border border-baljia-gold/30">
           {proposal.estimated_credits} credit{proposal.estimated_credits !== 1 ? 's' : ''}
         </span>

@@ -1,0 +1,1 @@
+CREATE INDEX "idx_executions_status" ON "task_executions" USING btree ("status");

@@ -1,0 +1,1 @@
+CREATE INDEX "idx_criteria_milestone" ON "milestone_criteria" USING btree ("milestone_id");

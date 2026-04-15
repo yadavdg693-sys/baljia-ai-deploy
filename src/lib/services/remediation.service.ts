@@ -4,22 +4,36 @@ import { eq, and, gte } from 'drizzle-orm';
 import * as taskService from '@/lib/services/task.service';
 import * as failureService from '@/lib/services/failure.service';
 import * as eventService from '@/lib/services/event.service';
+import * as creditService from '@/lib/services/credit.service';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('Remediation');
 
+// SPEC-CTRL-106: Max 100 repair attempts per scope
+const MAX_REPAIR_ATTEMPTS = 100;
+
 type RemediationStrategy = 'retry' | 'simplify' | 'escalate' | 'skip';
 
+// Maps all 8 canonical failure classes (SPEC-CTRL-106) to remediation strategies
 function determineStrategy(failureClass: string | null, occurrenceCount: number): { strategy: RemediationStrategy; reason: string } {
   if (occurrenceCount >= 3) return { strategy: 'escalate', reason: 'Recurring failure (3+ occurrences), needs manual review' };
 
   switch (failureClass) {
-    case 'worker_failure':      return { strategy: 'retry', reason: 'Worker execution error, worth retrying' };
-    case 'external_dependency': return { strategy: 'retry', reason: 'External service failure, may resolve on retry' };
-    case 'platform_scoping':    return { strategy: 'simplify', reason: 'Task too complex, needs decomposition' };
-    case 'founder_ambiguity':   return { strategy: 'escalate', reason: 'Unclear requirements, needs founder input' };
-    case 'missing_prerequisite':return { strategy: 'skip', reason: 'Missing prerequisite, cannot auto-remediate' };
-    default:                    return { strategy: 'retry', reason: 'Unknown failure, retrying with same parameters' };
+    case 'infra_error':           return { strategy: 'retry', reason: 'Infrastructure error, worth retrying' };
+    case 'capability_miss':       return { strategy: 'skip', reason: 'Agent lacks required capability, cannot auto-remediate' };
+    case 'external_block':        return { strategy: 'retry', reason: 'External service failure, may resolve on retry' };
+    case 'verification_reject':   return { strategy: 'retry', reason: 'Verifier rejected output, retrying with adjusted approach' };
+    case 'timeout':               return { strategy: 'simplify', reason: 'Execution timed out, simplifying scope' };
+    case 'scope_overflow':        return { strategy: 'simplify', reason: 'Task too complex, needs decomposition' };
+    case 'policy_violation':      return { strategy: 'escalate', reason: 'Policy violation, needs review before retry' };
+    case 'connector_failure':     return { strategy: 'skip', reason: 'Missing credentials/connection, cannot auto-remediate' };
+    // Legacy classes (in case old data comes through)
+    case 'worker_failure':        return { strategy: 'retry', reason: 'Worker execution error, worth retrying' };
+    case 'external_dependency':   return { strategy: 'retry', reason: 'External service failure, may resolve on retry' };
+    case 'platform_scoping':      return { strategy: 'simplify', reason: 'Task too complex, needs decomposition' };
+    case 'founder_ambiguity':     return { strategy: 'escalate', reason: 'Unclear requirements, needs founder input' };
+    case 'missing_prerequisite':  return { strategy: 'skip', reason: 'Missing prerequisite, cannot auto-remediate' };
+    default:                      return { strategy: 'retry', reason: 'Unknown failure, retrying with same parameters' };
   }
 }
 
@@ -31,6 +45,20 @@ export async function remediateFailed(taskId: string): Promise<{
   const [task] = await db.select().from(tasks).where(eq(tasks.id, taskId)).limit(1);
   if (!task) throw new Error(`Task ${taskId} not found`);
   if (task.status !== 'failed') throw new Error(`Task ${taskId} is not failed`);
+
+  // SPEC-CTRL-106: Cap remediation at 100 repair attempts per scope
+  const repairCount = (task.repair_attempt_count as number | null) ?? 0;
+  if (repairCount >= MAX_REPAIR_ATTEMPTS) {
+    log.warn('Repair cap reached', { taskId, repairCount });
+    return { strategy: 'skip' as RemediationStrategy, remediationTaskId: null, reason: `Max repair attempts (${MAX_REPAIR_ATTEMPTS}) reached` };
+  }
+
+  // Check credits before creating remediation task
+  const balance = await creditService.getBalance(task.company_id);
+  if (balance <= 0) {
+    log.warn('Insufficient credits for remediation', { taskId, balance });
+    return { strategy: 'skip' as RemediationStrategy, remediationTaskId: null, reason: 'Insufficient credits for auto-remediation' };
+  }
 
   const fingerprint = await failureService.captureFailure({
     taskId,
@@ -55,6 +83,8 @@ export async function remediateFailed(taskId: string): Promise<{
         status: 'todo',
         estimated_credits: 1,
         related_task_ids: [taskId],
+        authorized_by: 'remediation',
+        authorization_reason: `Auto-remediation retry of task ${taskId} (strategy: retry, class: ${task.failure_class})`,
       });
       remediationTaskId = retryTask.id;
       break;
@@ -71,6 +101,8 @@ export async function remediateFailed(taskId: string): Promise<{
         estimated_credits: 1,
         max_turns: Math.max((task.max_turns ?? 200) / 2, 50),
         related_task_ids: [taskId],
+        authorized_by: 'remediation',
+        authorization_reason: `Auto-remediation simplified retry of task ${taskId} (strategy: simplify, class: ${task.failure_class})`,
       });
       remediationTaskId = simplifiedTask.id;
       break;
@@ -86,6 +118,13 @@ export async function remediateFailed(taskId: string): Promise<{
     }
     case 'skip':
       break;
+  }
+
+  // Increment repair_attempt_count on the original task
+  if (strategy === 'retry' || strategy === 'simplify') {
+    await taskService.updateTask(taskId, {
+      repair_attempt_count: repairCount + 1,
+    } as taskService.UpdateTaskFields);
   }
 
   log.info('Remediation processed', { taskId, strategy, remediationTaskId: remediationTaskId ?? 'none' });

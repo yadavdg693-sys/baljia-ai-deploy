@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "idx_mcp_tools_unique" ON "mcp_tools" USING btree ("server_id","name");

@@ -6,7 +6,7 @@
 // ============================================
 
 export type ClaimStatus = 'owned' | 'baljia_fund' | 'unclaimed';
-export type OnboardingStatus = 'initializing' | 'running' | 'completed' | 'failed';
+export type OnboardingStatus = 'initializing' | 'pending_auth' | 'running' | 'completed' | 'failed';
 export type PlanTier = 'trial' | 'starter' | 'growth' | 'scale';
 export type Lifecycle = 'trial_active' | 'trial_expired' | 'full_active' | 'keep_live_active' | 'suspended_billing' | 'archived' | 'deleted';
 export type ExecutionState = 'active' | 'paused' | 'suspended';
@@ -14,12 +14,37 @@ export type BillingState = 'free' | 'trial' | 'active' | 'past_due' | 'cancelled
 export type HostingState = 'live' | 'suspended' | 'archived';
 export type CompanyStage = 'early' | 'validation' | 'monetization' | 'retention' | 'scale' | 'compounding';
 
-export type TaskStatus = 'created' | 'todo' | 'in_progress' | 'completed_verified' | 'completed_unverified' | 'failed' | 'rejected' | 'blocked' | 'partial';
+export type TaskStatus = 'todo' | 'in_progress' | 'verifying' | 'completed' | 'failed' | 'failed_permanent' | 'rejected' | 'blocked_pre_start' | 'blocked_in_run' | 'repair';
 export type TaskSource = 'founder_requested' | 'ceo_suggested' | 'night_shift_generated' | 'auto_remediation' | 'recurring' | 'onboarding';
 export type ExecutabilityType = 'can_run_now' | 'needs_new_connection' | 'manual_task';
 export type ExecutionMode = 'deterministic' | 'template_plus_params' | 'full_agent';
 export type VerificationLevel = 'none' | 'deterministic' | 'browser_flow' | 'quality_review' | 'hybrid';
-export type FailureClass = 'founder_ambiguity' | 'missing_prerequisite' | 'platform_scoping' | 'worker_failure' | 'external_dependency';
+// Canonical 8-class failure taxonomy (SPEC-CTRL-106)
+export const FAILURE_CLASSES = [
+  'infra_error',          // Platform/infra failures (DB, queue, internal services)
+  'capability_miss',      // Agent lacks tools/skills for the task
+  'external_block',       // Third-party API/service unavailable or errored
+  'verification_reject',  // Verifier rejected worker output
+  'timeout',              // Execution exceeded time or turn budget
+  'scope_overflow',       // Task too complex, needs decomposition
+  'policy_violation',     // Content safety, compliance, or guardrail breach
+  'connector_failure',    // OAuth/credential/integration connection issue
+] as const;
+export type FailureClass = (typeof FAILURE_CLASSES)[number];
+
+// Map legacy 5-class names to canonical 8-class (for data migration + backward compat)
+export const LEGACY_FAILURE_CLASS_MAP: Record<string, FailureClass> = {
+  worker_failure: 'infra_error',
+  external_dependency: 'external_block',
+  platform_scoping: 'scope_overflow',
+  founder_ambiguity: 'scope_overflow',      // Ambiguous scope → scope_overflow
+  missing_prerequisite: 'connector_failure',
+  // failure.service.ts legacy categories:
+  tool_failure: 'capability_miss',
+  external: 'external_block',
+  scope: 'scope_overflow',
+  routing: 'infra_error',
+};
 
 export type BaljiaState = 'listening' | 'planning' | 'running' | 'investigating' | 'blocked' | 'resolved' | 'growth_mode';
 
@@ -60,6 +85,7 @@ export interface Company {
   original_idea: string | null;
   claim_status: ClaimStatus;
   onboarding_status: OnboardingStatus;
+  onboarding_journey: OnboardingJourney | null;
   plan_tier: PlanTier;
   lifecycle: Lifecycle;
   execution_state: ExecutionState;
@@ -100,12 +126,16 @@ export interface Task {
   estimated_credits: number;
   actual_credits_charged: number;
   verification_level: VerificationLevel | null;
+  refund_policy: 'auto_eligible' | 'manual_review' | 'no_refund' | null;
   failure_class: FailureClass | null;
   related_task_ids: string[] | null;
   run_link: string | null;
   markdown_link: string | null;
+  authorized_by: string | null;           // 'founder' | 'night_shift' | 'recurring' | 'remediation' | 'system'
+  authorization_reason: string | null;     // human-readable reason
   max_turns: number;
   turn_count: number;
+  repair_attempt_count: number;  // SPEC-CTRL-106: max 100 per scope
   started_at: string | null;
   completed_at: string | null;
   created_at: string;
@@ -234,6 +264,7 @@ export type LedgerEntryType = 'monthly_grant' | 'welcome_bonus' | 'addon_purchas
 export type EventType =
   | 'task_created'
   | 'task_approved'
+  | 'task_retried'
   | 'task_rejected'
   | 'task_started'
   | 'task_completed'
@@ -250,7 +281,13 @@ export type EventType =
   | 'onboarding_completed'
   | 'onboarding_failed'
   | 'credit_low'
-  | 'tweet_scheduled';
+  | 'tweet_scheduled'
+  | 'referral_credited'
+  | 'stripe_webhook_processed'
+  | 'regression_detected'
+  | 'infra_health_alert'
+  | 'billing_audit_anomaly'
+  | 'platform_ops_summary';
 
 
 
@@ -280,6 +317,8 @@ export interface MemoryLayer {
 }
 
 export type LearningConfidence = 'high' | 'medium' | 'low';
+export type LearningType = 'success_pattern' | 'failure_pattern' | 'routing_insight' | 'tool_insight' | 'domain_knowledge';
+export type LearningStatus = 'active' | 'superseded' | 'archived';
 
 export interface Learning {
   id: string;
@@ -287,9 +326,13 @@ export interface Learning {
   task_id: string | null;
   agent_id: number | null;
   category: string;
+  learning_type: LearningType;
   tags: string[];
   content: string;
   confidence: LearningConfidence;
+  usage_count: number;
+  last_referenced_at: string | null;
+  status: LearningStatus;
   created_at: string;
 }
 
@@ -341,6 +384,100 @@ export interface TaskExecution {
   created_at: string;
 }
 
+// ============================================
+// RUNTIME ENTITIES (SPEC-CTRL-102)
+// ============================================
+
+export interface Session {
+  id: string;
+  company_id: string;
+  task_id: string;
+  session_type: 'execution' | 'verification' | 'remediation';
+  status: 'active' | 'completed' | 'failed' | 'cancelled';
+  context_packet_version: number;
+  permission_snapshot: PermissionSnapshot | null;
+  started_at: string;
+  ended_at: string | null;
+}
+
+export interface Run {
+  id: string;
+  session_id: string;
+  task_id: string;
+  attempt_number: number;
+  status: 'running' | 'completed' | 'failed' | 'timed_out' | 'killed';
+  agent_id: number | null;
+  execution_mode: ExecutionMode;
+  started_at: string;
+  ended_at: string | null;
+  failure_class: FailureClass | null;
+  turn_count: number;
+  token_usage: Record<string, unknown> | null;
+  wall_clock_seconds: number | null;
+  error_summary: string | null;
+  created_at: string;
+}
+
+export interface Artifact {
+  id: string;
+  run_id: string;
+  task_id: string;
+  artifact_type: 'report' | 'screenshot' | 'log' | 'receipt' | 'code';
+  content_ref: string | null;
+  evidence: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface ApprovalRecord {
+  id: string;
+  task_id: string;
+  risk_class: string;
+  approved_by: 'founder' | 'auto' | 'governance';
+  approved_at: string;
+  expires_at: string | null;
+  status: 'active' | 'expired' | 'revoked';
+}
+
+// ============================================
+// CONTEXT & PERMISSIONS (SPEC-CTRL-105)
+// ============================================
+
+export interface ContextPacket {
+  memory_layers: {
+    l1_domain_knowledge: string;
+    l2_user_preferences: string;
+    l3_cross_company: string;
+  };
+  prior_reports: Array<{ id: string; title: string; content: string; task_id: string }>;
+  failure_fingerprints: Array<{ fingerprint: string; category: string; description: string }>;
+  company_state: {
+    stage: CompanyStage;
+    lifecycle: Lifecycle;
+    billing_state: BillingState;
+  };
+  compiled_briefing: string;
+}
+
+export interface PermissionSnapshot {
+  tool_mount_profile: string[];
+  allowed_tools: string[];
+  forbidden_actions: string[];
+  risk_ceiling: 'low' | 'medium' | 'high';
+  max_turns: number;
+}
+
+// ============================================
+// CREDIT QUOTE (SPEC-CEO-001)
+// ============================================
+
+export interface CreditQuote {
+  credits_required: number;
+  task_split: Array<{ title: string; description: string; tag: string }>;
+  founder_safe_reason: string;
+  included_scope: string;
+  blockers: string[];
+}
+
 export interface RecurringTask {
   id: string;
   company_id: string;
@@ -378,6 +515,9 @@ export interface FailureFingerprint {
   affected_tools: string[] | null;  // DB: affected_tools VARCHAR(100)[]
   fix_status: 'open' | 'investigating' | 'fixed' | 'wont_fix';
   regression_sensitive: boolean;    // DB: regression_sensitive BOOLEAN
+  root_cause: string | null;        // DB: root_cause TEXT
+  fix_notes: string | null;         // DB: fix_notes TEXT
+  fix_applied_at: string | null;    // DB: fix_applied_at TIMESTAMPTZ
   first_seen_at: string;
   last_seen_at: string;
 }
@@ -485,7 +625,7 @@ export interface CompiledBriefing {
 
 export interface WatchdogEvent {
   timestamp: string;
-  type: 'progress' | 'idle_warning' | 'stuck_detected' | 'killed';
+  type: 'progress' | 'idle_warning' | 'stuck_detected' | 'killed' | 'loop_detected';
   tool: string | null;
   message: string;
 }
@@ -527,16 +667,21 @@ export type ChatAction =
       data: { doc_type: unknown };
     };
 
+/** Founder-facing task proposal (no internal execution details) */
 export interface TaskProposal {
   task_id: string;
   title: string;
   description: string | null;
   tag: string;
   estimated_credits: number;
+  agent_name: string;       // founder-friendly label (from FOUNDER_AGENT_LABELS)
+  explanation: string;
+}
+
+/** Internal task proposal with governance metadata (never sent to frontend) */
+export interface TaskProposalInternal extends TaskProposal {
   execution_mode: ExecutionMode;
   verification_level: VerificationLevel;
-  agent_name: string;
-  explanation: string;
 }
 
 export interface CreditLedgerEntry {

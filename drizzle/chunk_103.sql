@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "idx_browser_creds_unique" ON "browser_credentials" USING btree ("company_id","site_domain");

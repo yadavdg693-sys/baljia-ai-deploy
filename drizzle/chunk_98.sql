@@ -1,0 +1,1 @@
+ALTER TABLE "waitlist" ADD CONSTRAINT "waitlist_converted_user_id_users_id_fk" FOREIGN KEY ("converted_user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;

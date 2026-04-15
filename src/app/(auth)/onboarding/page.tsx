@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useEffect, useRef, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import type { OnboardingJourney } from '@/types';
+import { ONBOARDING_STAGE_LABELS } from '@/lib/founder-labels';
 
 type Step = 'level1' | 'level2' | 'idea_input' | 'url_input' | 'creating';
 
@@ -21,26 +22,75 @@ const STAGE_ORDER = [
   'enrich_founder',
   'enrich_business',
   'persist_context',
+  'extract_founder_angle',
   'select_strategy',
+  'classify_archetype',
   'name_company',
-  'generate_market_research',
   'provision_infrastructure',
+  'generate_market_research',
   'save_mission',
+  'generate_roadmap',
+  'derive_active_milestone',
   'create_starter_tasks',
+  'generate_landing_page',
+  'send_welcome_email',
+  'post_launch_tweet',
+  'generate_ceo_summary',
   'flush_diagnostics',
   'celebrate',
 ];
 
 export default function OnboardingPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-surface-primary flex items-center justify-center"><p className="text-text-secondary">Loading...</p></div>}>
+      <OnboardingPageInner />
+    </Suspense>
+  );
+}
+
+function OnboardingPageInner() {
   const router = useRouter();
-  const [step, setStep] = useState<Step>('level1');
+  const searchParams = useSearchParams();
+  const prefillEmail = searchParams.get('email') ?? '';
+  const resumeCompanyId = searchParams.get('resume');
+  const [step, setStep] = useState<Step>(resumeCompanyId ? 'creating' : 'level1');
   const [idea, setIdea] = useState('');
   const [businessUrl, setBusinessUrl] = useState('');
-  const [companyId, setCompanyId] = useState<string | null>(null);
+  const [companyId, setCompanyId] = useState<string | null>(resumeCompanyId);
   const [stages, setStages] = useState<Record<string, 'running' | 'done' | 'error'>>({});
   const [currentStageLabel, setCurrentStageLabel] = useState('Starting up...');
   const [error, setError] = useState<string | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const resumeTriggered = useRef(false);
+
+  // Auto-resume pipeline for pending_auth companies (redirected from dashboard)
+  useEffect(() => {
+    if (!resumeCompanyId || resumeTriggered.current) return;
+    resumeTriggered.current = true;
+
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    // POST to /api/onboarding — the route detects pending_auth and resumes the pipeline.
+    // Journey is read from company.onboarding_journey on the server side.
+    fetch('/api/onboarding', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ journey: 'surprise_me', timezone }),
+    }).then(async (res) => {
+      if (!res.ok) {
+        const data = await res.json();
+        // 409 = already has completed company — just go to dashboard
+        if (res.status === 409 && data.company_id) {
+          router.push(`/dashboard/${data.company_id}`);
+          return;
+        }
+        throw new Error(data.error ?? 'Failed to resume setup');
+      }
+      // Pipeline started — SSE stream will pick up progress via companyId state
+    }).catch((err) => {
+      setError(err instanceof Error ? err.message : 'Failed to resume setup');
+      setStep('level1');
+    });
+  }, [resumeCompanyId, router]);
 
   // Start SSE stream once we have a company_id
   useEffect(() => {
@@ -94,17 +144,46 @@ export default function OnboardingPage() {
     setError(null);
 
     try {
+      // Capture browser timezone for enrichment
+      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const payload = { journey, idea: input, business_url: input, timezone };
+
+      // Try authenticated endpoint first
       const res = await fetch('/api/onboarding', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ journey, idea: input, business_url: input }),
+        body: JSON.stringify(payload),
       });
+
+      if (res.status === 401 && prefillEmail) {
+        // Unauthenticated — use quick-start to create draft, then redirect to login
+        const qsRes = await fetch('/api/quick-start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...payload, email: prefillEmail }),
+        });
+
+        if (!qsRes.ok) {
+          const data = await qsRes.json();
+          throw new Error(data.error ?? 'Failed to start setup');
+        }
+
+        const data = await qsRes.json();
+        // Redirect to login with dashboard target — pipeline resumes after auth
+        router.push(data.redirect);
+        return;
+      }
 
       if (!res.ok) {
         const data = await res.json();
         // Already has a company — redirect to it
         if (res.status === 409 && data.company_id) {
           router.push(`/dashboard/${data.company_id}`);
+          return;
+        }
+        // Unauthenticated without email — redirect to login
+        if (res.status === 401) {
+          router.push('/login?redirect=/onboarding');
           return;
         }
         throw new Error(data.error ?? 'Failed to start setup');
@@ -145,7 +224,7 @@ export default function OnboardingPage() {
         {step === 'level1' && (
           <div className="space-y-4">
             <h2 className="text-xl font-semibold text-center mb-8 text-text-primary">
-              What would you like to do?
+              Let&apos;s get started.
             </h2>
 
             <button
@@ -193,7 +272,7 @@ export default function OnboardingPage() {
             </button>
 
             <h2 className="text-xl font-semibold text-center mb-8 text-text-primary">
-              How should we start?
+              Let&apos;s build something.
             </h2>
 
             <button
@@ -247,7 +326,7 @@ export default function OnboardingPage() {
             <textarea
               value={idea}
               onChange={(e) => setIdea(e.target.value)}
-              placeholder="Describe your business idea in a few sentences..."
+              placeholder="e.g. A social media agency for small restaurants"
               className={cn(
                 'w-full p-4 rounded-xl border border-border-default bg-surface-card',
                 'text-text-primary placeholder:text-text-muted',
@@ -266,7 +345,7 @@ export default function OnboardingPage() {
                   : 'bg-surface-tertiary text-text-muted cursor-not-allowed'
               )}
             >
-              Get started →
+              Start building →
             </button>
           </div>
         )}
@@ -289,7 +368,7 @@ export default function OnboardingPage() {
               type="url"
               value={businessUrl}
               onChange={(e) => setBusinessUrl(e.target.value)}
-              placeholder="https://yourcompany.com"
+              placeholder="yourcompany.com"
               className={cn(
                 'w-full p-4 rounded-xl border border-border-default bg-surface-card',
                 'text-text-primary placeholder:text-text-muted',
@@ -358,7 +437,7 @@ export default function OnboardingPage() {
                       status === 'running' ? 'text-text-primary' :
                       'text-text-muted'
                     )}>
-                      {s.replace(/_/g, ' ')}
+                      {ONBOARDING_STAGE_LABELS[s] ?? s.replace(/_/g, ' ')}
                     </span>
                   </div>
                 );

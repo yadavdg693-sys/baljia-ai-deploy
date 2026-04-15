@@ -2,13 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSessionFromCookies } from '@/lib/auth';
 import { db, companies } from '@/lib/db';
 import { eq, and } from 'drizzle-orm';
-
-// G-INPUT-001: UUID format validation
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function isValidUUID(value: string): boolean {
-  return UUID_REGEX.test(value);
-}
+import { isValidUUID } from '@/lib/uuid-validation'; // G-INPUT-001: single canonical implementation
 
 type ApiError = NextResponse<{ error: string }>;
 

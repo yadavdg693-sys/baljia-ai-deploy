@@ -1,0 +1,21 @@
+CREATE TABLE "users" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"email" varchar(255) NOT NULL,
+	"name" varchar(255),
+	"twitter_handle" varchar(100),
+	"auth_provider" varchar(50) DEFAULT 'magic_link',
+	"google_id" varchar(255),
+	"email_verified" boolean DEFAULT false,
+	"timezone" varchar(50),
+	"locale" varchar(10),
+	"ip_country" varchar(5),
+	"device_type" varchar(50),
+	"referral_source" varchar(255),
+	"referral_code" varchar(50),
+	"referred_by" uuid,
+	"created_at" timestamp with time zone DEFAULT now(),
+	"updated_at" timestamp with time zone DEFAULT now(),
+	CONSTRAINT "users_email_unique" UNIQUE("email"),
+	CONSTRAINT "users_google_id_unique" UNIQUE("google_id"),
+	CONSTRAINT "users_referral_code_unique" UNIQUE("referral_code")
+);

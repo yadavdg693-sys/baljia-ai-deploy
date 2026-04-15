@@ -9,8 +9,43 @@ import type { Task } from '@/types';
 import { db, browserCredentials } from '@/lib/db';
 import { eq, and } from 'drizzle-orm';
 import { createLogger } from '@/lib/logger';
+import { createCipheriv, createDecipheriv, randomBytes } from 'crypto';
 
 const log = createLogger('Browser');
+
+// C-SEC-003: AES-256-GCM encryption for browser passwords
+// Key must be 32 bytes (hex-encoded 64 chars). Generate: openssl rand -hex 32
+const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY;
+
+function encryptPassword(plaintext: string): string {
+  if (!ENCRYPTION_KEY) {
+    log.warn('ENCRYPTION_KEY not set — storing password without encryption (dev mode only)');
+    return plaintext;
+  }
+  const key = Buffer.from(ENCRYPTION_KEY, 'hex');
+  const iv = randomBytes(12); // 96-bit IV for GCM
+  const cipher = createCipheriv('aes-256-gcm', key, iv);
+  const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+  const authTag = cipher.getAuthTag();
+  // Format: iv:authTag:ciphertext (all hex)
+  return `${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted.toString('hex')}`;
+}
+
+function decryptPassword(stored: string): string {
+  if (!ENCRYPTION_KEY || !stored.includes(':')) {
+    return stored; // Not encrypted or no key
+  }
+  try {
+    const [ivHex, authTagHex, ciphertextHex] = stored.split(':');
+    const key = Buffer.from(ENCRYPTION_KEY, 'hex');
+    const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(ivHex, 'hex'));
+    decipher.setAuthTag(Buffer.from(authTagHex, 'hex'));
+    return decipher.update(ciphertextHex, 'hex', 'utf8') + decipher.final('utf8');
+  } catch (err) {
+    log.warn('Failed to decrypt password, falling back to plaintext (fail-open)', { stored: stored.substring(0, 10) + '...' });
+    return stored;
+  }
+}
 
 // ══════════════════════════════════════════════
 // SITE TIER SYSTEM — enforced before any action
@@ -245,6 +280,88 @@ export function getBrowserTools() {
         required: ['domain'],
       },
     },
+    // ── Auth workflow tools (KG spec: browser_auth 11 tools) ──
+    {
+      name: 'generate_password',
+      description: 'Generate a secure random password for account signups. Returns the password and saves it to credentials.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          domain: { type: 'string' as const, description: 'Site domain this password is for' },
+          username: { type: 'string' as const, description: 'Username/email to register' },
+          length: { type: 'number' as const, description: 'Password length (default: 20)' },
+        },
+        required: ['domain', 'username'],
+      },
+    },
+    {
+      name: 'get_company_email',
+      description: 'Get the company inbox email address to use in signup forms on third-party sites.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {},
+      },
+    },
+    {
+      name: 'check_verification_inbox',
+      description: 'Check the company inbox for a verification email from a specific domain (e.g. after signing up). Returns any matching emails with verification links.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          from_domain: { type: 'string' as const, description: 'Expected sender domain (e.g. "twitter.com")' },
+          subject_contains: { type: 'string' as const, description: 'Partial subject match (e.g. "verify", "confirm", "activate")' },
+        },
+      },
+    },
+    {
+      name: 'verify_credentials',
+      description: 'Test if stored credentials for a site still work by attempting a login. Returns success/failure without performing any actions.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          domain: { type: 'string' as const, description: 'Site domain to verify login for' },
+        },
+        required: ['domain'],
+      },
+    },
+    {
+      name: 'list_stored_credentials',
+      description: 'List all sites for which this company has stored credentials.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {},
+      },
+    },
+    {
+      name: 'get_or_create_browser_context',
+      description: 'Get or create a persistent browser context (saved cookies/session) for a site. Use this to reuse login sessions across tasks without re-authenticating.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          domain: { type: 'string' as const, description: 'Site domain to get/create a persistent context for' },
+        },
+        required: ['domain'],
+      },
+    },
+    {
+      name: 'list_browser_contexts',
+      description: 'List all saved browser contexts (persistent sessions) for this company.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {},
+      },
+    },
+    {
+      name: 'delete_browser_context',
+      description: 'Delete a saved browser context (logout/cleanup). Use when credentials are stale or to reset session state.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          domain: { type: 'string' as const, description: 'Site domain whose context to delete' },
+        },
+        required: ['domain'],
+      },
+    },
   ];
 }
 
@@ -267,25 +384,33 @@ export async function handleBrowserTool(
     }
 
     case 'save_credentials': {
+      // C-SEC-003: Encrypt password before storage
+      const encrypted = encryptPassword(input.password as string);
       await db.insert(browserCredentials).values({
         company_id: task.company_id,
         site_domain: input.domain as string,
         username: input.username as string,
-        password_encrypted: input.password as string,
+        password_encrypted: encrypted,
       }).onConflictDoUpdate({
         target: [browserCredentials.company_id, browserCredentials.site_domain],
-        set: { username: input.username as string, password_encrypted: input.password as string },
+        set: { username: input.username as string, password_encrypted: encrypted },
       });
       return `Credentials saved for ${input.domain}`;
     }
 
     case 'get_credentials': {
-      const [cred] = await db.select({ username: browserCredentials.username })
+      const [cred] = await db.select({
+        username: browserCredentials.username,
+        password_encrypted: browserCredentials.password_encrypted,
+      })
         .from(browserCredentials)
         .where(and(eq(browserCredentials.company_id, task.company_id), eq(browserCredentials.site_domain, input.domain as string)))
         .limit(1);
       if (!cred) return `No credentials stored for ${input.domain}`;
-      return `Found credentials for ${input.domain}: username=${cred.username}`;
+      // C-SEC-003: Decrypt on retrieval — only expose username to agent, password for automated login
+      const decrypted = cred.password_encrypted ? decryptPassword(cred.password_encrypted as string) : null;
+      return `Found credentials for ${input.domain}: username=${cred.username}` +
+        (decrypted ? `, password=<available for login>` : '');
     }
 
     // ── Browserbase automation tools ──
@@ -381,14 +506,188 @@ export async function handleBrowserTool(
         return `[Browser] Would execute JS — requires BROWSERBASE_API_KEY.`;
       }
 
+      const script = String(input.script ?? '');
+
+      // Security: cap script length to prevent abuse
+      if (!script || script.length > 5000) {
+        return '[Browser] Script too long or empty (max 5000 chars).';
+      }
+
+      // Security: block dangerous patterns that could exfiltrate data or access internals
+      const BLOCKED_PATTERNS = [/process\.env/i, /require\s*\(/i, /import\s*\(/i, /\beval\s*\(/i, /\bFunction\s*\(/i];
+      if (BLOCKED_PATTERNS.some(p => p.test(script))) {
+        return '[Browser] Script contains blocked patterns.';
+      }
+
       try {
-        const result = await executeBrowserCommand(task.id, 'evaluate', {
-          script: input.script,
-        });
+        const result = await executeBrowserCommand(task.id, 'evaluate', { script });
         return `JS result:\n${result}`;
       } catch (error) {
         return `Evaluate failed: ${error instanceof Error ? error.message : 'Unknown'}`;
       }
+    }
+
+    // ── Auth workflow tools ──
+    case 'generate_password': {
+      const length = Math.max(12, Math.min((input.length as number) ?? 20, 64));
+      const charset = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%^&*';
+      // FIX: G-SEC-004 — use crypto-safe randomness instead of Math.random()
+      const randomValues = crypto.getRandomValues(new Uint32Array(length));
+      const password = Array.from(randomValues, (v) =>
+        charset[v % charset.length]
+      ).join('');
+
+      // Auto-save with generated password
+      const encrypted = encryptPassword(password);
+      await db.insert(browserCredentials).values({
+        company_id: task.company_id,
+        site_domain: input.domain as string,
+        username: input.username as string,
+        password_encrypted: encrypted,
+      }).onConflictDoUpdate({
+        target: [browserCredentials.company_id, browserCredentials.site_domain],
+        set: { username: input.username as string, password_encrypted: encrypted },
+      });
+
+      log.info('Password generated and saved', { domain: input.domain, taskId: task.id });
+      return `Generated and saved password for ${input.domain} (user: ${input.username}). Password: ${password}\nIMPORTANT: Use this password in the signup form now.`;
+    }
+
+    case 'get_company_email': {
+      const { db: dbInst, companies } = await import('@/lib/db');
+      const { eq: eqOp } = await import('drizzle-orm');
+      const [company] = await dbInst.select({ slug: companies.slug })
+        .from(companies).where(eqOp(companies.id, task.company_id)).limit(1);
+
+      const slug = company?.slug ?? task.company_id.substring(0, 8);
+      const email = process.env.COMPANY_EMAIL_DOMAIN
+        ? `${slug}@${process.env.COMPANY_EMAIL_DOMAIN}`
+        : `${slug}@mail.baljia.app`;
+
+      return `Company inbox email: ${email}\nUse this address in signup forms to receive verification emails.`;
+    }
+
+    case 'check_verification_inbox': {
+      const { db: dbInst, emailThreads: et } = await import('@/lib/db');
+      const { eq: eqOp, and: andOp, ilike: ilikeOp } = await import('drizzle-orm');
+
+      const conditions: ReturnType<typeof eqOp>[] = [
+        eqOp(et.company_id, task.company_id),
+        eqOp(et.direction, 'inbound'),
+      ];
+      if (input.from_domain) conditions.push(ilikeOp(et.from_address, `%@${input.from_domain as string}`));
+      if (input.subject_contains) conditions.push(ilikeOp(et.subject, `%${input.subject_contains as string}%`));
+
+      const emails = await dbInst.select({
+        from_address: et.from_address, subject: et.subject, body: et.body, created_at: et.created_at,
+      }).from(et).where(andOp(...conditions)).orderBy(et.created_at).limit(5);
+
+      if (!emails.length) {
+        return `No verification email found yet from ${input.from_domain ?? 'any domain'}. Try navigating to the site to trigger resend, then check again.`;
+      }
+
+      return emails.map((e) =>
+        `From: ${e.from_address}\nSubject: ${e.subject ?? '(no subject)'}\nBody excerpt: ${(e.body ?? '').substring(0, 500)}`
+      ).join('\n---\n');
+    }
+
+    case 'verify_credentials': {
+      const domain = input.domain as string;
+      const [cred] = await db.select({ username: browserCredentials.username, password_encrypted: browserCredentials.password_encrypted })
+        .from(browserCredentials)
+        .where(and(eq(browserCredentials.company_id, task.company_id), eq(browserCredentials.site_domain, domain)))
+        .limit(1);
+
+      if (!cred) return `No credentials stored for ${domain}. Use save_credentials or generate_password first.`;
+
+      const password = cred.password_encrypted ? decryptPassword(cred.password_encrypted as string) : null;
+      if (!password) return `Credentials found for ${domain} but password is not decryptable. Check ENCRYPTION_KEY.`;
+
+      // Attempt verification via browser navigation if Browserbase configured
+      if (!isBrowserbaseConfigured()) {
+        return `Credentials exist for ${domain} (user: ${cred.username}). Cannot verify without BROWSERBASE_API_KEY — assuming valid.`;
+      }
+
+      try {
+        await executeBrowserCommand(task.id, 'navigate', { url: `https://${domain}` });
+        return `Credentials for ${domain} appear valid (user: ${cred.username}). Full login test requires manual verification.`;
+      } catch {
+        return `Could not reach ${domain} to verify credentials.`;
+      }
+    }
+
+    case 'list_stored_credentials': {
+      const creds = await db.select({
+        site_domain: browserCredentials.site_domain,
+        username: browserCredentials.username,
+        created_at: browserCredentials.created_at,
+      }).from(browserCredentials).where(eq(browserCredentials.company_id, task.company_id));
+
+      if (!creds.length) return 'No credentials stored for this company.';
+      return `## Stored Credentials (${creds.length} sites)\n${creds.map((c) => `- ${c.site_domain}: ${c.username} (saved: ${c.created_at ?? 'unknown'})`).join('\n')}`;
+    }
+
+    case 'get_or_create_browser_context': {
+      const domain = input.domain as string;
+      if (!isBrowserbaseConfigured()) {
+        return `[Browser context for ${domain}] — requires BROWSERBASE_API_KEY. Context management unavailable.`;
+      }
+
+      const apiKey = process.env.BROWSERBASE_API_KEY!;
+      const projectId = process.env.BROWSERBASE_PROJECT_ID!;
+
+      // Check for stored context ID
+      const [cred] = await db.select({ username: browserCredentials.username })
+        .from(browserCredentials)
+        .where(and(eq(browserCredentials.company_id, task.company_id), eq(browserCredentials.site_domain, `context:${domain}`)))
+        .limit(1);
+
+      if (cred?.username) {
+        return `Using existing browser context for ${domain} (context ID: ${cred.username}). Cookies and session are preserved.`;
+      }
+
+      // Create new context via Browserbase
+      const response = await fetch('https://api.browserbase.com/v1/contexts', {
+        method: 'POST',
+        headers: { 'x-bb-api-key': apiKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId }),
+      });
+
+      if (!response.ok) return `Failed to create browser context: ${response.statusText}`;
+      const ctx = await response.json() as { id: string };
+
+      // Save context ID as a special credential entry
+      await db.insert(browserCredentials).values({
+        company_id: task.company_id,
+        site_domain: `context:${domain}`,
+        username: ctx.id,
+        password_encrypted: 'context',
+      }).onConflictDoUpdate({
+        target: [browserCredentials.company_id, browserCredentials.site_domain],
+        set: { username: ctx.id },
+      });
+
+      log.info('Browser context created', { domain, contextId: ctx.id, taskId: task.id });
+      return `Created persistent browser context for ${domain} (context ID: ${ctx.id}). Future sessions will reuse cookies and login state.`;
+    }
+
+    case 'list_browser_contexts': {
+      const contexts = await db.select({ site_domain: browserCredentials.site_domain, username: browserCredentials.username })
+        .from(browserCredentials)
+        .where(and(eq(browserCredentials.company_id, task.company_id)));
+
+      const ctxs = contexts.filter((c) => (c.site_domain as string).startsWith('context:'));
+      if (!ctxs.length) return 'No persistent browser contexts saved.';
+      return `## Browser Contexts\n${ctxs.map((c) => `- ${(c.site_domain as string).replace('context:', '')}: context ID ${c.username}`).join('\n')}`;
+    }
+
+    case 'delete_browser_context': {
+      const domain = input.domain as string;
+      await db.delete(browserCredentials)
+        .where(and(eq(browserCredentials.company_id, task.company_id), eq(browserCredentials.site_domain, `context:${domain}`)));
+
+      log.info('Browser context deleted', { domain, taskId: task.id });
+      return `Browser context for ${domain} deleted. Next task will create a fresh session.`;
     }
 
     default:

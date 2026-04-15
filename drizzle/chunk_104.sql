@@ -1,0 +1,1 @@
+CREATE INDEX "idx_chat_sessions_company" ON "chat_sessions" USING btree ("company_id");

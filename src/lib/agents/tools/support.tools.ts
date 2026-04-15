@@ -90,6 +90,20 @@ export function getSupportTools() {
         },
       },
     },
+    {
+      name: 'add_contact',
+      description: 'Add a new contact (customer or lead) discovered during support. Saves name, email, and initial status.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          name: { type: 'string' as const, description: 'Contact full name' },
+          email: { type: 'string' as const, description: 'Contact email address' },
+          notes: { type: 'string' as const, description: 'Optional context or notes about this contact' },
+          lead_status: { type: 'string' as const, description: 'Status: pending, contacted, replied, customer (default: pending)' },
+        },
+        required: ['email'],
+      },
+    },
   ];
 }
 
@@ -136,7 +150,7 @@ export async function handleSupportTool(
 
     case 'escalate_to_owner': {
       await db.insert(platformEvents).values({
-        company_id: task.company_id, event_type: 'task_failed',
+        company_id: task.company_id, event_type: 'support_escalation',
         payload: { type: 'support_escalation', urgency: input.urgency, summary: input.summary, customer_email: input.customer_email ?? null, from_task: task.id },
         is_public_safe: false,
       });
@@ -155,7 +169,7 @@ export async function handleSupportTool(
       const [newTask] = await db.insert(tasksTable).values({
         company_id: task.company_id, title: input.title as string, description: input.description as string,
         tag: 'bug-fix', priority: (input.priority as number) ?? 50, source: 'auto_remediation',
-        status: 'created', queue_order: 999, estimated_credits: 1, max_turns: 200,
+        status: 'todo', queue_order: 999, estimated_credits: 1, max_turns: 200,
         executability_type: 'can_run_now', related_task_ids: [task.id],
       }).returning({ id: tasksTable.id });
 
@@ -200,6 +214,27 @@ export async function handleSupportTool(
 
       return `Found ${data.length} matching email(s):\n` +
         data.map((e) => `- From: ${e.from_address} | Subject: ${e.subject ?? '(no subject)'} | ${e.created_at}`).join('\n');
+    }
+
+    case 'add_contact': {
+      try {
+        await db.insert(contacts).values({
+          company_id: task.company_id,
+          email: input.email as string,
+          name: (input.name as string) ?? null,
+          lead_status: (input.lead_status as string) ?? 'pending',
+          source: 'support',
+        }).onConflictDoUpdate({
+          target: [contacts.company_id, contacts.email],
+          set: {
+            name: (input.name as string) ?? undefined,
+            lead_status: (input.lead_status as string) ?? undefined,
+          },
+        });
+        return `Contact saved: ${input.name ?? input.email} <${input.email}>${input.notes ? ` | Notes: ${input.notes}` : ''}`;
+      } catch (err) {
+        return `Failed to add contact: ${err instanceof Error ? err.message : 'Unknown error'}`;
+      }
     }
 
     default:

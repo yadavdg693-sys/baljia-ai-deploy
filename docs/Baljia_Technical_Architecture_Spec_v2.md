@@ -200,7 +200,7 @@ CREATE TABLE documents (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   company_id    UUID REFERENCES companies(id) NOT NULL,
   doc_type      VARCHAR(50) NOT NULL,
-  -- core types: mission | product_overview | tech_notes | brand_voice | user_research
+  -- core types: mission | product_overview | tech_notes | brand_voice | market_research
   -- other: market_research | custom | user_context (possible alias/hidden surface)
   title         VARCHAR(500),
   content       TEXT,
@@ -211,7 +211,7 @@ CREATE TABLE documents (
   updated_at    TIMESTAMPTZ DEFAULT now()
 );
 CREATE UNIQUE INDEX idx_documents_company_type ON documents(company_id, doc_type)
-  WHERE doc_type IN ('mission', 'product_overview', 'tech_notes', 'brand_voice', 'user_research');
+  WHERE doc_type IN ('mission', 'product_overview', 'tech_notes', 'brand_voice', 'market_research');
 ```
 
 ### `document_suggestions`

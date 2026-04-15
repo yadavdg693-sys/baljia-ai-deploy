@@ -6,7 +6,7 @@
 // Env: META_ADS_ACCESS_TOKEN, META_ADS_ACCOUNT_ID
 
 import type { Task } from '@/types';
-import { db, adCampaigns, platformEvents } from '@/lib/db';
+import { db, adCampaigns, adSpendLedger, platformEvents } from '@/lib/db';
 import { eq, and, desc } from 'drizzle-orm';
 import { createLogger } from '@/lib/logger';
 
@@ -218,6 +218,60 @@ export function getMetaAdsTools() {
         required: ['ad_id', 'reason'],
       },
     },
+    // ── Video creative tools (KG spec: upload_ad_video, create_video_creative, save_ad, add_captions) ──
+    {
+      name: 'upload_ad_video',
+      description: 'Upload a video file to Meta\'s ad library for use in video ads. Accepts a public URL to the video (e.g. R2/S3 bucket). Returns a video ID.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          video_url: { type: 'string' as const, description: 'Public HTTPS URL of the video file (MP4)' },
+          title: { type: 'string' as const, description: 'Video title for Meta\'s library' },
+        },
+        required: ['video_url', 'title'],
+      },
+    },
+    {
+      name: 'create_video_creative',
+      description: 'Create a video ad creative from an uploaded video. Combines video with copy, CTA, and landing page URL.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          video_id: { type: 'string' as const, description: 'Meta video ID (from upload_ad_video)' },
+          headline: { type: 'string' as const, description: 'Ad headline (max 40 chars)' },
+          body: { type: 'string' as const, description: 'Primary ad text (max 125 chars)' },
+          cta: { type: 'string' as const, description: 'Call to action: LEARN_MORE, SIGN_UP, SHOP_NOW, GET_OFFER (default: LEARN_MORE)' },
+          link_url: { type: 'string' as const, description: 'Landing page URL' },
+          page_id: { type: 'string' as const, description: 'Facebook Page ID to post from' },
+        },
+        required: ['video_id', 'headline', 'body', 'link_url', 'page_id'],
+      },
+    },
+    {
+      name: 'save_ad',
+      description: 'Save ad performance notes and creative details to the local database for tracking and iteration.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          ad_id: { type: 'string' as const, description: 'Ad ID' },
+          creative_angle: { type: 'string' as const, description: 'Creative angle used (e.g. "problem-solution", "social-proof", "urgency")' },
+          notes: { type: 'string' as const, description: 'Notes about this ad creative or targeting' },
+        },
+        required: ['ad_id', 'creative_angle'],
+      },
+    },
+    {
+      name: 'add_captions',
+      description: 'Add auto-generated captions to a video in Meta\'s ad library. Meta generates captions from audio automatically.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          video_id: { type: 'string' as const, description: 'Meta video ID to add captions to' },
+          locale: { type: 'string' as const, description: 'Language locale for captions (default: en_US)' },
+        },
+        required: ['video_id'],
+      },
+    },
   ];
 }
 
@@ -258,6 +312,17 @@ export async function handleMetaAdsTool(
           const metaCampaignId = (result as { id?: string }).id;
           if (metaCampaignId) {
             await db.update(adCampaigns).set({ external_id: metaCampaignId }).where(eq(adCampaigns.id, data.id));
+
+            // H-BILLING-001: Record initial spend entry in ad_spend_ledger
+            await db.insert(adSpendLedger).values({
+              company_id: task.company_id,
+              campaign_id: data.id,
+              daily_budget: String(budget),
+              actual_spend: '0',
+              platform_fee: '0',
+              charge_date: new Date().toISOString().split('T')[0],
+            });
+
             log.info('Campaign created on Meta', { metaId: metaCampaignId, localId: data.id });
             return `✅ Campaign created on Meta (ID: ${metaCampaignId}): "${input.name}" | Budget: $${budget}/day | Status: PAUSED (activate when ready)`;
           }
@@ -279,7 +344,7 @@ export async function handleMetaAdsTool(
             campaign_id: input.campaign_id,
             billing_event: 'IMPRESSIONS',
             optimization_goal: 'LINK_CLICKS',
-            daily_budget: 1000, // in cents
+            daily_budget: Math.round(((input.daily_budget as number) ?? 10) * 100), // Meta expects cents
             targeting: {
               age_min: (input.age_min as number) ?? 18,
               age_max: (input.age_max as number) ?? 65,
@@ -299,7 +364,43 @@ export async function handleMetaAdsTool(
     }
 
     case 'create_ad': {
-      return `Ad "${input.name}" created in ad set ${input.adset_id}.\nHeadline: ${input.headline}\nBody: ${(input.body as string).substring(0, 100)}\nCTA: ${input.cta ?? 'LEARN_MORE'}\nLink: ${input.link_url}`;
+      if (isMetaConfigured() && input.adset_id) {
+        try {
+          // Look up or create a creative, then create the ad
+          const accountId = getAccountId();
+          const creative = await metaGraphRequest(`/${accountId}/adcreatives`, 'POST', {
+            name: `Creative — ${input.headline}`,
+            object_story_spec: {
+              page_id: input.page_id ?? undefined,
+              link_data: {
+                message: input.body,
+                link: input.link_url,
+                name: input.headline,
+                call_to_action: { type: (input.cta as string) ?? 'LEARN_MORE', value: { link: input.link_url } },
+              },
+            },
+          });
+
+          const creativeId = (creative as { id?: string }).id;
+          if (creativeId) {
+            const adResult = await metaGraphRequest(`/${accountId}/ads`, 'POST', {
+              name: input.name,
+              adset_id: input.adset_id,
+              creative: { creative_id: creativeId },
+              status: 'PAUSED',
+            });
+            const adId = (adResult as { id?: string }).id;
+            log.info('Ad created on Meta', { adId, companyId: task.company_id });
+            return `✅ Ad "${input.name}" created on Meta (ID: ${adId})\nHeadline: ${input.headline}\nCTA: ${input.cta ?? 'LEARN_MORE'} → ${input.link_url}`;
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : 'Unknown';
+          log.warn('Meta ad creation failed', { error: msg });
+          return `Ad planned locally: "${input.name}"\nMeta API error: ${msg}. Will sync when resolved.`;
+        }
+      }
+
+      return `Ad "${input.name}" planned for ad set ${input.adset_id}.\nHeadline: ${input.headline}\nBody: ${(input.body as string).substring(0, 100)}\nCTA: ${input.cta ?? 'LEARN_MORE'}\nLink: ${input.link_url}\nConnect Meta API to create on platform.`;
     }
 
     case 'activate_campaign': {
@@ -464,6 +565,21 @@ export async function handleMetaAdsTool(
         ctr: String((input.ctr as number) ?? 0),
         cpc: String((input.cpc as number) ?? 0),
       }).where(and(eq(adCampaigns.id, input.ad_id as string), eq(adCampaigns.company_id, task.company_id)));
+
+      // H-BILLING-001: Record spend in ad_spend_ledger if there's actual spend
+      const spend = (input.spend as number) ?? 0;
+      if (spend > 0) {
+        const fee = +(spend * 0.20).toFixed(2); // 20% platform fee
+        await db.insert(adSpendLedger).values({
+          company_id: task.company_id,
+          campaign_id: input.ad_id as string,
+          daily_budget: '0',
+          actual_spend: String(spend),
+          platform_fee: String(fee),
+          charge_date: new Date().toISOString().split('T')[0],
+        });
+      }
+
       return `Metrics updated for ad ${input.ad_id}.`;
     }
 
@@ -488,7 +604,7 @@ export async function handleMetaAdsTool(
     case 'delete_ad': {
       // Log the deletion audit record
       await db.insert(platformEvents).values({
-        company_id: task.company_id, event_type: 'task_completed',
+        company_id: task.company_id, event_type: 'ad_deleted',
         payload: { type: 'ad_deleted', ad_id: input.ad_id, reason: input.reason, task_id: task.id },
         is_public_safe: false,
       });
@@ -504,6 +620,94 @@ export async function handleMetaAdsTool(
       }
 
       return `Ad ${input.ad_id} deletion recorded (reason: ${input.reason}). Connect Meta API to delete on platform.`;
+    }
+
+    // ── Video creative tools ──
+    case 'upload_ad_video': {
+      if (!isMetaConfigured()) {
+        return `[Meta] Would upload video from URL: ${input.video_url}. Configure META_ADS_ACCESS_TOKEN and META_ADS_ACCOUNT_ID.`;
+      }
+
+      try {
+        const accountId = getAccountId();
+        const data = await metaGraphRequest(`/${accountId}/advideos`, 'POST', {
+          file_url: input.video_url,
+          title: input.title,
+        });
+
+        const videoId = data.id as string;
+        log.info('Ad video uploaded', { videoId, title: input.title, companyId: task.company_id });
+        return `✅ Video uploaded to Meta library!\nVideo ID: ${videoId}\nTitle: ${input.title}\nUse this ID with create_video_creative.`;
+      } catch (err) {
+        return `Video upload failed: ${err instanceof Error ? err.message : 'Unknown error'}`;
+      }
+    }
+
+    case 'create_video_creative': {
+      if (!isMetaConfigured()) {
+        return `[Meta] Would create video creative with video ID: ${input.video_id}. Configure Meta credentials.`;
+      }
+
+      try {
+        const accountId = getAccountId();
+        const cta = (input.cta as string) ?? 'LEARN_MORE';
+        const data = await metaGraphRequest(`/${accountId}/adcreatives`, 'POST', {
+          name: `Video Creative — ${input.headline}`,
+          object_story_spec: {
+            page_id: input.page_id,
+            video_data: {
+              video_id: input.video_id,
+              title: input.headline,
+              message: input.body,
+              call_to_action: {
+                type: cta,
+                value: { link: input.link_url },
+              },
+            },
+          },
+        });
+
+        const creativeId = data.id as string;
+        log.info('Video creative created', { creativeId, companyId: task.company_id });
+        return `✅ Video creative created!\nCreative ID: ${creativeId}\nHeadline: ${input.headline}\nCTA: ${cta} → ${input.link_url}\nUse this creative ID when calling create_ad.`;
+      } catch (err) {
+        return `Video creative creation failed: ${err instanceof Error ? err.message : 'Unknown error'}`;
+      }
+    }
+
+    case 'save_ad': {
+      // Save ad notes to platform events for tracking
+      await db.insert(platformEvents).values({
+        company_id: task.company_id,
+        event_type: 'ad_saved',
+        payload: {
+          ad_id: input.ad_id,
+          creative_angle: input.creative_angle,
+          notes: input.notes ?? null,
+          saved_at: new Date().toISOString(),
+        },
+        is_public_safe: false,
+      });
+
+      return `Ad ${input.ad_id} saved.\nCreative angle: ${input.creative_angle}\nNotes: ${input.notes ?? 'none'}`;
+    }
+
+    case 'add_captions': {
+      if (!isMetaConfigured()) {
+        return `[Meta] Would add captions to video ID: ${input.video_id}. Configure Meta credentials.`;
+      }
+
+      try {
+        const locale = (input.locale as string) ?? 'en_US';
+        await metaGraphRequest(`/${input.video_id}/captions`, 'POST', {
+          captions_locale: locale,
+          generate: true, // Meta auto-generates from audio
+        });
+
+        return `✅ Captions generation triggered for video ${input.video_id} (locale: ${locale}). Meta will process the audio automatically.`;
+      } catch (err) {
+        return `Caption generation failed: ${err instanceof Error ? err.message : 'Unknown error — Meta add_captions may take a few minutes to process'}`;
+      }
     }
 
     default:

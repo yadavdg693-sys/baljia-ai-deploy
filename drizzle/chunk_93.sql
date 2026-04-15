@@ -1,0 +1,1 @@
+ALTER TABLE "task_failure_links" ADD CONSTRAINT "task_failure_links_fingerprint_id_failure_fingerprints_id_fk" FOREIGN KEY ("fingerprint_id") REFERENCES "public"."failure_fingerprints"("id") ON DELETE no action ON UPDATE no action;

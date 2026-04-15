@@ -2,8 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import * as taskService from '@/lib/services/task.service';
 import { updateTaskSchema } from '@/lib/validations';
 import { requireAuth, requireCompanyOwnership, parseJsonBody, isApiError } from '@/lib/api-utils';
+import { isValidUUID } from '@/lib/uuid-validation';
 
 async function getTaskWithAuth(taskId: string) {
+  // H-SEC-003: UUID validation before DB query
+  if (!isValidUUID(taskId)) {
+    return { error: NextResponse.json({ error: 'Invalid taskId format' }, { status: 400 }) } as const;
+  }
   const auth = await requireAuth();
   if (isApiError(auth)) return { error: auth } as const;
 

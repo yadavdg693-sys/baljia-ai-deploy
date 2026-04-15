@@ -1,0 +1,1 @@
+CREATE INDEX "idx_sessions_company" ON "sessions" USING btree ("company_id");

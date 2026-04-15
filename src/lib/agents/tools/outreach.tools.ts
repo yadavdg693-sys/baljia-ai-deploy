@@ -140,6 +140,15 @@ export async function handleOutreachTool(
       if (wordCount > 200) return `Email too long (${wordCount} words). Keep to 50-125 words.`;
       if (!input.personalization_hook) return 'Missing personalization hook.';
 
+      // G-CONTENT-003: Block emails to unsubscribed contacts (CAN-SPAM)
+      const [unsub] = await db.select({ lead_status: contacts.lead_status })
+        .from(contacts)
+        .where(and(eq(contacts.company_id, task.company_id), eq(contacts.email, input.to as string)))
+        .limit(1);
+      if (unsub?.lead_status === 'unsubscribed') {
+        return `Cannot email ${input.to}: contact has UNSUBSCRIBED. Sending to opted-out contacts violates CAN-SPAM. Remove from list.`;
+      }
+
       // Check daily limit
       const today = new Date().toISOString().split('T')[0];
       const [countResult] = await db.select({ count: sql<number>`count(*)::int` }).from(emailThreads)
@@ -153,12 +162,16 @@ export async function handleOutreachTool(
         return `Daily outreach limit reached (${countResult?.count}/2). Wait until tomorrow.`;
       }
 
-      // Send via Postmark (sendEmail logs the outbound thread record — no manual insert needed)
+      // G-CONTENT-003: CAN-SPAM compliance — append unsubscribe footer
+      const canSpamFooter = '\n\n---\nIf you\'d prefer not to receive future emails, reply with "unsubscribe".';
+      const fullBody = body + canSpamFooter;
+
+      // Send via Postmark
       let messageId = 'not-sent';
       try {
         const result = await sendEmail({
           to: input.to as string, from: 'outreach@baljia.app',
-          subject: input.subject as string, textBody: body,
+          subject: input.subject as string, textBody: fullBody,
           companyId: task.company_id, tag: 'cold-outreach',
         });
         messageId = result.messageId;
@@ -166,9 +179,16 @@ export async function handleOutreachTool(
         return `Email logged but send failed: ${sendErr instanceof Error ? sendErr.message : 'Unknown error'}`;
       }
 
-      // Update contact status
-      await db.update(contacts).set({ lead_status: 'contacted' })
-        .where(and(eq(contacts.company_id, task.company_id), eq(contacts.email, input.to as string)));
+      // H-LOGIC-006: Only advance status from 'new' → 'contacted' (don't regress 'qualified' / 'converted')
+      const [existingContact] = await db.select({ lead_status: contacts.lead_status })
+        .from(contacts)
+        .where(and(eq(contacts.company_id, task.company_id), eq(contacts.email, input.to as string)))
+        .limit(1);
+
+      if (existingContact?.lead_status === 'new') {
+        await db.update(contacts).set({ lead_status: 'contacted' })
+          .where(and(eq(contacts.company_id, task.company_id), eq(contacts.email, input.to as string)));
+      }
 
       return `Outreach email sent to ${input.to} (${wordCount} words, messageId: ${messageId})\nHook: ${input.personalization_hook}`;
     }

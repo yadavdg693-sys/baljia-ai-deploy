@@ -1,0 +1,1 @@
+ALTER TABLE "agent_tool_mounts" ADD CONSTRAINT "agent_tool_mounts_mcp_server_id_mcp_servers_id_fk" FOREIGN KEY ("mcp_server_id") REFERENCES "public"."mcp_servers"("id") ON DELETE no action ON UPDATE no action;

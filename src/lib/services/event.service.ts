@@ -1,30 +1,13 @@
 // Event Service — migrated to Drizzle + Neon
-// Dual-write: Neon (persistence) + Upstash Redis (real-time pub/sub)
+// Dual-write: Neon (persistence) + Redis Cloud (real-time pub/sub)
 
 import { db, platformEvents } from '@/lib/db';
 import { eq, gt, desc, and } from 'drizzle-orm';
 import type { EventType, PlatformEvent } from '@/types';
+import { getRedis } from '@/lib/redis';
 
 const REDIS_CHANNEL = (companyId: string) => `events:${companyId}`;
 const REDIS_PUBLIC_CHANNEL = 'events:public';
-
-// Redis lazy singleton
-let redisClient: import('@upstash/redis').Redis | null = null;
-
-function getRedis(): import('@upstash/redis').Redis | null {
-  if (redisClient) return redisClient;
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (!url || !token) return null;
-
-  try {
-    const { Redis } = require('@upstash/redis');
-    redisClient = new Redis({ url, token });
-    return redisClient;
-  } catch {
-    return null;
-  }
-}
 
 // ══════════════════════════════════════════════
 // EMIT
@@ -36,10 +19,18 @@ export async function emit(
   payload: Record<string, unknown>,
   isPublic = false
 ): Promise<PlatformEvent> {
+  const finalPayload = { ...payload };
+  if (isPublic) {
+    delete finalPayload.owner_id;
+    delete finalPayload.stripe_event_id;
+    delete finalPayload.neon_connection_string;
+    delete finalPayload.company_id;
+  }
+
   const [event] = await db.insert(platformEvents).values({
     company_id: companyId,
     event_type: eventType,
-    payload,
+    payload: finalPayload,
     is_public_safe: isPublic,
   }).returning();
 
@@ -49,7 +40,7 @@ export async function emit(
     const message = JSON.stringify({
       id: event.id,
       event_type: eventType,
-      payload,
+      payload: finalPayload,
       is_public_safe: isPublic,
       created_at: event.created_at,
     });

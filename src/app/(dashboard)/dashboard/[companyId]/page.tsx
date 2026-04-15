@@ -13,14 +13,45 @@ export default async function CompanyDashboard({ params }: Props) {
   const user = await getSessionFromCookies();
   if (!user) redirect('/login');
 
-  // Load company
+  // C3-FIX: Load company WITH ownership check — prevents cross-tenant dashboard access
   const [company] = await db
-    .select()
+    .select({
+      id: companies.id,
+      owner_id: companies.owner_id,
+      name: companies.name,
+      slug: companies.slug,
+      one_liner: companies.one_liner,
+      original_idea: companies.original_idea,
+      claim_status: companies.claim_status,
+      onboarding_status: companies.onboarding_status,
+      plan_tier: companies.plan_tier,
+      lifecycle: companies.lifecycle,
+      execution_state: companies.execution_state,
+      billing_state: companies.billing_state,
+      hosting_state: companies.hosting_state,
+      company_stage: companies.company_stage,
+      subdomain: companies.subdomain,
+      email_identity: companies.email_identity,
+      company_email: companies.company_email,
+      github_repo: companies.github_repo,
+      render_service_id: companies.render_service_id,
+      custom_domain: companies.custom_domain,
+      timezone: companies.timezone,
+      created_at: companies.created_at,
+      updated_at: companies.updated_at,
+      deleted_at: companies.deleted_at,
+    })
     .from(companies)
-    .where(eq(companies.id, companyId))
+    .where(and(eq(companies.id, companyId), eq(companies.owner_id, user.id)))
     .limit(1);
 
   if (!company) redirect('/onboarding');
+
+  // If company was created via quick-start but pipeline hasn't run yet,
+  // redirect to onboarding to auto-resume the pipeline
+  if (company.onboarding_status === 'pending_auth') {
+    redirect(`/onboarding?resume=${company.id}`);
+  }
 
   // Load tasks, documents, reports, credit balance in parallel
   const sevenDaysAgo = new Date();

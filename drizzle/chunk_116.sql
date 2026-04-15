@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "idx_memory_company_layer" ON "memory_layers" USING btree ("company_id","layer");

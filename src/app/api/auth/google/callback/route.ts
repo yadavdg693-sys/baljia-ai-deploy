@@ -55,7 +55,7 @@ export async function GET(request: NextRequest) {
     const profile = await profileRes.json() as { id: string; email: string; name?: string; picture?: string; verified_email?: boolean };
 
     // Reject unverified Google emails to prevent account-linking attacks
-    if (profile.verified_email === false) {
+    if (profile.verified_email !== true) {
       return NextResponse.redirect(new URL('/login?error=email_not_verified', request.url));
     }
 

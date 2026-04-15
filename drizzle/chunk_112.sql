@@ -1,0 +1,1 @@
+CREATE INDEX "idx_email_threads_company" ON "email_threads" USING btree ("company_id");

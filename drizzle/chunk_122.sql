@@ -1,0 +1,1 @@
+CREATE INDEX "idx_milestones_phase" ON "milestones" USING btree ("roadmap_id","phase","sort_order");

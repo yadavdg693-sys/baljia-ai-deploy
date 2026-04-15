@@ -1,5 +1,5 @@
 // Drizzle ORM Schema — mirrors all 35 Baljia tables
-// Generated from supabase/migrations/00001-00004
+// Generated from docs/legacy/supabase/migrations/00001-00004 (migrated to Neon/Drizzle)
 
 import {
   pgTable, uuid, text, varchar, integer, boolean,
@@ -45,6 +45,23 @@ export const magicLinkTokens = pgTable('magic_link_tokens', {
 ]);
 
 // ══════════════════════════════════════════════
+// WAITLIST — pre-auth email capture before onboarding
+// ══════════════════════════════════════════════
+export const waitlist = pgTable('waitlist', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  email: varchar('email', { length: 255 }).notNull(),
+  onboarding_intent: varchar('onboarding_intent', { length: 50 }),  // surprise_me, build_my_idea, grow_my_company
+  idea_text: text('idea_text'),
+  business_website: varchar('business_website', { length: 500 }),
+  timezone: varchar('timezone', { length: 100 }),
+  ip_address: varchar('ip_address', { length: 45 }),
+  converted_user_id: uuid('converted_user_id').references(() => users.id),
+  converted_company_id: uuid('converted_company_id'),
+  status: varchar('status', { length: 20 }).default('pending').notNull(), // pending, converted, expired
+  created_at: timestamp('created_at', { withTimezone: true }).defaultNow(),
+});
+
+// ══════════════════════════════════════════════
 // COMPANIES
 // ══════════════════════════════════════════════
 export const companies = pgTable('companies', {
@@ -56,6 +73,7 @@ export const companies = pgTable('companies', {
   original_idea: text('original_idea'),
   claim_status: varchar('claim_status', { length: 50 }).default('owned'),
   onboarding_status: varchar('onboarding_status', { length: 50 }).default('initializing'),
+  onboarding_journey: varchar('onboarding_journey', { length: 50 }),  // surprise_me, build_my_idea, grow_my_company — persisted for pending_auth resume
   plan_tier: varchar('plan_tier', { length: 50 }).default('free'),
   lifecycle: varchar('lifecycle', { length: 50 }).default('trial_active'),
   execution_state: varchar('execution_state', { length: 50 }).default('active'),
@@ -104,7 +122,7 @@ export const tasks = pgTable('tasks', {
   description: text('description'),
   tag: varchar('tag', { length: 50 }).notNull(),
   task_type: varchar('task_type', { length: 50 }),
-  status: varchar('status', { length: 50 }).default('created'),
+  status: varchar('status', { length: 50 }).default('todo'),
   priority: integer('priority').default(0),
   complexity: integer('complexity'),
   queue_order: integer('queue_order'),
@@ -117,12 +135,16 @@ export const tasks = pgTable('tasks', {
   estimated_credits: integer('estimated_credits').default(1),
   actual_credits_charged: integer('actual_credits_charged').default(0),
   verification_level: varchar('verification_level', { length: 50 }),
+  refund_policy: varchar('refund_policy', { length: 50 }).default('manual_review'),
   failure_class: varchar('failure_class', { length: 50 }),
   related_task_ids: jsonb('related_task_ids').$type<string[]>(), // UUID[] stored as JSON array
   run_link: varchar('run_link', { length: 500 }),
   markdown_link: varchar('markdown_link', { length: 500 }),
+  authorized_by: varchar('authorized_by', { length: 50 }),  // 'founder', 'night_shift', 'recurring', 'remediation', 'system'
+  authorization_reason: text('authorization_reason'),       // human-readable: "Founder approved via dashboard", "Night shift gap-fill", etc.
   max_turns: integer('max_turns').default(200),
   turn_count: integer('turn_count').default(0),
+  repair_attempt_count: integer('repair_attempt_count').default(0), // SPEC-CTRL-106: max 100 per scope
   started_at: timestamp('started_at', { withTimezone: true }),
   completed_at: timestamp('completed_at', { withTimezone: true }),
   created_at: timestamp('created_at', { withTimezone: true }).defaultNow(),
@@ -234,9 +256,16 @@ export const learnings = pgTable('learnings', {
   task_id: uuid('task_id').references(() => tasks.id),
   agent_id: integer('agent_id').references(() => agents.id),
   category: varchar('category', { length: 100 }),
-  tags: jsonb('tags').$type<string[]>(), // string array stored as JSON
+  // SPEC-CTRL-105: learning_type classification
+  learning_type: varchar('learning_type', { length: 50 }).default('domain_knowledge'),
+  tags: jsonb('tags').$type<string[]>(),
   content: text('content').notNull(),
   confidence: varchar('confidence', { length: 20 }).default('medium'),
+  // SPEC-CTRL-105: usage tracking
+  usage_count: integer('usage_count').default(0),
+  last_referenced_at: timestamp('last_referenced_at', { withTimezone: true }),
+  // SPEC-CTRL-105: lifecycle status (active | superseded | archived)
+  status: varchar('status', { length: 20 }).default('active'),
   created_at: timestamp('created_at', { withTimezone: true }).defaultNow(),
 }, (t) => [
   index('idx_learnings_company').on(t.company_id),
@@ -272,9 +301,11 @@ export const creditLedger = pgTable('credit_ledger', {
   balance_after: integer('balance_after').notNull(),
   task_id: uuid('task_id').references(() => tasks.id),
   description: text('description'),
+  idempotency_key: varchar('idempotency_key', { length: 100 }),
   created_at: timestamp('created_at', { withTimezone: true }).defaultNow(),
 }, (t) => [
   index('idx_credit_ledger_company').on(t.company_id),
+  uniqueIndex('idx_credit_ledger_idempotency').on(t.idempotency_key),
 ]);
 
 // ══════════════════════════════════════════════
@@ -460,6 +491,9 @@ export const failureFingerprints = pgTable('failure_fingerprints', {
   affected_tools: jsonb('affected_tools').$type<string[]>(),  // text[] stored as JSON
   fix_status: varchar('fix_status', { length: 50 }).default('open'),
   regression_sensitive: boolean('regression_sensitive').default(false),
+  root_cause: text('root_cause'),
+  fix_notes: text('fix_notes'),
+  fix_applied_at: timestamp('fix_applied_at', { withTimezone: true }),
   first_seen_at: timestamp('first_seen_at', { withTimezone: true }).defaultNow(),
   last_seen_at: timestamp('last_seen_at', { withTimezone: true }).defaultNow(),
 });
@@ -538,7 +572,8 @@ export const platformEvents = pgTable('platform_events', {
   event_type: varchar('event_type', { length: 100 }).notNull(),
   company_id: uuid('company_id').references(() => companies.id),
   payload: jsonb('payload').notNull(),
-  is_public_safe: boolean('is_public_safe').default(false),
+  // Physical column renamed to `is_public` in migration 00002; JS field kept as is_public_safe.
+  is_public_safe: boolean('is_public').default(false),
   created_at: timestamp('created_at', { withTimezone: true }).defaultNow(),
 }, (t) => [
   index('idx_events_company').on(t.company_id),
@@ -593,4 +628,193 @@ export const tweets = pgTable('tweets', {
   created_at: timestamp('created_at', { withTimezone: true }).defaultNow(),
 }, (t) => [
   index('idx_tweets_company').on(t.company_id),
+]);
+
+// ══════════════════════════════════════════════
+// ROADMAPS — one per company, archetype-driven
+// ══════════════════════════════════════════════
+export const roadmaps = pgTable('roadmaps', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  company_id: uuid('company_id').notNull().references(() => companies.id, { onDelete: 'cascade' }),
+  archetype: varchar('archetype', { length: 50 }).notNull().default('saas'),
+  title: varchar('title', { length: 500 }).notNull(),
+  description: text('description'),
+  status: varchar('status', { length: 50 }).notNull().default('active'),
+  current_phase: integer('current_phase').notNull().default(1),
+  total_phases: integer('total_phases').notNull().default(5),
+  created_at: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow(),
+}, (t) => [
+  uniqueIndex('idx_roadmaps_company').on(t.company_id),
+  index('idx_roadmaps_status').on(t.status),
+]);
+
+// ══════════════════════════════════════════════
+// MILESTONES — ordered list per roadmap
+// ══════════════════════════════════════════════
+export const milestones = pgTable('milestones', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  roadmap_id: uuid('roadmap_id').notNull().references(() => roadmaps.id, { onDelete: 'cascade' }),
+  company_id: uuid('company_id').notNull().references(() => companies.id, { onDelete: 'cascade' }),
+  phase: integer('phase').notNull(),
+  sort_order: integer('sort_order').notNull().default(0),
+  title: varchar('title', { length: 500 }).notNull(),
+  description: text('description'),
+  status: varchar('status', { length: 50 }).notNull().default('pending'),
+  suggested_task_tags: jsonb('suggested_task_tags').$type<string[]>().default([]),
+  night_shift_hint: text('night_shift_hint'),
+  started_at: timestamp('started_at', { withTimezone: true }),
+  completed_at: timestamp('completed_at', { withTimezone: true }),
+  created_at: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow(),
+}, (t) => [
+  index('idx_milestones_roadmap').on(t.roadmap_id),
+  index('idx_milestones_company').on(t.company_id),
+  index('idx_milestones_status').on(t.status),
+  index('idx_milestones_phase').on(t.roadmap_id, t.phase, t.sort_order),
+]);
+
+// ══════════════════════════════════════════════
+// MILESTONE CRITERIA — checklist items per milestone
+// ══════════════════════════════════════════════
+export const milestoneCriteria = pgTable('milestone_criteria', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  milestone_id: uuid('milestone_id').notNull().references(() => milestones.id, { onDelete: 'cascade' }),
+  title: varchar('title', { length: 500 }).notNull(),
+  description: text('description'),
+  auto_evaluatable: boolean('auto_evaluatable').default(false),
+  evaluation_query: jsonb('evaluation_query'),
+  is_met: boolean('is_met').default(false),
+  met_at: timestamp('met_at', { withTimezone: true }),
+  evidence: jsonb('evidence'),
+  created_at: timestamp('created_at', { withTimezone: true }).defaultNow(),
+}, (t) => [
+  index('idx_criteria_milestone').on(t.milestone_id),
+  index('idx_criteria_status').on(t.is_met),
+]);
+
+// ══════════════════════════════════════════════
+// SESSIONS — runtime container for one execution context (SPEC-CTRL-102)
+// ══════════════════════════════════════════════
+export const sessions = pgTable('sessions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  company_id: uuid('company_id').notNull().references(() => companies.id),
+  task_id: uuid('task_id').notNull().references(() => tasks.id),
+  session_type: varchar('session_type', { length: 50 }).notNull(), // execution | verification | remediation
+  status: varchar('status', { length: 50 }).default('active').notNull(),
+  context_packet_version: integer('context_packet_version').default(1),
+  permission_snapshot: jsonb('permission_snapshot'),
+  started_at: timestamp('started_at', { withTimezone: true }).defaultNow(),
+  ended_at: timestamp('ended_at', { withTimezone: true }),
+}, (t) => [
+  index('idx_sessions_task').on(t.task_id),
+  index('idx_sessions_company').on(t.company_id),
+  index('idx_sessions_status').on(t.status),
+]);
+
+// ══════════════════════════════════════════════
+// RUNS — one concrete execution attempt within a session (SPEC-CTRL-102)
+// ══════════════════════════════════════════════
+export const runs = pgTable('runs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  session_id: uuid('session_id').notNull().references(() => sessions.id),
+  task_id: uuid('task_id').notNull().references(() => tasks.id),
+  attempt_number: integer('attempt_number').notNull().default(1),
+  status: varchar('status', { length: 50 }).default('running').notNull(),
+  agent_id: integer('agent_id').references(() => agents.id),
+  execution_mode: varchar('execution_mode', { length: 50 }).notNull(),
+  started_at: timestamp('started_at', { withTimezone: true }).defaultNow(),
+  ended_at: timestamp('ended_at', { withTimezone: true }),
+  failure_class: varchar('failure_class', { length: 50 }),
+  turn_count: integer('turn_count').default(0),
+  token_usage: jsonb('token_usage'),
+  wall_clock_seconds: integer('wall_clock_seconds'),
+  error_summary: text('error_summary'),
+  created_at: timestamp('created_at', { withTimezone: true }).defaultNow(),
+}, (t) => [
+  index('idx_runs_session').on(t.session_id),
+  index('idx_runs_task').on(t.task_id),
+  index('idx_runs_status').on(t.status),
+]);
+
+// ══════════════════════════════════════════════
+// ARTIFACTS — durable output or evidence linked to a run (SPEC-CTRL-102)
+// ══════════════════════════════════════════════
+export const artifacts = pgTable('artifacts', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  run_id: uuid('run_id').notNull().references(() => runs.id),
+  task_id: uuid('task_id').notNull().references(() => tasks.id),
+  artifact_type: varchar('artifact_type', { length: 50 }).notNull(), // report | screenshot | log | receipt | code
+  content_ref: text('content_ref'),
+  evidence: jsonb('evidence'),
+  created_at: timestamp('created_at', { withTimezone: true }).defaultNow(),
+}, (t) => [
+  index('idx_artifacts_run').on(t.run_id),
+  index('idx_artifacts_task').on(t.task_id),
+]);
+
+// ══════════════════════════════════════════════
+// APPROVAL RECORDS — stored approval lineage for risky work (SPEC-CTRL-102)
+// ══════════════════════════════════════════════
+export const approvalRecords = pgTable('approval_records', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  task_id: uuid('task_id').notNull().references(() => tasks.id),
+  risk_class: varchar('risk_class', { length: 50 }).notNull(),
+  approved_by: varchar('approved_by', { length: 50 }).notNull(), // founder | auto | governance
+  approved_at: timestamp('approved_at', { withTimezone: true }).defaultNow(),
+  expires_at: timestamp('expires_at', { withTimezone: true }),
+  status: varchar('status', { length: 50 }).default('active').notNull(),
+}, (t) => [
+  index('idx_approval_records_task').on(t.task_id),
+]);
+
+// ══════════════════════════════════════════════
+// RUNTIME AI COSTS — per-call LLM cost tracking (SPEC-BILL-105)
+// ══════════════════════════════════════════════
+export const runtimeAiCosts = pgTable('runtime_ai_costs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  company_id: uuid('company_id').notNull().references(() => companies.id),
+  task_id: uuid('task_id').references(() => tasks.id),
+  execution_id: uuid('execution_id'),
+  model: varchar('model', { length: 100 }).notNull(),
+  input_tokens: integer('input_tokens').default(0).notNull(),
+  output_tokens: integer('output_tokens').default(0).notNull(),
+  cost_usd: decimal('cost_usd', { precision: 10, scale: 6 }).default('0').notNull(),
+  created_at: timestamp('created_at', { withTimezone: true }).defaultNow(),
+}, (t) => [
+  index('idx_runtime_ai_costs_company').on(t.company_id),
+  index('idx_runtime_ai_costs_task').on(t.task_id),
+]);
+
+// ══════════════════════════════════════════════
+// KNOWN ISSUE REGISTRY — clustered failure families (SPEC-OPS-001)
+// ══════════════════════════════════════════════
+export const knownIssueRegistry = pgTable('known_issue_registry', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  fingerprint_pattern: varchar('fingerprint_pattern', { length: 255 }).notNull().unique(),
+  description: text('description'),
+  fix_status: varchar('fix_status', { length: 50 }).default('open').notNull(),
+  fix_commit: varchar('fix_commit', { length: 100 }),
+  regression_count: integer('regression_count').default(0).notNull(),
+  resolved_at: timestamp('resolved_at', { withTimezone: true }),
+  created_at: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow(),
+}, (t) => [
+  index('idx_known_issue_registry_status').on(t.fix_status),
+]);
+
+// ══════════════════════════════════════════════
+// USER SESSIONS — JWT session revocation (G-SEC-003)
+// ══════════════════════════════════════════════
+export const userSessions = pgTable('user_sessions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  user_id: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  jti: varchar('jti', { length: 64 }).notNull().unique(),
+  is_active: boolean('is_active').default(true).notNull(),
+  expires_at: timestamp('expires_at', { withTimezone: true }).notNull(),
+  revoked_at: timestamp('revoked_at', { withTimezone: true }),
+  created_at: timestamp('created_at', { withTimezone: true }).defaultNow(),
+}, (t) => [
+  index('idx_user_sessions_user').on(t.user_id),
+  index('idx_user_sessions_jti').on(t.jti),
 ]);

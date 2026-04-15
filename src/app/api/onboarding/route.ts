@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
+import { db, companies } from '@/lib/db';
+import { eq } from 'drizzle-orm';
 import * as companyService from '@/lib/services/company.service';
 import * as creditService from '@/lib/services/credit.service';
 import * as eventService from '@/lib/services/event.service';
@@ -19,11 +21,32 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
+  // Capture request IP for silent GeoIP enrichment (best-effort, never blocks)
+  const requestIp =
+    request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
+    request.headers.get('x-real-ip') ??
+    null;
+  const timezone = parsed.data.timezone ?? null;
+
   // Check if user already has a company
   const existing = await companyService.getCompaniesByOwner(auth.user.id);
+
   if (existing.length > 0) {
+    const company = existing[0];
+
+    // If company was created via quick-start (pending_auth), resume the pipeline now
+    if (company.onboarding_status === 'pending_auth') {
+      // Use stored journey from quick-start, falling back to POST body
+      const resolvedJourney = company.onboarding_journey ?? parsed.data.journey;
+      const input = parsed.data.idea ?? parsed.data.business_url ?? company.original_idea;
+      runOnboardingPipeline(company.id, auth.user.id, resolvedJourney, input ?? undefined, requestIp, timezone).catch(() => {
+        // Error is handled inside runOnboardingPipeline
+      });
+      return NextResponse.json({ company_id: company.id }, { status: 200 });
+    }
+
     return NextResponse.json(
-      { error: 'User already has a company', company_id: existing[0].id },
+      { error: 'User already has a company', company_id: company.id },
       { status: 409 }
     );
   }
@@ -44,16 +67,10 @@ export async function POST(request: NextRequest) {
     }, true),
   ]);
 
-  // Capture request IP for silent GeoIP enrichment (best-effort, never blocks)
-  const requestIp =
-    request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
-    request.headers.get('x-real-ip') ??
-    null;
-
   // Fire-and-forget the onboarding pipeline
   // Next.js runs this in the background; UI polls /api/onboarding/status for progress
   const input = parsed.data.idea ?? parsed.data.business_url;
-  runOnboardingPipeline(company.id, auth.user.id, parsed.data.journey, input, requestIp).catch(() => {
+  runOnboardingPipeline(company.id, auth.user.id, parsed.data.journey, input, requestIp, timezone).catch(() => {
     // Error is handled inside runOnboardingPipeline (sets status=failed, emits event)
   });
 

@@ -1,0 +1,1 @@
+ALTER TABLE "ad_spend_ledger" ADD CONSTRAINT "ad_spend_ledger_campaign_id_ad_campaigns_id_fk" FOREIGN KEY ("campaign_id") REFERENCES "public"."ad_campaigns"("id") ON DELETE no action ON UPDATE no action;

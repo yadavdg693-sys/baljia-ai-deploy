@@ -1,0 +1,1 @@
+CREATE INDEX "idx_dashboard_links_company" ON "dashboard_links" USING btree ("company_id");
