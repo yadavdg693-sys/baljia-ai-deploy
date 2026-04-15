@@ -320,9 +320,9 @@ async function writeLedgerEntry(entry: LedgerInput): Promise<void> {
 }
 
 /**
- * C-CREDIT-004: Refund credits for a failed task.
- * Only processes refunds for tasks with 'auto_eligible' refund policy.
- * Creates a positive 'refund' ledger entry.
+ * SPEC-BILL-103: Manual-only refund for platform-fault failures.
+ * Called by platform support/admin — never by the runtime automatically.
+ * Creates a positive 'refund' ledger entry (idempotent per task).
  */
 export async function refundCredit(
   companyId: string,

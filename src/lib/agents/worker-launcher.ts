@@ -40,8 +40,9 @@ const MAX_EXECUTION_MS = 4 * 60 * 60 * 1000; // 4 hours
 // Max retries for auto-remediation (H-AGENT-017 circuit breaker)
 const MAX_AUTO_RETRIES = 2;
 
-// Lifecycle states that allow task execution (G-BILL-001)
-const ACTIVE_LIFECYCLES: Lifecycle[] = ['trial_active', 'full_active', 'keep_live_active'];
+// Lifecycle states that allow task execution (G-BILL-001, Audit #5)
+// keep_live_active is post-cancellation grace — no new execution.
+const ACTIVE_LIFECYCLES: Lifecycle[] = ['trial_active', 'full_active'];
 
 // ══════════════════════════════════════════════
 // LAUNCH — picks up a todo task and runs it
@@ -135,6 +136,22 @@ export async function launchTask(taskId: string): Promise<TaskExecution> {
       });
     }
     throw new Error(reasonMap[reason] ?? `Claim failed: ${reason}`);
+  }
+
+  // Ensure execution authorization lineage is recorded (Audit #2).
+  // If no authorization was set before launch, infer from task source.
+  if (!task.authorized_by) {
+    const sourceToAuth: Record<string, string> = {
+      night_shift_generated: 'night_shift',
+      auto_remediation: 'remediation',
+      recurring: 'recurring',
+      onboarding: 'system',
+    };
+    const inferredAuth = sourceToAuth[task.source] ?? 'founder';
+    await taskService.updateTask(taskId, {
+      authorized_by: inferredAuth,
+      authorization_reason: `Inferred from source "${task.source}" at launch time`,
+    });
   }
 
   // Task is now in_progress and credit is deducted — assign agent
@@ -334,20 +351,8 @@ export async function launchTask(taskId: string): Promise<TaskExecution> {
       } catch { /* non-blocking */ }
     }
 
-    // C-CREDIT-004: Auto-refund for eligible failed tasks
-    if (task.refund_policy === 'auto_eligible' && task.estimated_credits > 0) {
-      try {
-        const refunded = await creditService.refundCredit(
-          task.company_id,
-          taskId,
-          task.estimated_credits,
-          `Auto-refund: task "${task.title}" failed (${failureClass})`
-        );
-        if (refunded) {
-          log.info('Auto-refund processed', { taskId, credits: task.estimated_credits });
-        }
-      } catch { /* non-blocking — don't fail the failure handler */ }
-    }
+    // Failed tasks consume credit — no auto-refund (SPEC-BILL-103).
+    // Refunds are manual-only, issued by platform support for platform-fault failures.
 
     log.error('Task failed', { taskId, title: task.title, failureClass, error: execution.error_summary });
   }

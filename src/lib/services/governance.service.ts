@@ -327,33 +327,14 @@ function checkPrerequisites(tag: string): string | null {
 
 // ══════════════════════════════════════════════════════════════════
 // REFUND POLICY
-// Source: Domain 5.4 "Failed tasks consume credit — no auto-refund"
-// Source: Domain 7.2 "Ad spend — completely separate from credits"
+// SPEC-BILL-103: "Failed tasks consume credit — no auto-refund"
+// All refunds are manual-only, issued by platform support.
 // ══════════════════════════════════════════════════════════════════
 
-const NO_REFUND_TAGS = new Set([
-  // Meta Ads: real external ad spend — cannot refund
-  'meta-ads', 'facebook-ads', 'instagram-ads', 'ad-campaign', 'ad-creative', 'audience-strategy',
-]);
-
-const MANUAL_REVIEW_TAGS = new Set([
-  // Browser: external site interactions have side effects
-  'account-setup', 'form-fill', 'product-hunt',
-  // Cold Outreach: emails already sent
-  'outreach', 'cold-email', 'lead-gen', 'prospecting',
-  // Support: replies already sent
-  'email-reply',
-  // Tweet: already posted
-  'tweet', 'social',
-]);
-
-function classifyRefundPolicy(tag: string): 'auto_eligible' | 'manual_review' | 'no_refund' {
-  const normalized = tag.toLowerCase().trim();
-  if (NO_REFUND_TAGS.has(normalized)) return 'no_refund';
-  if (MANUAL_REVIEW_TAGS.has(normalized)) return 'manual_review';
-  // Spec: "Failed tasks consume credit (no auto-refund)". Default to manual_review
-  // so refunds require explicit human decision rather than happening silently.
-  return 'manual_review';
+function classifyRefundPolicy(): 'no_refund' {
+  // No task is auto-eligible for refund. Platform support can issue
+  // manual refunds for platform-fault failures (infra_error, capability_miss).
+  return 'no_refund';
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -419,7 +400,7 @@ function classifyVerificationLevel(tag: string): VerificationLevel | null {
 interface LLMClassification {
   execution_mode: ExecutionMode;
   verification_level: VerificationLevel;
-  refund_policy: 'auto_eligible' | 'manual_review' | 'no_refund';
+  refund_policy: 'manual_review' | 'no_refund';
   reasoning: string;
 }
 
@@ -467,7 +448,7 @@ ad campaign setup, cold outreach sequences, tweets.
 
 execution_mode: "deterministic" (config, CSS, SEO, deploy), "template_plus_params" (pages, forms, APIs, templates), "full_agent" (features, bugs, research, integrations, automation)
 verification_level: "none" (research/reports), "deterministic" (APIs, DB, payments — run tests), "browser_flow" (UI — screenshot), "quality_review" (content — read it)
-refund_policy: "manual_review" (default — failed tasks consume credit, refund needs human review), "auto_eligible" (only for pure infra errors where nothing ran), "no_refund" (ad spend, sent emails, external actions)`;
+refund_policy: "no_refund" (default — failed tasks consume credit, all refunds are manual platform-support actions)`;
 
 function buildClassifierPrompt(input: { tag: string; title: string; description: string }): string {
   return `Classify: Tag="${input.tag}" Title="${input.title}" Description="${input.description}"
@@ -477,12 +458,12 @@ JSON: {"execution_mode":"...","verification_level":"...","refund_policy":"...","
 function validateClassification(parsed: LLMClassification): LLMClassification {
   const validModes: ExecutionMode[] = ['deterministic', 'template_plus_params', 'full_agent'];
   const validVerify: VerificationLevel[] = ['none', 'deterministic', 'browser_flow', 'quality_review', 'hybrid'];
-  const validRefund = ['auto_eligible', 'manual_review', 'no_refund'];
+  const validRefund = ['manual_review', 'no_refund'];
 
   return {
     execution_mode: validModes.includes(parsed.execution_mode) ? parsed.execution_mode : 'full_agent',
     verification_level: validVerify.includes(parsed.verification_level) ? parsed.verification_level : 'none',
-    refund_policy: validRefund.includes(parsed.refund_policy) ? parsed.refund_policy as LLMClassification['refund_policy'] : 'manual_review',
+    refund_policy: validRefund.includes(parsed.refund_policy) ? parsed.refund_policy as LLMClassification['refund_policy'] : 'no_refund',
     reasoning: parsed.reasoning ?? 'Classified by AI',
   };
 }
@@ -577,7 +558,7 @@ export async function evaluateTask(input: {
       execution_mode: classifyExecutionMode(tag) ?? 'full_agent',
       estimated_credits: 1,
       verification_level: classifyVerificationLevel(tag) ?? 'none',
-      refund_policy: classifyRefundPolicy(tag),
+      refund_policy: classifyRefundPolicy(),
       founder_safe_explanation:
         'This looks like multiple deliverables bundled together. Each task should be one founder-visible outcome (1 credit each). Want me to suggest how to split it?',
     };
@@ -631,13 +612,13 @@ export async function evaluateTask(input: {
   // Step 4: Classification — deterministic or LLM fallback
   let executionMode: ExecutionMode;
   let verificationLevel: VerificationLevel;
-  let refundPolicy: 'auto_eligible' | 'manual_review' | 'no_refund';
+  let refundPolicy: 'manual_review' | 'no_refund';
   let explanation: string;
 
   if (isKnownTag(tag)) {
     executionMode = forceFullAgent ? 'full_agent' : (classifyExecutionMode(tag) ?? 'full_agent');
     verificationLevel = classifyVerificationLevel(tag) ?? 'none';
-    refundPolicy = classifyRefundPolicy(tag);
+    refundPolicy = classifyRefundPolicy();
     const modeLabel = executionMode.replace(/_/g, ' ');
     const verifyLabel = verificationLevel === 'none' ? 'no' : verificationLevel.replace(/_/g, ' ');
     explanation = `1 credit. Runs in ${modeLabel} mode with ${verifyLabel} verification.${

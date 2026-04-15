@@ -98,7 +98,7 @@ export interface Company {
   github_repo: string | null;
   render_service_id: string | null;
   neon_database_id: string | null;
-  neon_connection_string: string | null;
+  // neon_connection_string removed — fetched live from Neon API via neon_database_id (Audit #4)
   custom_domain: string | null;
   timezone: string | null;
   created_at: string;
@@ -126,7 +126,7 @@ export interface Task {
   estimated_credits: number;
   actual_credits_charged: number;
   verification_level: VerificationLevel | null;
-  refund_policy: 'auto_eligible' | 'manual_review' | 'no_refund' | null;
+  refund_policy: 'manual_review' | 'no_refund' | null;
   failure_class: FailureClass | null;
   related_task_ids: string[] | null;
   run_link: string | null;
@@ -230,7 +230,7 @@ export interface GovernanceDecision {
   verification_level: VerificationLevel;
   split_tasks?: Partial<Task>[];
   blocker_reason?: string;
-  refund_policy: 'auto_eligible' | 'manual_review' | 'no_refund';
+  refund_policy: 'manual_review' | 'no_refund';
   founder_safe_explanation: string;
 }
 

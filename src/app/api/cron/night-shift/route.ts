@@ -22,7 +22,9 @@ export async function POST(request: NextRequest) {
   try {
     companyRows = await db.select({ id: companies.id }).from(companies)
       .where(and(
-        inArray(companies.lifecycle, ['trial_active', 'full_active', 'keep_live_active']),
+        // Audit #5: Only trial_active and full_active get night shifts.
+        // keep_live_active is post-cancellation grace — no new execution.
+        inArray(companies.lifecycle, ['trial_active', 'full_active']),
         eq(companies.execution_state, 'active')
       ));
   } catch (err) {

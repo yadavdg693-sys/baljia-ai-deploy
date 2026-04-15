@@ -125,15 +125,18 @@ function OnboardingPageInner() {
 
       if (update.type === 'timeout') {
         es.close();
-        // Still navigate — company was created, pipeline may still be running
-        router.push(`/dashboard/${companyId}`);
+        // Audit #14: Don't blindly navigate — show a recoverable message.
+        // The company exists but setup may be incomplete.
+        setError('Setup is taking longer than expected. You can wait or check your dashboard — some features may still be loading.');
+        setStep('level1');
       }
     };
 
     es.onerror = () => {
-      // SSE error — still navigate if we have a company
+      // Audit #14: SSE connection lost — don't blindly navigate to a half-ready dashboard.
       es.close();
-      if (companyId) router.push(`/dashboard/${companyId}`);
+      setError('Connection lost during setup. Your company was created — you can retry or check your dashboard.');
+      setStep('level1');
     };
 
     return () => es.close();
@@ -146,7 +149,13 @@ function OnboardingPageInner() {
     try {
       // Capture browser timezone for enrichment
       const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      const payload = { journey, idea: input, business_url: input, timezone };
+      // Audit #15: Send only the field relevant to the chosen journey
+      const payload = {
+        journey,
+        timezone,
+        ...(journey === 'build_my_idea' ? { idea: input } : {}),
+        ...(journey === 'grow_my_company' ? { business_url: input } : {}),
+      };
 
       // Try authenticated endpoint first
       const res = await fetch('/api/onboarding', {

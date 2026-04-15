@@ -135,7 +135,7 @@ export const tasks = pgTable('tasks', {
   estimated_credits: integer('estimated_credits').default(1),
   actual_credits_charged: integer('actual_credits_charged').default(0),
   verification_level: varchar('verification_level', { length: 50 }),
-  refund_policy: varchar('refund_policy', { length: 50 }).default('manual_review'),
+  refund_policy: varchar('refund_policy', { length: 50 }).default('no_refund'),
   failure_class: varchar('failure_class', { length: 50 }),
   related_task_ids: jsonb('related_task_ids').$type<string[]>(), // UUID[] stored as JSON array
   run_link: varchar('run_link', { length: 500 }),

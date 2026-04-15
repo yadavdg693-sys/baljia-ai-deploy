@@ -431,7 +431,9 @@ export async function runNightShift(companyId: string): Promise<NightShiftCycle>
   const [company] = await db.select({ lifecycle: companies.lifecycle, execution_state: companies.execution_state })
     .from(companies).where(eq(companies.id, companyId)).limit(1);
 
-  const activeLifecycles = ['trial_active', 'full_active', 'keep_live_active'];
+  // Audit #5: Only trial_active and full_active get night shifts.
+  // keep_live_active is post-cancellation grace — no new execution.
+  const activeLifecycles = ['trial_active', 'full_active'];
   const mkSkipped = (reason: string) => ({ id: crypto.randomUUID(), company_id: companyId, cycle_number: null, started_at: new Date().toISOString(), completed_at: new Date().toISOString(), planned_tasks: null, executed_tasks: null, summary: reason, company_stage: 'early', trust_score: null, created_at: new Date().toISOString() }) as NightShiftCycle;
 
   if (!company || !activeLifecycles.includes(company.lifecycle ?? '')) return mkSkipped(`Night shift skipped: lifecycle is ${company?.lifecycle ?? 'unknown'}`);

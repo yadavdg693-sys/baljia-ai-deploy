@@ -12,6 +12,7 @@ interface TaskBoardProps {
   onReject?: (taskId: string) => void;
 }
 
+// Audit #16: Expose all founder-visible task states
 const STATUS_TABS = [
   { value: 'all', label: 'All' },
   { value: 'todo', label: 'To Do' },
@@ -21,6 +22,7 @@ const STATUS_TABS = [
   { value: 'completed', label: 'Done' },
   { value: 'rejected', label: 'Rejected' },
   { value: 'failed', label: 'Failed' },
+  { value: 'repair', label: 'Repairing' },
 ] as const;
 
 const EMPTY_STATES: Record<string, { icon: string; message: string }> = {
@@ -32,6 +34,7 @@ const EMPTY_STATES: Record<string, { icon: string; message: string }> = {
   completed: { icon: '🎉', message: 'No completed tasks yet. They\'ll show up here.' },
   rejected: { icon: '🚫', message: 'No rejected tasks.' },
   failed: { icon: '✅', message: 'No failed tasks. Everything\'s running smoothly!' },
+  repair: { icon: '🔧', message: 'No tasks being repaired.' },
 };
 
 export function TaskBoard({ tasks, onTaskClick, onApprove, onReject }: TaskBoardProps) {
@@ -41,6 +44,8 @@ export function TaskBoard({ tasks, onTaskClick, onApprove, onReject }: TaskBoard
     if (status === 'all') return tasks;
     if (status === 'recurring') return tasks.filter((t) => t.source === 'recurring');
     if (status === 'rejected') return tasks.filter((t) => t.status === 'rejected');
+    // Audit #16: Failed tab includes both failed and failed_permanent
+    if (status === 'failed') return tasks.filter((t) => t.status === 'failed' || t.status === 'failed_permanent');
     return tasks.filter((t) => t.status === status);
   };
 
