@@ -151,3 +151,24 @@ services:
       - key: CRON_SECRET
         sync: false
 
+  # ── Cron: Onboarding Cleanup ──
+  # Sweeps stuck onboarding_status='running' rows older than 10min, marks them
+  # 'failed'. Complements the in-process watchdog (covers the case where a
+  # process was killed before watchdog.stop() could reset state). Runs every 5 min.
+  - type: cron
+    name: baljia-onboarding-cleanup
+    runtime: node
+    region: oregon
+    schedule: "*/5 * * * *"
+    buildCommand: ""
+    startCommand: >
+      curl -s -o /dev/null -w "%{http_code}" -X POST
+      "$NEXT_PUBLIC_APP_URL/api/cron/onboarding-cleanup"
+      -H "x-cron-secret: $CRON_SECRET"
+      -H "Content-Type: application/json"
+    envVars:
+      - key: NEXT_PUBLIC_APP_URL
+        sync: false
+      - key: CRON_SECRET
+        sync: false
+
