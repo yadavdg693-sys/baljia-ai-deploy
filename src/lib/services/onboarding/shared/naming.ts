@@ -4,6 +4,7 @@ import { db, companies } from '@/lib/db';
 import { eq, and, ne } from 'drizzle-orm';
 import { createLogger } from '@/lib/logger';
 import { callSmallLLM } from '../llm/small-llm';
+import { emitActivity } from '../stage-runner';
 import type { PipelineContext } from '../types';
 
 const log = createLogger('OnboardingNaming');
@@ -53,10 +54,12 @@ Reply with ONLY the company name. Nothing else.`;
 
     if (!existing) {
       ctx.companyName = cleanName;
+      await emitActivity(ctx, `Company name: ${cleanName}`, 'naming');
       return;
     }
 
     triedNames.push(cleanName);
+    await emitActivity(ctx, `Name "${cleanName}" taken — trying another`, 'naming');
     log.info(`Name collision on attempt ${attempt + 1}: "${cleanName}"`, { companyId: ctx.companyId });
   }
 

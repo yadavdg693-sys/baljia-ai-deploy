@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import type { OnboardingJourney } from '@/types';
 import { ONBOARDING_STAGE_LABELS } from '@/lib/founder-labels';
+import { OnboardingLogStrip } from '@/components/onboarding/OnboardingLogStrip';
 
 type Step = 'level1' | 'level2' | 'idea_input' | 'url_input' | 'creating';
 
@@ -17,25 +18,33 @@ interface StageUpdate {
   error?: string;
 }
 
+// Stage order — rendered as a checklist during onboarding. Note that different
+// journeys hit slightly different stages (Build/Grow skip the full personal
+// enrichment; Surprise Me hits all of them). Stages not reached are simply shown
+// as pending.
 const STAGE_ORDER = [
   'heartbeat',
-  'enrich_founder',
-  'enrich_business',
-  'persist_context',
+  'enrich_geo',
+  'enrich_linkedin',
+  'enrich_twitter',
   'extract_founder_angle',
+  'persist_context',
   'select_strategy',
-  'classify_archetype',
+  'refine_idea',
+  'fetch_business_url',
+  'invent_idea',
   'name_company',
   'provision_infrastructure',
+  'send_startup_email',
   'generate_market_research',
   'save_mission',
   'generate_roadmap',
   'derive_active_milestone',
   'create_starter_tasks',
   'generate_landing_page',
-  'send_welcome_email',
   'post_launch_tweet',
   'generate_ceo_summary',
+  'send_completion_email',
   'flush_diagnostics',
   'celebrate',
 ];
@@ -452,6 +461,13 @@ function OnboardingPageInner() {
                 );
               })}
             </div>
+
+            {/* Live activity log — Phase 1 observability */}
+            {companyId && (
+              <div className="mt-6">
+                <OnboardingLogStrip companyId={companyId} />
+              </div>
+            )}
           </div>
         )}
       </div>

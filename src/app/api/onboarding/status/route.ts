@@ -95,10 +95,16 @@ export async function GET(request: NextRequest) {
         if (request.signal.aborted) break;
 
         try {
-          // Fetch new onboarding_stage events since last poll
+          // Fetch new onboarding events since last poll (stage + activity + mood + completed/failed)
           const conditions = [
             eq(platformEvents.company_id, companyId),
-            inArray(platformEvents.event_type, ['onboarding_stage', 'onboarding_completed', 'onboarding_failed']),
+            inArray(platformEvents.event_type, [
+              'onboarding_stage',
+              'onboarding_activity',
+              'onboarding_mood',
+              'onboarding_completed',
+              'onboarding_failed',
+            ]),
           ];
 
           if (lastEventCreatedAt) {
@@ -124,6 +130,20 @@ export async function GET(request: NextRequest) {
                 stage: stageName,
                 status: payload.status,
                 label: STAGE_LABELS[stageName] ?? stageName,
+              });
+            } else if (event.event_type === 'onboarding_activity') {
+              send({
+                type: 'activity',
+                text: payload.text,
+                tool: payload.tool ?? null,
+                stage: payload.stage ?? null,
+                timestamp: payload.timestamp ?? Date.now(),
+              });
+            } else if (event.event_type === 'onboarding_mood') {
+              send({
+                type: 'mood',
+                mood: payload.mood,
+                stage: payload.stage ?? null,
               });
             } else if (event.event_type === 'onboarding_completed') {
               send({ type: 'completed', ...payload });

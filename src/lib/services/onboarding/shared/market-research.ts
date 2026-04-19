@@ -5,6 +5,7 @@
 import { createLogger } from '@/lib/logger';
 import { tavilySearchText, isTavilyAvailable } from '@/lib/tavily';
 import { callSmallLLM } from '../llm/small-llm';
+import { emitActivity } from '../stage-runner';
 import type { PipelineContext } from '../types';
 
 const log = createLogger('OnboardingMarketResearch');
@@ -26,6 +27,12 @@ export async function generateMarketResearch(ctx: PipelineContext): Promise<void
     : `${base} market competitors pricing target customers 2024 2025`;
 
   const pricingQuery = `${base} pricing plans SaaS how much does it cost`;
+
+  await emitActivity(ctx, `Searching web for competitors: "${competitorQuery.slice(0, 80)}"`, 'tavily_search');
+  await emitActivity(ctx, `Searching web for pricing: "${pricingQuery.slice(0, 80)}"`, 'tavily_search');
+  if (country) {
+    await emitActivity(ctx, `Searching regional market trends for ${[city, country].filter(Boolean).join(', ')}`, 'tavily_search');
+  }
 
   const searches = [
     tavilySearchText(competitorQuery, 5),
@@ -68,10 +75,13 @@ ${country ? `## Local Market Context\nWhat's happening in ${country} specificall
 
 Be concise. No fluff. Every sentence should contain a specific fact, name, or number.`;
 
+  await emitActivity(ctx, 'Synthesizing market research report...', 'llm');
+
   try {
     const analysis = await callSmallLLM(synthesisPrompt, 1200);
     ctx.marketResearch = analysis.trim() || null;
     if (ctx.marketResearch) {
+      await emitActivity(ctx, `Report saved (${Math.round(ctx.marketResearch.length / 100) * 100} chars)`, 'document');
       log.info('Market research synthesized', { companyId: ctx.companyId, length: ctx.marketResearch.length });
     }
   } catch (err) {

@@ -21,6 +21,62 @@ export function setWatchdogTick(fn: ((stage: OnboardingStage) => void) | null): 
   watchdogTick = fn;
 }
 
+// Auto-emit mood per stage (strategies can still override via opts.mood)
+const STAGE_MOODS: Partial<Record<OnboardingStage, MoodState>> = {
+  heartbeat: 'listening',
+  enrich_geo: 'researching',
+  enrich_linkedin: 'researching',
+  enrich_twitter: 'researching',
+  extract_founder_angle: 'researching',
+  persist_context: 'writing',
+  select_strategy: 'researching',
+  refine_idea: 'researching',
+  fetch_business_url: 'researching',
+  invent_idea: 'researching',
+  name_company: 'building',
+  provision_infrastructure: 'building',
+  send_startup_email: 'writing',
+  generate_market_research: 'researching',
+  save_mission: 'writing',
+  generate_roadmap: 'writing',
+  derive_active_milestone: 'writing',
+  create_starter_tasks: 'building',
+  generate_landing_page: 'writing',
+  post_launch_tweet: 'writing',
+  generate_ceo_summary: 'writing',
+  send_completion_email: 'writing',
+  flush_diagnostics: 'writing',
+  celebrate: 'celebrating',
+};
+
+// Human-readable stage labels used for automatic activity emission
+const STAGE_LABELS: Partial<Record<OnboardingStage, string>> = {
+  heartbeat: 'Starting pipeline...',
+  enrich_geo: 'Detecting your location...',
+  enrich_linkedin: 'Reading your professional background...',
+  enrich_twitter: 'Reading your public profile...',
+  extract_founder_angle: 'Analyzing your positioning...',
+  persist_context: 'Saving context to memory...',
+  select_strategy: 'Choosing strategy...',
+  refine_idea: 'Refining your idea into buildable scope...',
+  fetch_business_url: 'Reading your business site...',
+  invent_idea: 'Inventing an idea from your background...',
+  name_company: 'Naming your company...',
+  provision_infrastructure: 'Provisioning infrastructure...',
+  send_startup_email: 'Sending your first company email...',
+  generate_market_research: 'Researching market opportunity...',
+  save_mission: 'Writing mission statement...',
+  generate_roadmap: 'Building your company roadmap...',
+  derive_active_milestone: 'Setting your first milestone...',
+  create_starter_tasks: 'Creating your starter tasks...',
+  generate_landing_page: 'Generating your landing page...',
+  post_launch_tweet: 'Posting launch announcement...',
+  generate_ceo_summary: 'Preparing CEO briefing...',
+  send_completion_email: 'Sending your summary email...',
+  flush_diagnostics: 'Finalizing setup...',
+  celebrate: 'Ready!',
+};
+
 export async function stage(
   ctx: PipelineContext,
   name: OnboardingStage,
@@ -30,8 +86,21 @@ export async function stage(
   log.info(`Stage: ${name}`, { companyId: ctx.companyId });
   await eventService.emit(ctx.companyId, 'onboarding_stage', { stage: name, status: 'running' });
 
-  if (opts.mood) {
-    await eventService.emit(ctx.companyId, 'onboarding_mood', { mood: opts.mood, stage: name });
+  // Auto-emit human-readable activity line per stage entry
+  const label = STAGE_LABELS[name];
+  if (label) {
+    await eventService.emit(ctx.companyId, 'onboarding_activity', {
+      text: label,
+      tool: null,
+      stage: name,
+      timestamp: Date.now(),
+    });
+  }
+
+  // Emit mood — opts.mood overrides default stage mood
+  const mood = opts.mood ?? STAGE_MOODS[name];
+  if (mood) {
+    await eventService.emit(ctx.companyId, 'onboarding_mood', { mood, stage: name });
   }
 
   watchdogTick?.(name);

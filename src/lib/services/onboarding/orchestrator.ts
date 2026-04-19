@@ -17,6 +17,7 @@ import type { OnboardingStrategy } from './strategies/base.strategy';
 import { BuildIdeaStrategy } from './strategies/build-idea.strategy';
 import { GrowCompanyStrategy } from './strategies/grow-company.strategy';
 import { SurpriseMeStrategy } from './strategies/surprise-me.strategy';
+import { initCosts, flushCosts } from './shared/cost-tracker';
 
 const log = createLogger('Onboarding');
 
@@ -81,6 +82,8 @@ export async function runOnboardingPipeline(
     startedAt: Date.now(),
   };
 
+  initCosts(ctx);
+
   const strategy = selectStrategy(journey);
 
   try {
@@ -93,6 +96,8 @@ export async function runOnboardingPipeline(
     await eventService.emit(companyId, 'onboarding_failed', {
       error: err instanceof Error ? err.message : String(err),
     });
+  } finally {
+    await flushCosts(ctx);
   }
 }
 
