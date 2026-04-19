@@ -1,15 +1,12 @@
-// Surprise Me — the "Baljia magic" path; personal context creates substance
-//
-// Uses fullHeader (LinkedIn + Twitter + founder angle + geo) since there's no user-declared idea.
-// Phase 0: uses shared select_strategy (which generates the idea from founder background)
-// Phase 3a will replace select_strategy with invent_idea producing structured invented_idea shape
-// Phase 3b task creation will include Idea Refinements section reasoning
+// Surprise Me — the "Baljia magic" path. Personal context creates substance.
+// fullHeader populates LinkedIn + Twitter + founder angle + geo.
+// invent_idea generates the idea from background.
 
 import { stage } from '../stage-runner';
 import { fullHeader } from '../shared/headers';
-import { selectStrategy } from '../shared/select-strategy';
-import { generateMarketResearch } from '../shared/market-research';
-import { saveMission } from '../shared/save-mission';
+import { inventIdea } from '../shared/invent-idea';
+import { generateSurpriseMarketResearch } from '../shared/market-research-surprise';
+import { saveMission3Section } from '../shared/mission-3-section';
 import { createStarterTasks } from '../shared/create-starter-tasks';
 import { infraGroup } from '../shared/infra-group';
 import { roadmapGroup } from '../shared/roadmap-group';
@@ -19,11 +16,11 @@ import type { PipelineContext } from '../types';
 
 export class SurpriseMeStrategy implements OnboardingStrategy {
   async run(ctx: PipelineContext): Promise<void> {
-    await fullHeader(ctx); // heartbeat + enrich_geo + enrich_linkedin + enrich_twitter + extract_founder_angle + persist_context
-    await stage(ctx, 'select_strategy', () => selectStrategy(ctx));
+    await fullHeader(ctx);
+    await stage(ctx, 'invent_idea', () => inventIdea(ctx));
     await infraGroup(ctx);
-    await stage(ctx, 'generate_market_research', () => generateMarketResearch(ctx));
-    await stage(ctx, 'save_mission', () => saveMission(ctx));
+    await stage(ctx, 'generate_market_research', () => generateSurpriseMarketResearch(ctx));
+    await stage(ctx, 'save_mission', () => saveMission3Section(ctx));
     await roadmapGroup(ctx);
     await stage(ctx, 'create_starter_tasks', () => createStarterTasks(ctx));
     await proofGroup(ctx);

@@ -77,6 +77,85 @@ export interface InventedIdea {
   rationale: string;
 }
 
+// ══════════════════════════════════════════════
+// Per-journey market research JSON schemas
+// See memory/project_market_research_format_locked.md
+// ══════════════════════════════════════════════
+
+export interface MarketCompetitor {
+  name: string;
+  what_they_do: string;
+  pricing: string;
+  gap: string;
+}
+
+export interface FirstPriority {
+  slot: 'engineering' | 'research' | 'outreach';
+  title: string;
+  rationale: string;
+}
+
+// Build My Idea — lean 5-section report
+export interface BuildMarketResearch {
+  overview: string;
+  competitors: MarketCompetitor[];
+  opportunity: string;
+  why_this_fits_you: string;
+  first_priorities: FirstPriority[];
+}
+
+// Grow My Company — denser 10-section report with existing business specifics
+export interface GrowMarketCompetitor {
+  name: string;
+  focus_area: string;
+  positioning_or_size: string;
+  gap: string;
+}
+
+export interface GrowMarketResearch {
+  business_overview: string;
+  revenue_model: string;
+  notable_validation: string | null;
+  market_analysis: {
+    industry_landscape: string;
+    key_trends: string[];
+    market_timing: string; // "Strong" | "Moderate" | "Early" + rationale
+  };
+  competitors: GrowMarketCompetitor[];
+  competitive_advantages: string[];
+  gaps_to_exploit: string[];
+  why_this_fits_you: string;
+  ai_leverage_points: string[];
+  first_priorities: FirstPriority[];
+}
+
+// Surprise Me — Build-shaped plus Why Now + Idea Refinements
+export interface IdeaRefinement {
+  title: string;
+  rationale: string;
+}
+
+export interface SurpriseMarketResearch {
+  idea_overview: string;
+  market_validation: {
+    size_and_growth: string[];
+    why_now: string[];
+  };
+  competitors: MarketCompetitor[];
+  why_this_fits_you: string;
+  idea_refinements: IdeaRefinement[];
+  first_priorities: FirstPriority[];
+}
+
+export type MarketResearchResult = BuildMarketResearch | GrowMarketResearch | SurpriseMarketResearch;
+
+// 3-section mission (replaces 1-line output)
+export interface MissionDoc {
+  mission: string;                // 1 sentence
+  what_were_building: string;     // 2-3 sentences
+  where_were_headed: string;      // 4-6 sentences, GeoIP-anchored
+}
+
 export interface PipelineContext {
   // Entry
   companyId: string;
@@ -112,7 +191,9 @@ export interface PipelineContext {
   slug: string;
   oneLiner: string;
   mission: string;
-  marketResearch: string | null;
+  missionDoc?: MissionDoc;
+  marketResearch: string | null;       // rendered markdown (legacy shape, for pre-Phase-3a stages)
+  marketResearchJson?: MarketResearchResult; // structured per-journey JSON (Phase 3a)
 
   // Roadmap derivatives
   activeMilestoneTitle: string | null;

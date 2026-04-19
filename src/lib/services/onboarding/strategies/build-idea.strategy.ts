@@ -1,14 +1,10 @@
-// Build My Idea — founder has an idea, we refine + build MVP + research product landscape
-//
-// Phase 0: uses shared select_strategy/market_research/save_mission/create_tasks (behaviors unchanged)
-// Phase 3a will introduce refine_idea, per-journey market research, 3-section mission
-// Phase 3b will introduce CEO-framework-inheriting task creation
+// Build My Idea — founder has an idea; refine + build MVP + product market research
 
 import { stage } from '../stage-runner';
 import { leanHeader } from '../shared/headers';
-import { selectStrategy } from '../shared/select-strategy';
-import { generateMarketResearch } from '../shared/market-research';
-import { saveMission } from '../shared/save-mission';
+import { refineIdea } from '../shared/refine-idea';
+import { generateBuildMarketResearch } from '../shared/market-research-build';
+import { saveMission3Section } from '../shared/mission-3-section';
 import { createStarterTasks } from '../shared/create-starter-tasks';
 import { infraGroup } from '../shared/infra-group';
 import { roadmapGroup } from '../shared/roadmap-group';
@@ -18,13 +14,13 @@ import type { PipelineContext } from '../types';
 
 export class BuildIdeaStrategy implements OnboardingStrategy {
   async run(ctx: PipelineContext): Promise<void> {
-    await leanHeader(ctx); // heartbeat + enrich_geo + persist_context
-    await stage(ctx, 'select_strategy', () => selectStrategy(ctx));
-    await infraGroup(ctx); // name → provision → startup email
-    await stage(ctx, 'generate_market_research', () => generateMarketResearch(ctx));
-    await stage(ctx, 'save_mission', () => saveMission(ctx));
-    await roadmapGroup(ctx); // generate_roadmap → derive_active_milestone
+    await leanHeader(ctx);
+    await stage(ctx, 'refine_idea', () => refineIdea(ctx));
+    await infraGroup(ctx);
+    await stage(ctx, 'generate_market_research', () => generateBuildMarketResearch(ctx));
+    await stage(ctx, 'save_mission', () => saveMission3Section(ctx));
+    await roadmapGroup(ctx);
     await stage(ctx, 'create_starter_tasks', () => createStarterTasks(ctx));
-    await proofGroup(ctx); // landing → tweet → ceo_summary → completion → diagnostics → celebrate
+    await proofGroup(ctx);
   }
 }
