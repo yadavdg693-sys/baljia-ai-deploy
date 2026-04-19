@@ -22,6 +22,8 @@ interface CreateTaskInput {
   related_task_ids?: string[];
   authorized_by?: string;
   authorization_reason?: string;
+  complexity?: number;          // 1-10 planning metadata (Phase 3b populates for starter tasks)
+  estimated_hours?: string | number;  // decimal hours, <= 4 hard cap
 }
 
 export type UpdateTaskFields = Partial<Pick<Task,
@@ -37,12 +39,17 @@ export async function createTask(input: CreateTaskInput): Promise<Task> {
   // race conditions where two concurrent inserts read the same MAX.
   const queueOrder = input.queue_order ?? null;
 
+  const estimatedHoursValue = input.estimated_hours !== undefined
+    ? String(input.estimated_hours)
+    : null;
+
   const result = await db.execute(sql`
     INSERT INTO tasks (
       id, company_id, title, description, tag, priority, source, status,
       queue_order, assigned_to_agent_id, estimated_credits, actual_credits_charged,
       max_turns, turn_count, executability_type, suggestion_reasoning,
-      execution_mode, verification_level, related_task_ids, created_at, updated_at
+      execution_mode, verification_level, related_task_ids,
+      complexity, estimated_hours, created_at, updated_at
     )
     SELECT
       gen_random_uuid(),
@@ -66,6 +73,8 @@ export async function createTask(input: CreateTaskInput): Promise<Task> {
       ${input.execution_mode ?? null},
       ${input.verification_level ?? null},
       ${JSON.stringify(input.related_task_ids ?? [])}::jsonb,
+      ${input.complexity ?? null}::int,
+      ${estimatedHoursValue}::numeric,
       NOW(),
       NOW()
     RETURNING *
