@@ -18,6 +18,7 @@ import { BuildIdeaStrategy } from './strategies/build-idea.strategy';
 import { GrowCompanyStrategy } from './strategies/grow-company.strategy';
 import { SurpriseMeStrategy } from './strategies/surprise-me.strategy';
 import { initCosts, flushCosts } from './shared/cost-tracker';
+import { OnboardingWatchdog } from './watchdog';
 
 const log = createLogger('Onboarding');
 
@@ -85,9 +86,13 @@ export async function runOnboardingPipeline(
   initCosts(ctx);
 
   const strategy = selectStrategy(journey);
+  const watchdog = new OnboardingWatchdog(ctx);
+  watchdog.start();
 
   try {
     await strategy.run(ctx);
+    // If watchdog marked the run as killed (timeout), surface it
+    watchdog.throwIfKilled();
   } catch (err) {
     log.error('Onboarding pipeline failed', { companyId, journey }, err);
     await db.update(companies)
@@ -97,6 +102,7 @@ export async function runOnboardingPipeline(
       error: err instanceof Error ? err.message : String(err),
     });
   } finally {
+    watchdog.stop();
     await flushCosts(ctx);
   }
 }
