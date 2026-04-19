@@ -6,7 +6,7 @@ import { db, documentSuggestions } from '@/lib/db';
 import { eq } from 'drizzle-orm';
 
 export async function GET(request: NextRequest) {
-  const companyId = getRequiredCompanyId(request);
+  const companyId = await getRequiredCompanyId(request);
   if (isApiError(companyId)) return companyId;
 
   const auth = await requireAuthAndCompany(companyId);

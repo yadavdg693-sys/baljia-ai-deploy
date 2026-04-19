@@ -388,7 +388,7 @@ async function executeNightShift(plan: NightShiftPlan): Promise<{ completed: num
     } catch (error) { log.error('Failed to create retry task', { title: newTask.title }, error); }
   }
 
-  const maxTasks = Math.min(plan.tasks_to_execute.length, balance - creditsCommitted, 5);
+  const maxTasks = Math.min(plan.tasks_to_execute.length, balance - creditsCommitted, 1);
   for (let i = 0; i < maxTasks; i++) {
     try { const processed = await processQueue(plan.companyId); if (processed > 0) { completed++; creditsCommitted++; } else break; }
     catch (error) { log.error('Task execution failed', { companyId: plan.companyId }, error); failed++; }

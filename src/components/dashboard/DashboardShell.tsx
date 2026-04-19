@@ -10,7 +10,6 @@ import { TaskDetailDialog } from './TaskDetailDialog';
 import { DocumentList } from './DocumentList';
 import { MetricsPanel } from './MetricsPanel';
 import { CreditDisplay } from './CreditDisplay';
-import { CreditLedger } from './CreditLedger';
 import { PurchaseCreditsDialog } from './PurchaseCreditsDialog';
 import { ActivityFeed } from './ActivityFeed';
 import { ChatPanel } from '@/components/chat/ChatPanel';
@@ -65,7 +64,7 @@ export function DashboardShell({
   // These just sync local state after the dialog confirms success.
   const handleApprove = useCallback((taskId: string) => {
     setTasks((prev) =>
-      prev.map((t) => (t.id === taskId ? { ...t, status: 'todo' as const } : t))
+      prev.map((t) => (t.id === taskId ? { ...t, status: 'in_progress' as const } : t))
     );
   }, []);
 
@@ -208,12 +207,6 @@ export function DashboardShell({
             <div className="rounded-xl bg-surface-card border border-border-default p-4">
               <DocumentList documents={documents} />
             </div>
-          </section>
-
-          {/* Credit Ledger */}
-          <section>
-            <h2 className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-3">Credit History</h2>
-            <CreditLedger companyId={company.id} />
           </section>
 
           {/* Reports */}

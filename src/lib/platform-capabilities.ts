@@ -68,7 +68,9 @@ export function getPlatformCapabilitiesPrompt(): string {
 
   const cantDo = PLATFORM_LIMITATIONS.join('; ');
 
-  return `## Platform Capabilities (what we can build)
+  return `## Worker Agent Capabilities (what founder tasks can accomplish)
+These are NOT your direct tools. These are what worker agents can do when you CREATE A TASK for the founder. You dispatch work to these agents — you do not have their tools yourself.
+
 ${canDo}
 
 ## Limitations (what we CANNOT build)

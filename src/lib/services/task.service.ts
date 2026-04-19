@@ -107,8 +107,16 @@ export async function updateTask(taskId: string, updates: UpdateTaskFields): Pro
   return task as unknown as Task;
 }
 
+/**
+ * Mark a task as approved. The actual state transition (todo → in_progress)
+ * and credit deduction happen inside worker-launcher.launchTask().
+ * This just records the authorization — callers should call launchTask() after.
+ */
 export async function approveTask(taskId: string): Promise<Task> {
-  return updateTask(taskId, { status: 'todo' });
+  return updateTask(taskId, {
+    authorized_by: 'founder',
+    authorization_reason: 'Founder approved task for execution',
+  });
 }
 
 export async function rejectTask(taskId: string): Promise<Task> {

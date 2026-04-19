@@ -79,3 +79,9 @@ export const documentSuggestionReviewSchemaStrict = z.discriminatedUnion('action
   z.object({ action: z.literal('skip') }),
   z.object({ action: z.literal('edit'), edited_content: z.string().min(1).max(100000) }),
 ]);
+
+export const leadCaptureSchema = z.object({
+  email: z.string().email().max(255),
+  name: z.string().max(255).optional(),
+  source: z.string().max(100).optional(),
+});

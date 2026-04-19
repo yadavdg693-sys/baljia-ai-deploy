@@ -2,10 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import * as taskService from '@/lib/services/task.service';
 import * as eventService from '@/lib/services/event.service';
 import { createTaskSchema } from '@/lib/validations';
-import { requireAuthAndCompany, getRequiredCompanyId, parseJsonBody, isApiError } from '@/lib/api-utils';
+import { requireAuthAndCompany, getRequiredCompanyId, resolveBodyCompanyId, parseJsonBody, isApiError } from '@/lib/api-utils';
 
 export async function GET(request: NextRequest) {
-  const companyId = getRequiredCompanyId(request);
+  const companyId = await getRequiredCompanyId(request);
   if (isApiError(companyId)) return companyId;
 
   const auth = await requireAuthAndCompany(companyId);
@@ -19,10 +19,9 @@ export async function POST(request: NextRequest) {
   const body = await parseJsonBody(request);
   if (isApiError(body)) return body;
 
-  const { company_id: companyId, ...rest } = body as Record<string, unknown>;
-  if (!companyId || typeof companyId !== 'string') {
-    return NextResponse.json({ error: 'company_id required' }, { status: 400 });
-  }
+  const { company_id: _rawId, ...rest } = body as Record<string, unknown>;
+  const companyId = await resolveBodyCompanyId(body as Record<string, unknown>);
+  if (isApiError(companyId)) return companyId;
 
   const auth = await requireAuthAndCompany(companyId);
   if (isApiError(auth)) return auth;

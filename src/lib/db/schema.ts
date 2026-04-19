@@ -18,6 +18,7 @@ export const users = pgTable('users', {
   twitter_handle: varchar('twitter_handle', { length: 100 }),
   auth_provider: varchar('auth_provider', { length: 50 }).default('magic_link'),
   google_id: varchar('google_id', { length: 255 }).unique(),
+  openai_codex_id: varchar('openai_codex_id', { length: 255 }).unique(),
   email_verified: boolean('email_verified').default(false),
   timezone: varchar('timezone', { length: 50 }),
   locale: varchar('locale', { length: 10 }),

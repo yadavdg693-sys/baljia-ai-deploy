@@ -223,6 +223,7 @@ export interface DashboardData {
 // GOVERNANCE
 // ============================================
 
+// Legacy interface kept for compatibility — new code uses RuntimeDecision from governance.service.ts
 export interface GovernanceDecision {
   verdict: 'approved' | 'split_required' | 'blocked' | 'refused';
   execution_mode: ExecutionMode;
@@ -675,7 +676,8 @@ export interface TaskProposal {
   tag: string;
   estimated_credits: number;
   agent_name: string;       // founder-friendly label (from FOUNDER_AGENT_LABELS)
-  explanation: string;
+  explanation?: string;     // optional — CEO handles founder-facing communication directly
+  run_link?: string;        // one-click URL to execute the task
 }
 
 /** Internal task proposal with governance metadata (never sent to frontend) */

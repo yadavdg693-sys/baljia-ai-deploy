@@ -14,12 +14,11 @@ import * as roadmapService from '@/lib/services/roadmap.service';
 import { classifyArchetype } from '@/lib/services/roadmap.service';
 import * as chatService from '@/lib/services/chat.service';
 import { isLateDevConfigured } from '@/lib/services/latedev.service';
-import { provisionCompanyDatabase } from '@/lib/services/neon.service';
-import { provisionSubdomain } from '@/lib/services/domain.service';
 import { provisionCompanyEmail } from '@/lib/services/company-email.service';
 import { sendEmail } from '@/lib/services/email.service';
 import { createLogger } from '@/lib/logger';
 import { getCapabilityConstraint } from '@/lib/platform-capabilities';
+import { tavilySearchText, isTavilyAvailable } from '@/lib/tavily';
 import type { OnboardingJourney } from '@/types';
 
 const log = createLogger('Onboarding');
@@ -39,15 +38,16 @@ type OnboardingStage =
   | 'classify_archetype'
   | 'name_company'
   | 'provision_infrastructure'
+  | 'send_startup_email'
   | 'generate_market_research'
   | 'save_mission'
   | 'generate_roadmap'
   | 'derive_active_milestone'
   | 'create_starter_tasks'
   | 'generate_landing_page'
-  | 'send_welcome_email'
   | 'post_launch_tweet'
   | 'generate_ceo_summary'
+  | 'send_completion_email'
   | 'flush_diagnostics'
   | 'celebrate';
 
@@ -153,15 +153,21 @@ export async function runOnboardingPipeline(
     await stage(ctx, 'classify_archetype', () => runClassifyArchetype(ctx));
     await stage(ctx, 'name_company', () => runNameCompany(ctx));
     await stage(ctx, 'provision_infrastructure', () => runProvisionInfrastructure(ctx));
+    // Polsia-style email #1 — fires immediately after company name set, BEFORE the
+    // long stages, so the founder sees the email in their inbox while the agent is
+    // still researching/building. Establishes "your AI is real and working RIGHT NOW".
+    await stage(ctx, 'send_startup_email', () => runSendStartupEmail(ctx));
     await stage(ctx, 'generate_market_research', () => runMarketResearch(ctx));
     await stage(ctx, 'save_mission', () => runSaveMission(ctx));
     await stage(ctx, 'generate_roadmap', () => runGenerateRoadmap(ctx));
     await stage(ctx, 'derive_active_milestone', () => runDeriveActiveMilestone(ctx));
     await stage(ctx, 'create_starter_tasks', () => runCreateStarterTasks(ctx));
     await stage(ctx, 'generate_landing_page', () => runGenerateLandingPage(ctx));
-    await stage(ctx, 'send_welcome_email', () => runSendWelcomeEmail(ctx));
     await stage(ctx, 'post_launch_tweet', () => runPostLaunchTweet(ctx));
     await stage(ctx, 'generate_ceo_summary', () => runGenerateCeoSummary(ctx));
+    // Polsia-style email #2 — fires AFTER everything is built, summarizing what
+    // happened. Past tense, includes market findings, task list, subscribe CTA.
+    await stage(ctx, 'send_completion_email', () => runSendCompletionEmail(ctx));
     await stage(ctx, 'flush_diagnostics', () => runFlushDiagnostics(ctx));
     await stage(ctx, 'celebrate', () => runCelebrate(ctx));
   } catch (err) {
@@ -242,14 +248,24 @@ async function runEnrichFounder(ctx: PipelineContext): Promise<void> {
   const parts: string[] = [];
   if (linkedinResult) parts.push(`LinkedIn: ${linkedinResult}`);
   if (twitterResult)  parts.push(`Twitter: ${twitterResult}`);
-  if (geo?.country)   parts.push(`Location: ${[geo.city, geo.region, geo.country].filter(Boolean).join(', ')}`);
+  if (geo?.country)   parts.push(`Location: ${[geo.city, geo.region, geo.country].filter(Boolean).join(', ')} (timezone: ${geo.timezone ?? 'unknown'})`);
 
   if (parts.length > 0) {
     ctx.enrichedFounderSummary = parts.join('\n');
-  } else if (ctx.founderName && process.env.TAVILY_API_KEY) {
+    log.info('Founder enrichment complete', {
+      companyId: ctx.companyId,
+      confidence,
+      hasLinkedIn,
+      hasTwitter,
+      hasGeo,
+    });
+  } else if (ctx.founderName && isTavilyAvailable()) {
     // Fallback: general web search — last resort
-    const summary = await tavilySearch(`${ctx.founderName} entrepreneur founder`);
+    log.info('Founder enrichment thin — falling back to web search', { companyId: ctx.companyId, name: ctx.founderName });
+    const summary = await tavilySearchText(`"${ctx.founderName}" entrepreneur founder startup`, 5, 'advanced');
     if (summary) ctx.enrichedFounderSummary = summary;
+  } else {
+    log.warn('No founder enrichment possible — no name or API key', { companyId: ctx.companyId });
   }
 }
 
@@ -298,75 +314,159 @@ No fluff. Name specific industries, regions, or experiences.`;
 
 async function enrichGeoIP(ip: string | null): Promise<FounderGeoData | null> {
   if (!ip || ip === '127.0.0.1' || ip === '::1') return null;
-  const token = process.env.IPINFO_TOKEN;
-  if (!token) return null; // token required — skip silently if not configured
+
+  // Try ipinfo first (primary: 50K/mo free, HTTPS), then ipstack as fallback (100/mo free, HTTP-only)
+  const ipinfoToken = process.env.IPINFO_TOKEN;
+  const ipstackKey = process.env.IPSTACK_API_KEY;
+
+  if (!ipinfoToken && !ipstackKey) {
+    log.warn('No GeoIP key configured (IPINFO_TOKEN or IPSTACK_API_KEY) — location enrichment skipped');
+    return null;
+  }
+
   try {
-    const res = await fetch(`https://ipinfo.io/${ip}?token=${token}`, {
-      signal: AbortSignal.timeout(3000),
-    });
-    if (!res.ok) return null;
-    const data = await res.json() as {
-      city?: string;
-      region?: string;
-      country?: string;
-      timezone?: string;
-    };
-    return {
-      country: data.country ?? null,
-      region: data.region ?? null,
-      city: data.city ?? null,
-      timezone: data.timezone ?? null,
-    };
-  } catch {
-    return null; // timeout or network error — silent
+    // Primary: ipinfo
+    if (ipinfoToken) {
+      const res = await fetch(`https://ipinfo.io/${ip}?token=${ipinfoToken}`, {
+        signal: AbortSignal.timeout(5000),
+      });
+      if (res.ok) {
+        const data = await res.json() as {
+          city?: string; region?: string; country?: string; timezone?: string;
+        };
+        if (data.country) {
+          log.info('GeoIP enriched via ipinfo', { country: data.country, city: data.city });
+          return {
+            country: data.country ?? null,
+            region: data.region ?? null,
+            city: data.city ?? null,
+            timezone: data.timezone ?? null,
+          };
+        }
+      }
+    }
+
+    // Fallback: ipstack (only reached if ipinfo failed, returned no country, or token missing)
+    if (ipstackKey) {
+      const res = await fetch(
+        `http://api.ipstack.com/${ip}?access_key=${ipstackKey}&fields=country_name,region_name,city,time_zone`,
+        { signal: AbortSignal.timeout(5000) }
+      );
+      if (res.ok) {
+        const data = await res.json() as {
+          country_name?: string;
+          region_name?: string;
+          city?: string;
+          time_zone?: { id?: string };
+          success?: boolean;
+          error?: { info?: string };
+        };
+        // ipstack returns success:false on invalid key/quota
+        if (data.success === false) {
+          log.warn('ipstack API error (fallback)', { error: data.error?.info });
+        } else if (data.country_name) {
+          log.info('GeoIP enriched via ipstack (fallback)', { country: data.country_name, city: data.city });
+          return {
+            country: data.country_name ?? null,
+            region: data.region_name ?? null,
+            city: data.city ?? null,
+            timezone: data.time_zone?.id ?? null,
+          };
+        }
+      }
+    }
+
+    return null;
+  } catch (err) {
+    log.warn('GeoIP enrichment failed', { ip, error: err instanceof Error ? err.message : 'timeout' });
+    return null;
   }
 }
 
 async function enrichLinkedIn(founderName: string): Promise<string | null> {
-  if (!process.env.TAVILY_API_KEY) return null;
+  if (!isTavilyAvailable()) return null;
   try {
-    // Target LinkedIn directly — much higher signal than generic search
-    const result = await tavilySearch(
-      `site:linkedin.com/in "${founderName}"`,
-      3
-    );
-    if (!result) return null;
+    // Search LinkedIn + professional sites for founder background
+    const [linkedinResult, professionalResult] = await Promise.all([
+      tavilySearchText(`site:linkedin.com/in "${founderName}"`, 3, 'advanced'),
+      tavilySearchText(`"${founderName}" founder CEO startup experience background`, 3, 'advanced'),
+    ]);
 
-    // Only use if it actually looks like a profile (has "Experience" or role-like content)
-    const looksLikeProfile =
-      /experience|education|skills|founder|ceo|engineer|developer|manager/i.test(result);
-    return looksLikeProfile ? result.slice(0, 800) : null;
-  } catch {
+    const raw = [linkedinResult, professionalResult].filter(Boolean).join('\n\n');
+    if (!raw || raw.length < 50) return null;
+
+    // Synthesize with Haiku — turn raw snippets into a structured profile
+    const profile = await callHaiku(
+      `Extract a structured founder profile from these search results. Be specific — name companies, roles, years, industries, skills. If the data is too thin or clearly about a different person, respond with just "INSUFFICIENT".
+
+Search results for "${founderName}":
+${raw.slice(0, 1500)}
+
+Format (fill in what you find, skip what you can't):
+ROLE: [current/most recent role and company]
+EXPERIENCE: [key career highlights, industries, years of experience]
+SKILLS: [technical or domain expertise]
+EDUCATION: [if found]
+NOTABLE: [anything distinctive — awards, publications, large exits, open source]`,
+      300
+    );
+
+    if (!profile || /insufficient/i.test(profile)) return null;
+    log.info('LinkedIn enrichment synthesized', { founder: founderName, length: profile.length });
+    return profile.trim().slice(0, 1000);
+  } catch (err) {
+    log.warn('LinkedIn enrichment failed', { founder: founderName, error: err instanceof Error ? err.message : 'unknown' });
     return null;
   }
 }
 
 async function enrichTwitter(founderName: string): Promise<string | null> {
-  if (!process.env.TAVILY_API_KEY) return null;
+  if (!isTavilyAvailable()) return null;
   try {
-    const result = await tavilySearch(
-      `site:twitter.com "${founderName}" OR site:x.com "${founderName}"`,
-      3
+    const result = await tavilySearchText(
+      `site:twitter.com "${founderName}" OR site:x.com "${founderName}" bio building founder`,
+      3,
+      'advanced'
     );
-    if (!result) return null;
+    if (!result || result.length < 30) return null;
 
-    // Only use if it has bio-like content
-    const looksLikeBio = /building|founder|ceo|working on|tweets|engineer|startup/i.test(result);
-    return looksLikeBio ? result.slice(0, 400) : null;
-  } catch {
+    // Synthesize — extract what they care about publicly
+    const bio = await callHaiku(
+      `From these Twitter/X search results, extract what this person publicly cares about, builds, and advocates for. If the results are clearly not about the right person or too thin, respond with just "INSUFFICIENT".
+
+Results for "${founderName}":
+${result.slice(0, 800)}
+
+Reply in 2-3 sentences: what they build/work on, what topics they tweet about, what community they're part of. Be specific.`,
+      150
+    );
+
+    if (!bio || /insufficient/i.test(bio)) return null;
+    log.info('Twitter enrichment synthesized', { founder: founderName });
+    return bio.trim().slice(0, 500);
+  } catch (err) {
+    log.warn('Twitter enrichment failed', { founder: founderName, error: err instanceof Error ? err.message : 'unknown' });
     return null;
   }
 }
 
 async function runEnrichBusiness(ctx: PipelineContext): Promise<void> {
-  if (!ctx.input || !process.env.TAVILY_API_KEY) return;
+  if (!ctx.input || !isTavilyAvailable()) {
+    log.info('Business enrichment skipped', { hasInput: !!ctx.input, hasTavily: isTavilyAvailable() });
+    return;
+  }
 
   const query = ctx.journey === 'grow_my_company'
-    ? `site:${ctx.input} OR "${ctx.input}" business overview products services`
-    : ctx.input;
+    ? `site:${ctx.input} OR "${ctx.input}" business overview products services pricing`
+    : `${ctx.input} market overview competitors how it works`;
 
-  const summary = await tavilySearch(query);
-  if (summary) ctx.enrichedBusinessSummary = summary;
+  const summary = await tavilySearchText(query, 5, 'advanced');
+  if (summary) {
+    ctx.enrichedBusinessSummary = summary;
+    log.info('Business enrichment complete', { companyId: ctx.companyId, length: summary.length });
+  } else {
+    log.warn('Business enrichment returned no results', { companyId: ctx.companyId, query: query.slice(0, 80) });
+  }
 }
 
 async function runPersistContext(ctx: PipelineContext): Promise<void> {
@@ -459,7 +559,11 @@ REASONING: <one sentence: why this founder + this idea + this platform = credibl
     const ideaMatch = response.match(/IDEA:\s*(.+)/i);
     const reasoningMatch = response.match(/REASONING:\s*(.+)/i);
 
-    ctx.strategy = ideaMatch?.[1]?.trim().slice(0, 200) || 'novel_saas_tool';
+    const idea = ideaMatch?.[1]?.trim().slice(0, 200);
+    if (!idea) {
+      throw new Error('Strategy generation failed: LLM returned no parseable IDEA. Cannot proceed without a business strategy.');
+    }
+    ctx.strategy = idea;
 
     // Persist reasoning to Layer 1 so CEO can explain "why this idea" later
     const reasoning = reasoningMatch?.[1]?.trim() ?? '';
@@ -472,7 +576,7 @@ REASONING: <one sentence: why this founder + this idea + this platform = credibl
       ]);
     }
   } else {
-    ctx.strategy = 'novel_saas_tool';
+    throw new Error('Strategy generation failed: no founder background available for "surprise_me" journey. Cannot generate a business idea without context.');
   }
 }
 
@@ -551,7 +655,10 @@ Rules:
 Reply with ONLY the company name. Nothing else.`;
 
     const name = await callHaiku(prompt);
-    const cleanName = name.trim().replace(/[^a-zA-Z0-9\s]/g, '').slice(0, 50) || 'Launchpad';
+    const cleanName = name.trim().replace(/[^a-zA-Z0-9\s]/g, '').slice(0, 50);
+    if (!cleanName) {
+      throw new Error(`Company naming failed: LLM returned empty name on attempt ${attempt + 1}. Cannot proceed without a company name.`);
+    }
 
     // Check slug availability
     const { generateSlug } = await import('@/lib/slug');
@@ -570,20 +677,19 @@ Reply with ONLY the company name. Nothing else.`;
     log.info(`Name collision on attempt ${attempt + 1}: "${cleanName}" (slug: ${slug})`, { companyId: ctx.companyId });
   }
 
-  // Safety net: use last tried name (slug will get suffix via generateSlug collision handling)
-  ctx.companyName = triedNames[triedNames.length - 1] || 'Launchpad';
+  // All 3 attempts had slug collisions — fail instead of using generic name
+  throw new Error(`Company naming failed: ${MAX_NAME_RETRIES} attempts all had slug collisions (tried: ${triedNames.join(', ')}). Cannot proceed.`);
 }
 
 async function runMarketResearch(ctx: PipelineContext): Promise<void> {
-  if (!process.env.TAVILY_API_KEY) return;
+  if (!isTavilyAvailable()) return;
 
   const base = ctx.input ?? ctx.strategy;
   const geo = ctx.founderEnrichment?.geo;
   const country = geo?.country ?? null;
+  const city = geo?.city ?? null;
 
-  // Run two searches in parallel:
-  // 1. Competitor/market research for the specific idea
-  // 2. What's growing in the founder's local market (shapes pricing, ICP, opportunity)
+  // Run searches in parallel — broad + local + pricing
   const angleHint = ctx.founderAngle
     ? ctx.founderAngle.split('.')[0].slice(0, 100)
     : '';
@@ -592,16 +698,65 @@ async function runMarketResearch(ctx: PipelineContext): Promise<void> {
     ? `${base} competitors pricing customers ${angleHint} 2024 2025`
     : `${base} market competitors pricing target customers 2024 2025`;
 
-  const [competitorResearch, localMarketResearch] = await Promise.all([
-    tavilySearch(competitorQuery),
-    country
-      ? tavilySearch(`fastest growing startups ${country} ${new Date().getFullYear()} market opportunities`)
-      : Promise.resolve(null),
-  ]);
+  const pricingQuery = `${base} pricing plans SaaS how much does it cost`;
 
-  // Combine: competitor analysis first, local market context appended
-  const parts = [competitorResearch, localMarketResearch].filter(Boolean);
-  ctx.marketResearch = parts.join('\n\n---\n\n').slice(0, 2000) || null;
+  const searches = [
+    tavilySearchText(competitorQuery, 5),
+    tavilySearchText(pricingQuery, 3),
+    country
+      ? tavilySearchText(`fastest growing startups ${country}${city ? ' ' + city : ''} ${new Date().getFullYear()} funding market trends`, 3)
+      : Promise.resolve(null),
+  ];
+
+  const [competitorRaw, pricingRaw, localRaw] = await Promise.all(searches);
+
+  // Combine raw results
+  const rawParts = [competitorRaw, pricingRaw, localRaw].filter(Boolean);
+  if (rawParts.length === 0) return;
+  const rawResearch = rawParts.join('\n\n---\n\n').slice(0, 3000);
+
+  // Synthesize with Haiku — turn raw snippets into actionable competitive analysis
+  const synthesisPrompt = `You are a market analyst. Synthesize these search results into a sharp competitive analysis for a new startup.
+
+Startup idea: ${base}
+${ctx.founderAngle ? `Founder positioning: ${ctx.founderAngle.slice(0, 200)}` : ''}
+${country ? `Founder location: ${[city, country].filter(Boolean).join(', ')}` : ''}
+
+Raw search results:
+${rawResearch}
+
+Write a structured analysis (be specific — name companies, cite prices, name trends):
+
+## Competitors
+Name the top 3-5 direct competitors. For each: what they do, their pricing, their weakness.
+
+## Market Size & Trends
+What's the market doing? Growth rate, funding trends, emerging segments.
+
+## Pricing Intelligence
+What do competitors charge? What pricing model works (freemium, per-seat, usage-based)?
+
+## Opportunity Gap
+What's missing? What do customers complain about? Where is this founder positioned to win?
+
+${country ? `## Local Market Context\nWhat's happening in ${country} specifically? Local competitors, regulations, or opportunities.` : ''}
+
+Be concise. No fluff. Every sentence should contain a specific fact, name, or number.`;
+
+  try {
+    const analysis = await callHaiku(synthesisPrompt, 1200);
+    ctx.marketResearch = analysis.trim() || null;
+    if (ctx.marketResearch) {
+      log.info('Market research synthesized', { companyId: ctx.companyId, length: ctx.marketResearch.length });
+    }
+  } catch (err) {
+    // Fallback: use raw results if synthesis fails
+    log.warn('Market research synthesis failed, using raw results', {
+      companyId: ctx.companyId,
+      error: err instanceof Error ? err.message : 'unknown',
+    });
+    ctx.marketResearch = rawResearch.slice(0, 2000);
+  }
 }
 
 async function runProvisionInfrastructure(ctx: PipelineContext): Promise<void> {
@@ -619,43 +774,23 @@ async function runProvisionInfrastructure(ctx: PipelineContext): Promise<void> {
   ctx.slug = slug;
   await db.update(companies).set({ name: ctx.companyName, slug }).where(eq(companies.id, ctx.companyId));
 
-  // Provision Neon database — appends infra section to Layer 1 (non-blocking)
-  if (process.env.NEON_API_KEY) {
-    try {
-      await provisionCompanyDatabase(ctx.companyId, slug);
-      // neon.service writes infra section — but to avoid overwrite, append here
-      await appendMemorySection(ctx.companyId, '## Infrastructure', [
-        `Neon DB: provisioned`,
-        `Slug: ${slug}`,
-        `Subdomain: ${slug}.baljia.app`,
-      ]);
-    } catch (err) {
-      log.warn('Neon provisioning failed — company will use platform DB fallback', {
-        companyId: ctx.companyId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  } else {
-      await appendMemorySection(ctx.companyId, '## Infrastructure', [
-      `Slug: ${slug}`,
-      `Subdomain: ${slug}.baljia.app`,
-      `Database: platform shared Postgres (Neon not configured)`,
-    ]);
-  }
+  // ARCHITECTURE NOTE — onboarding does NOT provision GitHub, Render, Neon, or
+  // per-company DNS. The {slug}.baljia.app subdomain is served by the platform
+  // via wildcard DNS + middleware until the Engineering agent builds the real
+  // product (at which point provision_database + render_create_service are
+  // called from inside the engineer's task, and provisionSubdomain swaps the
+  // wildcard for a per-company CNAME pointing at Render).
+  //
+  // Onboarding only does light-touch metadata + the company email routing rule.
 
-  // Provision {slug}.baljia.app subdomain (non-blocking)
-  // Note: website won't be live until Engineering agent deploys a Render service
-  try {
-    await provisionSubdomain(ctx.companyId, slug, '');
-    log.info('Subdomain provisioned', { slug, domain: `${slug}.baljia.app` });
-  } catch (err) {
-    log.warn('Subdomain provisioning failed — can be retried later', {
-      companyId: ctx.companyId,
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
+  await appendMemorySection(ctx.companyId, '## Infrastructure', [
+    `Slug: ${slug}`,
+    `Subdomain: ${slug}.baljia.app (served by platform — no Render service yet)`,
+    `Database: platform shared Postgres (per-company Neon DB will be provisioned by Engineering agent on first need)`,
+  ]);
 
-  // Provision {slug}@baljia.app email (non-blocking)
+  // Provision {slug}@baljia.app email (non-blocking) — Cloudflare email routing
+  // rule is free and instant; safe to do at onboarding.
   try {
     await provisionCompanyEmail(ctx.companyId, slug, ctx.companyName, ctx.founderEmail);
     log.info('Company email provisioned', { email: `${slug}@baljia.app` });
@@ -692,8 +827,15 @@ MISSION: <inspiring 1-2 sentence mission that references the founder's specific 
   const oneLinerMatch = response.match(/ONE_LINER:\s*(.+)/i);
   const missionMatch = response.match(/MISSION:\s*(.+)/i);
 
-  ctx.oneLiner = oneLinerMatch?.[1]?.trim() ?? `${ctx.companyName} — building the future`;
-  ctx.mission = missionMatch?.[1]?.trim() ?? `Empowering people through innovative technology.`;
+  const oneLiner = oneLinerMatch?.[1]?.trim();
+  const mission = missionMatch?.[1]?.trim();
+
+  if (!oneLiner || !mission) {
+    throw new Error(`Mission generation failed: LLM response could not be parsed. Got: "${response.slice(0, 200)}". Cannot proceed without a mission and one-liner.`);
+  }
+
+  ctx.oneLiner = oneLiner;
+  ctx.mission = mission;
 
   // Save to company record
   await db.update(companies).set({ one_liner: ctx.oneLiner }).where(eq(companies.id, ctx.companyId));
@@ -757,12 +899,16 @@ async function runDeriveActiveMilestone(ctx: PipelineContext): Promise<void> {
 }
 
 async function runCreateStarterTasks(ctx: PipelineContext): Promise<void> {
-  // Prefer Haiku-generated tasks when we have enough context — they name real competitors
-  // and specific target customers based on market research + founder background.
-  // Fall back to static templates when context is too thin.
-  const tasks = (ctx.marketResearch || ctx.founderAngle)
-    ? (await generatePersonalizedTasks(ctx) ?? getStarterTaskTemplates(ctx.journey, ctx.companyName, ctx.input))
-    : getStarterTaskTemplates(ctx.journey, ctx.companyName, ctx.input);
+  // Generate personalized tasks from market research + founder background.
+  // No static fallback — if we can't generate real tasks, fail loud.
+  if (!ctx.marketResearch && !ctx.founderAngle) {
+    throw new Error('Starter task generation failed: no market research or founder angle available. Cannot create meaningful tasks without context.');
+  }
+
+  const tasks = await generatePersonalizedTasks(ctx);
+  if (!tasks || tasks.length === 0) {
+    throw new Error('Starter task generation failed: LLM could not produce parseable tasks from the available context. Cannot proceed with generic templates.');
+  }
 
   for (let i = 0; i < tasks.length; i++) {
     await taskService.createTask({
@@ -778,6 +924,14 @@ async function runCreateStarterTasks(ctx: PipelineContext): Promise<void> {
       suggestion_reasoning: tasks[i].reasoning,
     });
   }
+}
+
+interface StarterTask {
+  title: string;
+  description: string;
+  tag: string;
+  estimated_credits: number;
+  reasoning: string;
 }
 
 async function generatePersonalizedTasks(ctx: PipelineContext): Promise<StarterTask[] | null> {
@@ -826,7 +980,7 @@ TASK_3_DESC: [2-3 sentences naming the specific audience and what to say]`;
     const t2Title = extract('TASK_2_TITLE');
     const t3Title = extract('TASK_3_TITLE');
 
-    // If we can't parse 3 titles, fall through to static templates
+    // If we can't parse 3 titles, return null — caller throws
     if (!t1Title || !t2Title || !t3Title) return null;
 
     return [
@@ -853,7 +1007,7 @@ TASK_3_DESC: [2-3 sentences naming the specific audience and what to say]`;
       },
     ];
   } catch {
-    return null; // fall through to static templates
+    return null; // caller throws on null
   }
 }
 
@@ -916,39 +1070,145 @@ Keep it under 300 lines.`;
   }
 }
 
-async function runSendWelcomeEmail(ctx: PipelineContext): Promise<void> {
-  // Send welcome email FROM the company inbox ({slug}@baljia.app), not from platform.
-  // This proves the inbox identity is real and working.
+// ── EMAIL #1 — startup / "I'm building it RIGHT NOW" (Polsia parity) ──
+//
+// Fired immediately after company name is set, BEFORE long stages run. Sender is
+// the company-flavored {slug}@baljia.app, not the platform sender — this is the
+// "your AI inside your company is writing to you" identity moment. Short, present
+// tense, mood = excited. The founder reads it while the agent is still building.
+async function runSendStartupEmail(ctx: PipelineContext): Promise<void> {
   if (!ctx.founderEmail || !ctx.slug) return;
 
-  const companyEmail = `${ctx.slug}@baljia.app`;
+  const fromAddress = `${ctx.slug}@baljia.app`;
+  const dashboardUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://baljia.ai';
+
+  // Use a one-line description if we have it, otherwise a generic phrase
+  const productPhrase = ctx.oneLiner
+    ? `I'm building ${ctx.oneLiner.toLowerCase()}`
+    : `I'm setting up ${ctx.companyName} for you`;
+
+  const asciiExcited = [
+    '┌─────────┐',
+    '│  ★   ★  │',
+    '│    ▽    │',
+    '│  ◡◡◡◡◡  │',
+    '└─────────┘',
+    '    ♪ ♪',
+  ].join('\n');
+
   try {
     await sendEmail({
       to: ctx.founderEmail,
-      from: companyEmail,
-      subject: `Welcome to ${ctx.companyName} — your AI team is ready`,
+      from: fromAddress,
+      subject: `Your first email from ${ctx.companyName}`,
       textBody: [
         `Hi ${ctx.founderName ?? 'there'},`,
         '',
-        `Your company "${ctx.companyName}" is live. Here's what your AI Angel has set up:`,
+        `This is your first email from your new company: ${ctx.companyName}!`,
         '',
-        `- Company website: ${ctx.slug}.baljia.app`,
-        `- Company inbox: ${companyEmail}`,
-        `- Mission and market research documents`,
-        `- 3 starter tasks ready to execute`,
+        `You now have a company email: ${fromAddress}`,
         '',
-        `Head to your dashboard to review everything and approve your first task.`,
+        `${productPhrase} right now. Check your dashboard to watch me work!`,
         '',
-        `To start executing tasks, activate your 3-day free trial (10 credits, 3 night shifts).`,
+        `— Baljia (Excited)`,
+        asciiExcited,
         '',
-        `— Your AI Angel at ${ctx.companyName}`,
+        `View Dashboard → ${dashboardUrl}`,
       ].join('\n'),
-      tag: 'welcome',
+      tag: 'startup',
       companyId: ctx.companyId,
     });
-    log.info('Welcome email sent from company inbox', { from: companyEmail, to: ctx.founderEmail });
+    log.info('Startup email sent', { from: fromAddress, to: ctx.founderEmail });
   } catch (err) {
-    log.warn('Welcome email from company inbox failed — non-blocking', {
+    log.warn('Startup email failed — non-blocking', {
+      companyId: ctx.companyId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+// ── EMAIL #2 — completion summary (Polsia parity) ──
+//
+// Fired at end of onboarding after everything is built. Sender is the platform
+// system@baljia.ai (institutional voice). Past tense, lists what was researched
+// and built, names the 3 starter tasks, ends with subscribe CTA. Mood = celebrating.
+async function runSendCompletionEmail(ctx: PipelineContext): Promise<void> {
+  if (!ctx.founderEmail) return;
+
+  const fromAddress = process.env.BALJIA_AUTH_FROM_EMAIL || 'system@baljia.ai';
+  const dashboardUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://baljia.ai';
+
+  // Pull the actual task titles + descriptions for the body
+  let starterTasks: Array<{ title: string; description: string | null }> = [];
+  try {
+    const allTasks = await taskService.getTasks(ctx.companyId);
+    starterTasks = allTasks
+      .filter((t) => t.source === 'onboarding')
+      .sort((a, b) => (a.queue_order ?? 0) - (b.queue_order ?? 0))
+      .slice(0, 3)
+      .map((t) => ({ title: t.title, description: t.description ?? null }));
+  } catch {
+    // Non-blocking
+  }
+
+  // Distilled market-finding line for the lede (Polsia opens with the insight)
+  const insightLine = ctx.marketResearch
+    ? `I researched the market and found ${ctx.marketResearch.slice(0, 200).split('\n')[0].trim()}`
+    : `I researched ${ctx.companyName}'s market and identified 3 priorities to start with`;
+
+  const builtItems: string[] = [];
+  if (ctx.slug) builtItems.push(`Landing page live at ${ctx.slug}.baljia.app`);
+  if (ctx.slug) builtItems.push(`Company email active at ${ctx.slug}@baljia.app`);
+  builtItems.push(`Tweeted your launch from @baljia_ai`);
+  if (ctx.marketResearch) builtItems.push(`Market research report saved`);
+  if (ctx.mission) builtItems.push(`Mission document written`);
+
+  const taskBullets = starterTasks.map((t, i) => {
+    const desc = t.description ? ` — ${t.description.split('\n')[0].slice(0, 100)}` : '';
+    return `  ${i + 1}. ${t.title}${desc}`;
+  });
+
+  const asciiCelebrating = [
+    '┌─────────┐',
+    '│  ◠   ◠  │',
+    '│    ▽    │',
+    '│   ◡◡◡   │',
+    '├────●────┤',
+    '│   🥇    │',
+    '└─────────┘',
+  ].join('\n');
+
+  try {
+    await sendEmail({
+      to: ctx.founderEmail,
+      from: fromAddress,
+      subject: `${ctx.companyName} is live`,
+      textBody: [
+        `${ctx.founderName ?? 'Hi'}, your ${ctx.oneLiner ?? ctx.companyName} is live.`,
+        '',
+        insightLine,
+        '',
+        `Here's what I built today:`,
+        '',
+        ...builtItems.map((b) => `  ${b}`),
+        '',
+        taskBullets.length > 0 ? `${taskBullets.length} tasks queued for your first cycle:` : '',
+        '',
+        ...taskBullets,
+        '',
+        `Subscribe to start your first operating cycle and I'll begin working through these tasks with daily progress.`,
+        '',
+        `— Baljia (Celebrating)`,
+        asciiCelebrating,
+        '',
+        `View Dashboard → ${dashboardUrl}`,
+      ].filter(Boolean).join('\n'),
+      tag: 'completion',
+      companyId: ctx.companyId,
+    });
+    log.info('Completion email sent', { from: fromAddress, to: ctx.founderEmail });
+  } catch (err) {
+    log.warn('Completion email failed — non-blocking', {
       companyId: ctx.companyId,
       error: err instanceof Error ? err.message : String(err),
     });
@@ -994,7 +1254,7 @@ async function runGenerateCeoSummary(ctx: PipelineContext): Promise<void> {
   const checklistItems: string[] = [];
   if (ctx.marketResearch) checklistItems.push('✅ Market research completed');
   if (ctx.founderAngle) checklistItems.push('✅ Founder background analyzed');
-  if (ctx.slug) checklistItems.push(`✅ Welcome email sent from ${ctx.slug}@baljia.app`);
+  if (ctx.slug) checklistItems.push(`✅ Startup email sent from ${ctx.slug}@baljia.app`);
   if (isLateDevConfigured()) checklistItems.push('✅ Launch tweet posted from @baljia_ai');
   if (ctx.slug) checklistItems.push(`✅ Landing page built at ${ctx.slug}.baljia.app`);
   checklistItems.push('✅ Mission created');
@@ -1036,6 +1296,9 @@ async function runGenerateCeoSummary(ctx: PipelineContext): Promise<void> {
   });
 
   log.info('CEO bootstrap summary posted', { companyId: ctx.companyId, sessionId: session.id });
+  // Note: the founder ALSO receives the welcome email (sent earlier in the pipeline
+  // by runSendWelcomeEmail). That email contains the full checklist + starter tasks
+  // and serves as the "onboarding summary" delivered to their inbox.
 }
 
 async function runFlushDiagnostics(ctx: PipelineContext): Promise<void> {
@@ -1073,129 +1336,53 @@ async function runCelebrate(ctx: PipelineContext): Promise<void> {
   // (send_welcome_email and generate_roadmap respectively)
 }
 
-// ══════════════════════════════════════════════
-// STARTER TASK TEMPLATES — per journey
-// Dependency chain: Research → Build → Growth
-// ══════════════════════════════════════════════
-
-interface StarterTask {
-  title: string;
-  description: string;
-  tag: string;
-  estimated_credits: number;
-  reasoning: string;
-}
-
-function getStarterTaskTemplates(
-  journey: OnboardingJourney,
-  companyName: string,
-  input: string | undefined
-): StarterTask[] {
-  switch (journey) {
-    case 'surprise_me':
-      return [
-        {
-          title: `Research: Validate the ${companyName} opportunity`,
-          description: `Conduct market research for ${companyName}. Identify: target customer segment, top 3 competitors, estimated market size, key pain points, and initial positioning. Produce a research summary document.`,
-          tag: 'research',
-          estimated_credits: 1,
-          reasoning: 'Foundation research — required before any build work begins.',
-        },
-        {
-          title: `Build: Create the ${companyName} MVP`,
-          description: `Based on the research summary, design and build a minimal viable product for ${companyName}. Focus on the single core feature that addresses the primary customer pain point. Deploy to production.`,
-          tag: 'engineering',
-          estimated_credits: 1,
-          reasoning: 'Core MVP build — depends on research output.',
-        },
-        {
-          title: `Growth: Launch ${companyName} to first users`,
-          description: `Execute initial launch for ${companyName}. Create launch messaging, identify first 10 potential customers from the ICP, and send personalized outreach. Track responses.`,
-          tag: 'outreach',
-          estimated_credits: 1,
-          reasoning: 'Initial growth push — depends on live MVP.',
-        },
-      ];
-
-    case 'build_my_idea':
-      return [
-        {
-          title: `Research: Validate "${input ?? companyName}" as a business`,
-          description: `Validate the business idea: "${input ?? companyName}". Research: Who is the target customer? What are they using today? What are the top 3 competing solutions? What's the realistic path to first $1K MRR? Produce a validation report.`,
-          tag: 'research',
-          estimated_credits: 1,
-          reasoning: 'Idea validation before investing build effort.',
-        },
-        {
-          title: `Build: Build the ${companyName} MVP`,
-          description: `Build a working MVP based on the validated idea and research findings. Implement the core feature loop. Deploy a live version. Include basic analytics tracking.`,
-          tag: 'engineering',
-          estimated_credits: 1,
-          reasoning: 'Core product build — proceeds only after validation.',
-        },
-        {
-          title: `Growth: Get first 10 users for ${companyName}`,
-          description: `Drive initial user acquisition for ${companyName}. Define ICP from research. Write personalized cold outreach to 20 prospects. Set up a basic referral or feedback loop. Goal: 10 signups.`,
-          tag: 'outreach',
-          estimated_credits: 1,
-          reasoning: 'Early traction — needs live product from build phase.',
-        },
-      ];
-
-    case 'grow_my_company':
-      return [
-        {
-          title: `Research: Audit ${companyName}'s current state`,
-          description: `Audit the existing business at ${input ?? companyName}. Identify: current traffic sources, conversion rates, top customer segments, biggest drop-off points, and 3 highest-leverage growth opportunities. Produce an audit report.`,
-          tag: 'research',
-          estimated_credits: 1,
-          reasoning: 'Baseline audit — identifies highest-leverage improvements.',
-        },
-        {
-          title: `Build: Implement top improvement for ${companyName}`,
-          description: `Based on the audit, implement the single highest-leverage product or technical improvement identified. Focus on something measurable — conversion rate, load time, UX friction, or missing feature.`,
-          tag: 'engineering',
-          estimated_credits: 1,
-          reasoning: 'Targeted improvement — depends on audit findings.',
-        },
-        {
-          title: `Growth: Scale the top channel for ${companyName}`,
-          description: `Identify the top-performing acquisition channel from the audit. Double down: create content/campaigns, set up tracking, and execute 2 weeks of consistent output on that channel. Report on results.`,
-          tag: 'outreach',
-          estimated_credits: 1,
-          reasoning: 'Amplify what already works — channel-specific growth push.',
-        },
-      ];
-  }
-}
+// Static starter task templates removed — all tasks must be LLM-generated from real context.
+// If the LLM can't produce tasks, the pipeline fails loud instead of creating generic filler.
 
 // ══════════════════════════════════════════════
 // HELPERS
 // ══════════════════════════════════════════════
 
 async function callHaiku(prompt: string, maxTokens = 256): Promise<string> {
-  const { isAnthropicAvailable } = await import('@/lib/llm-provider');
+  const { isAnthropicAvailable, isOpenAIAvailable, callOpenAI, OPENAI_MODELS, getPreferredProvider } = await import('@/lib/llm-provider');
 
-  if (isAnthropicAvailable()) {
-    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-    const response = await client.messages.create({
-      model: HAIKU_MODEL,
-      max_tokens: maxTokens,
-      messages: [{ role: 'user', content: prompt }],
-    });
-    const block = response.content[0];
-    return block.type === 'text' ? block.text : '';
+  // Provider-ordered fallback: respects PRIMARY_LLM_PROVIDER
+  // Default: OpenAI GPT-4o-mini → Haiku → Gemini
+  const preferred = getPreferredProvider();
+  const order = preferred === 'anthropic'
+    ? ['anthropic', 'openai', 'gemini'] as const
+    : ['openai', 'anthropic', 'gemini'] as const;
+
+  for (const p of order) {
+    try {
+      if (p === 'openai' && isOpenAIAvailable()) {
+        return await callOpenAI({ userPrompt: prompt, maxTokens, model: OPENAI_MODELS.GPT_5_4_MINI });
+      }
+      if (p === 'anthropic' && isAnthropicAvailable()) {
+        const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+        const response = await client.messages.create({
+          model: HAIKU_MODEL,
+          max_tokens: maxTokens,
+          messages: [{ role: 'user', content: prompt }],
+        });
+        const block = response.content[0];
+        return block.type === 'text' ? block.text : '';
+      }
+      if (p === 'gemini') {
+        const apiKey = process.env.GEMINI_API_KEY;
+        if (!apiKey || apiKey === 'placeholder') continue;
+        const { GoogleGenerativeAI } = await import('@google/generative-ai');
+        const genAI = new GoogleGenerativeAI(apiKey);
+        const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+        const result = await model.generateContent(prompt);
+        return result.response.text();
+      }
+    } catch (err) {
+      // try next provider
+    }
   }
 
-  // Gemini fallback
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey || apiKey === 'placeholder') throw new Error('No LLM API key available (neither Anthropic nor Gemini)');
-
-  const { GoogleGenerativeAI } = await import('@google/generative-ai');
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
-  const result = await model.generateContent(prompt);
-  return result.response.text();
+  throw new Error('No LLM API key available (OpenAI, Anthropic, and Gemini all unavailable)');
 }
 
 // ── Section-aware Layer 1 append ─────────────────────────────────────────────
@@ -1234,39 +1421,4 @@ async function appendMemorySection(
     .where(and(eq(memoryLayers.company_id, companyId), eq(memoryLayers.layer, 1)));
 }
 
-async function tavilySearch(query: string, maxResults = 5): Promise<string | null> {
-  const apiKey = process.env.TAVILY_API_KEY;
-  if (!apiKey) return null;
-
-  try {
-    const res = await fetch('https://api.tavily.com/search', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        api_key: apiKey,
-        query,
-        search_depth: 'basic',
-        max_results: maxResults,
-        include_answer: true,
-      }),
-    });
-
-    if (!res.ok) return null;
-    const data = await res.json();
-
-    // Return Tavily's synthesized answer + top result snippets
-    const parts: string[] = [];
-    if (data.answer) parts.push(data.answer);
-    if (data.results?.length) {
-      parts.push(
-        data.results
-          .slice(0, 3)
-          .map((r: { title: string; content: string }) => `${r.title}: ${r.content}`)
-          .join('\n')
-      );
-    }
-    return parts.join('\n\n').slice(0, 1500) || null;
-  } catch {
-    return null;
-  }
-}
+// Local tavilySearch removed — now using shared @/lib/tavily module with key rotation

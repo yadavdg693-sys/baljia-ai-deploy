@@ -167,7 +167,7 @@ export default function FaqPage() {
           ))}
           {searchLower && filteredCategories.length === 0 && (
             <p className="text-sm text-text-muted text-center py-10">
-              No results for "{search}". Try a different search term.
+              No results for &ldquo;{search}&rdquo;. Try a different search term.
             </p>
           )}
         </div>
