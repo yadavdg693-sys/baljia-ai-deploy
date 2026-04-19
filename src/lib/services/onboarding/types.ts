@@ -24,6 +24,8 @@ export type OnboardingStage =
   | 'generate_landing_page'
   | 'post_launch_tweet'
   | 'generate_ceo_summary'
+  | 'generate_magic_link'
+  | 'send_inbox_message'
   | 'send_completion_email'
   | 'flush_diagnostics'
   | 'celebrate';
