@@ -8,26 +8,31 @@ import { requireAuth, isApiError } from '@/lib/api-utils';
 import { db, companies, platformEvents } from '@/lib/db';
 import { eq, and, inArray, gt, asc } from 'drizzle-orm';
 
-// Stage labels shown in the UI
+// Stage labels shown in the UI — kept in sync with OnboardingStage in
+// src/lib/services/onboarding/types.ts
 const STAGE_LABELS: Record<string, string> = {
   heartbeat: 'Starting up...',
-  enrich_founder: 'Researching your background...',
-  enrich_business: 'Analyzing your business...',
-  persist_context: 'Saving context...',
+  enrich_geo: 'Detecting your location...',
+  enrich_linkedin: 'Reading your professional background...',
+  enrich_twitter: 'Reading your public profile...',
   extract_founder_angle: 'Analyzing your positioning...',
+  persist_context: 'Saving context...',
   select_strategy: 'Choosing strategy...',
-  classify_archetype: 'Classifying business type...',
+  refine_idea: 'Refining your idea...',
+  fetch_business_url: 'Reading your business site...',
+  invent_idea: 'Inventing an idea from your background...',
   name_company: 'Naming your company...',
   provision_infrastructure: 'Provisioning infrastructure...',
+  send_startup_email: 'Sending your first company email...',
   generate_market_research: 'Researching market opportunity...',
   save_mission: 'Writing mission statement...',
   generate_roadmap: 'Building your roadmap...',
   derive_active_milestone: 'Setting your first milestone...',
   create_starter_tasks: 'Creating your first tasks...',
   generate_landing_page: 'Generating your landing page...',
-  send_welcome_email: 'Sending welcome email...',
   post_launch_tweet: 'Posting launch announcement...',
   generate_ceo_summary: 'Preparing CEO briefing...',
+  send_completion_email: 'Sending your summary email...',
   flush_diagnostics: 'Finalizing setup...',
   celebrate: 'Ready!',
 };
