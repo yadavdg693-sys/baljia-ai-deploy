@@ -39,5 +39,9 @@ See [helpers/auth.ts](helpers/auth.ts).
 
 ## Known issues
 
-- **Next.js 15 on Windows**: first page compile can trigger transient "jest worker encountered child process exceptions" crashes. Re-run resolves it.
+- **Next.js 15 on Windows — first compile is slow**: first run of the dashboard test takes ~8 minutes due to cold webpack compilation of the heavy dashboard shell. Occasionally the first compile hits "jest worker encountered child process exceptions" — re-running with a warm cache passes cleanly (verified 1 passed in 8.7m after first-compile crash).
 - **Subdomain routing**: local dev doesn't resolve `{slug}.baljia.app` — the public-company test hits `/company/{slug}` explicitly instead.
+
+## Verified results
+
+Full suite run (after warm compile): **6/6 passing** across public pages (landing, login, FAQ) and authenticated UI (onboarding chooser, dashboard render, public company page).
