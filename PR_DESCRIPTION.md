@@ -72,7 +72,13 @@ src/lib/services/onboarding/
 - 8752-char distribution-focused market research (denser Grow format)
 - 35/35 assertions passed
 
-**Surprise journey**: not run against smoke user (synthetic user has no public Tavily footprint for LinkedIn/Twitter enrichment; `invent_idea` intentionally requires background). Deferred to staging validation with a real founder.
+**Surprise journey** (`surprise_me` — default user "Paul Graham" for realistic Tavily enrichment):
+- Pipeline completed cleanly
+- Company named "Partnerloom"
+- Invented idea: *"A web app for technical founders of pre-seed AI and developer-tools startups..."* (grounded in founder background)
+- 6459-char product-focused market research with Why Now + Idea Refinements sections
+- Cost event: llm_calls=9, tavily_calls=6 (higher than Build/Grow due to fullHeader's LinkedIn/Twitter/angle enrichment)
+- 35/35 assertions passed
 
 ## Known items (not blockers)
 
@@ -88,7 +94,7 @@ src/lib/services/onboarding/
 - [x] `npx tsc --noEmit` passes for the onboarding module
 - [x] Smoke test Build journey — 35/35
 - [x] Smoke test Grow journey — 35/35
-- [ ] Surprise journey — staging validation with real founder
+- [x] Smoke test Surprise journey — 35/35 (with real-name founder for Tavily enrichment)
 - [ ] Full E2E once Postmark approval lands (startup + completion email delivery)
 - [ ] Frontend walk-through in dev browser (log strip rendering, SSE stream, mood indicator)
 
