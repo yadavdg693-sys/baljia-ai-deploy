@@ -1,0 +1,1516 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Baljia AI — Build &amp; Run Your Business with AI | AI for Solo Founders</title>
+<meta name="description" content="Meet your AI Angel. Baljia AI helps solo founders validate ideas, build full-stack products, create marketing campaigns, and automate daily operations — all from one AI workspace.">
+<meta name="keywords" content="AI company management, autonomous AI, AI angel, run company with AI, AI startup, AI business automation, Baljia AI, solopreneur AI">
+<meta name="robots" content="index, follow">
+<meta name="author" content="Baljia AI">
+<link rel="canonical" href="https://baljia.ai">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://baljia.ai">
+<meta property="og:title" content="Baljia AI — Build & Run Your Business with AI">
+<meta property="og:description" content="Meet your AI Angel. Validate ideas, build real software, automate marketing and operations — Baljia AI handles it all so you can focus on your vision.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#FCFBF8">
+<link rel="icon" type="image/png" href="assets/mascot.png">
+
+<template id="__bundler_thumbnail" data-bg-color="#FCFBF8">
+  <svg viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <radialGradient id="g" cx="50%" cy="45%" r="50%">
+        <stop offset="0%" stop-color="#FCD34D"/>
+        <stop offset="100%" stop-color="#D97706"/>
+      </radialGradient>
+    </defs>
+    <circle cx="200" cy="200" r="120" fill="url(#g)" opacity="0.15"/>
+    <circle cx="200" cy="200" r="80" fill="url(#g)"/>
+    <text x="200" y="222" text-anchor="middle" font-family="Georgia,serif" font-style="italic" font-size="64" fill="#FCFBF8" font-weight="500">B</text>
+  </svg>
+</template>
+
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"SoftwareApplication","name":"Baljia AI","description":"Build and run your business with AI.","applicationCategory":"BusinessApplication","url":"https://baljia.ai","operatingSystem":"Web","offers":{"@type":"Offer","price":"0","priceCurrency":"USD","description":"Free early access for waitlist members"}}
+</script>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400;1,6..72,500;1,6..72,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<style>
+/* ===== DESIGN TOKENS ===== */
+:root {
+  --color-primary: #E1B12C;
+  --color-primary-light: #FCD34D;
+  --color-primary-mid: #F59E0B;
+  --color-primary-dark: #D97706;
+  --color-primary-deep: #A35F05;
+  --color-primary-bg: rgba(225, 177, 44, 0.1);
+  --color-primary-border: rgba(225, 177, 44, 0.28);
+
+  --color-bg: #FCFBF8;
+  --color-bg-alt: #F4F2EC;
+  --color-bg-muted: #EAE5DD;
+  --color-ink: #1E1A16;
+  --color-ink-2: #3A332C;
+  --color-text: #1E1A16;
+  --color-text-muted: #5C5147;
+  --color-text-dim: #8A7D72;
+  --color-border: rgba(217,119,6,0.10);
+  --color-border-strong: rgba(217,119,6,0.22);
+  --color-success: #047857;
+  --color-danger: #B91C1C;
+
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-serif: 'Newsreader', Georgia, serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+
+  --shadow-sm: 0 1px 2px rgba(24,18,10,0.04);
+  --shadow-md: 0 8px 24px rgba(24,18,10,0.06), 0 1px 2px rgba(24,18,10,0.04);
+  --shadow-lg: 0 24px 60px rgba(24,18,10,0.10), 0 2px 6px rgba(24,18,10,0.04);
+  --shadow-gold: 0 18px 40px rgba(217,119,6,0.18);
+}
+
+body.dark {
+  --color-bg: #14110D;
+  --color-bg-alt: #1B1712;
+  --color-bg-muted: #231E17;
+  --color-text: #F5EFE4;
+  --color-ink: #F5EFE4;
+  --color-ink-2: #E6DDCB;
+  --color-text-muted: #BDB09C;
+  --color-text-dim: #8A7D6B;
+  --color-border: rgba(225,177,44,0.14);
+  --color-border-strong: rgba(225,177,44,0.28);
+  --color-primary-bg: rgba(225,177,44,0.12);
+  --shadow-md: 0 10px 30px rgba(0,0,0,0.40);
+  --shadow-lg: 0 30px 70px rgba(0,0,0,0.55);
+  --shadow-gold: 0 24px 50px rgba(225,177,44,0.18);
+}
+
+/* ===== RESET ===== */
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; background: var(--color-bg); }
+body {
+  font-family: var(--font-sans);
+  background: var(--color-bg);
+  color: var(--color-text);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow-x: hidden;
+  transition: background .45s ease, color .45s ease;
+}
+::selection { background: rgba(225, 177, 44, 0.35); color: var(--color-ink); }
+img { display: block; max-width: 100%; }
+button { font-family: inherit; }
+
+/* ===== AMBIENT BACKGROUND ===== */
+.bg-layer {
+  position: fixed; inset: 0; pointer-events: none; z-index: -1; overflow: hidden;
+}
+.bg-aurora {
+  position: absolute; top: -30%; left: 50%; width: 140vw; height: 120vh;
+  transform: translateX(-50%);
+  background:
+    radial-gradient(ellipse 50% 40% at 30% 30%, rgba(225,177,44,0.14), transparent 60%),
+    radial-gradient(ellipse 45% 35% at 70% 40%, rgba(249,168,37,0.10), transparent 60%),
+    radial-gradient(ellipse 60% 50% at 50% 85%, rgba(217,119,6,0.07), transparent 65%);
+  filter: blur(20px);
+  animation: auroraDrift 22s ease-in-out infinite alternate;
+}
+body.dark .bg-aurora {
+  background:
+    radial-gradient(ellipse 50% 40% at 30% 30%, rgba(225,177,44,0.22), transparent 60%),
+    radial-gradient(ellipse 45% 35% at 70% 40%, rgba(249,168,37,0.16), transparent 60%),
+    radial-gradient(ellipse 60% 50% at 50% 85%, rgba(217,119,6,0.12), transparent 65%);
+}
+@keyframes auroraDrift {
+  0%   { transform: translateX(-50%) translateY(0) scale(1); }
+  100% { transform: translateX(-50%) translateY(40px) scale(1.05); }
+}
+.bg-grain {
+  position: absolute; inset: 0; opacity: 0.05; mix-blend-mode: multiply;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)' opacity='0.6'/></svg>");
+}
+body.dark .bg-grain { mix-blend-mode: screen; opacity: 0.07; }
+.cursor-glow {
+  position: fixed; width: 520px; height: 520px; left: 0; top: 0;
+  background: radial-gradient(circle, rgba(225,177,44,0.18), rgba(225,177,44,0.05) 40%, transparent 70%);
+  pointer-events: none; z-index: -1; transform: translate(-50%, -50%);
+  transition: opacity .4s ease;
+  opacity: 0;
+}
+body:hover .cursor-glow { opacity: 1; }
+@media (hover: none) { .cursor-glow { display: none; } }
+
+/* ===== SKIP NAV ===== */
+.skip-link {
+  position: absolute; top: -100%; left: 50%; transform: translateX(-50%);
+  background: var(--color-primary-dark); color: #fff; padding: 12px 24px; border-radius: 0 0 8px 8px;
+  font-weight: 600; font-size: 14px; z-index: 9999; text-decoration: none; transition: top .2s;
+}
+.skip-link:focus { top: 0; }
+
+/* ===== NAV ===== */
+nav {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+  backdrop-filter: blur(20px) saturate(180%); -webkit-backdrop-filter: blur(20px) saturate(180%);
+  background: color-mix(in oklab, var(--color-bg) 70%, transparent);
+  border-bottom: 1px solid transparent;
+  padding: 0 32px; height: 64px;
+  display: flex; align-items: center; justify-content: space-between;
+  transition: height .35s ease, border-color .35s ease, background .35s ease;
+}
+nav.scrolled { height: 56px; border-bottom-color: var(--color-border); }
+.nav-left { display: flex; align-items: center; gap: 10px; }
+.nav-logo {
+  width: 34px; height: 34px; object-fit: contain;
+  filter: drop-shadow(0 2px 10px rgba(225,177,44,0.35)) brightness(1.08) saturate(1.25);
+  transition: transform .4s ease;
+}
+.nav-logo:hover { transform: scale(1.08); }
+.nav-name { font-size: 17px; font-weight: 700; letter-spacing: -.2px; color: var(--color-ink); }
+.nav-tagline { font-family: var(--font-serif); font-size: 13px; font-style: italic; color: var(--color-primary-dark); margin-left: 2px; }
+.nav-right { display: flex; align-items: center; gap: 28px; }
+.nav-right a { color: var(--color-text-muted); text-decoration: none; font-size: 14px; font-weight: 500; transition: color .2s; position: relative; }
+.nav-right a:not(.nav-cta):after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: -6px; height: 1px;
+  background: var(--color-primary-dark); transform: scaleX(0); transform-origin: left;
+  transition: transform .3s ease;
+}
+.nav-right a:not(.nav-cta):hover { color: var(--color-ink); }
+.nav-right a:not(.nav-cta):hover:after { transform: scaleX(1); }
+.nav-cta {
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-dark) 100%);
+  color: #fff !important; padding: 9px 18px; border-radius: 999px; font-weight: 600; font-size: 13px;
+  box-shadow: 0 6px 18px rgba(217,119,6,0.28), inset 0 1px 0 rgba(255,255,255,0.30);
+  transition: transform .25s ease, box-shadow .25s ease, filter .2s ease;
+  border: 1px solid rgba(0,0,0,0.04);
+}
+.nav-cta:hover { transform: translateY(-2px); box-shadow: 0 10px 26px rgba(217,119,6,0.36), inset 0 1px 0 rgba(255,255,255,0.30); }
+
+.theme-toggle {
+  width: 36px; height: 36px; border-radius: 999px;
+  background: var(--color-bg-alt); border: 1px solid var(--color-border);
+  display: grid; place-items: center; cursor: pointer; color: var(--color-ink);
+  transition: transform .3s ease, background .3s ease;
+}
+.theme-toggle:hover { transform: rotate(15deg); }
+.theme-toggle svg { width: 16px; height: 16px; }
+
+/* hamburger */
+.hamburger { display: none; background: none; border: none; cursor: pointer; padding: 6px; width: 36px; height: 36px; flex-direction: column; align-items: center; justify-content: center; gap: 5px; }
+.hamburger span { display: block; width: 22px; height: 2px; background: var(--color-ink); border-radius: 2px; transition: all .3s ease; }
+.hamburger.active span:nth-child(1) { transform: rotate(45deg) translate(5px, 5px); }
+.hamburger.active span:nth-child(2) { opacity: 0; }
+.hamburger.active span:nth-child(3) { transform: rotate(-45deg) translate(5px, -5px); }
+.mobile-menu { display: none; position: fixed; top: 64px; left: 0; right: 0; background: var(--color-bg); border-bottom: 1px solid var(--color-border); padding: 16px 24px; z-index: 99; flex-direction: column; gap: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.06); }
+.mobile-menu.open { display: flex; }
+.mobile-menu a { color: var(--color-text-muted); text-decoration: none; font-size: 16px; font-weight: 500; padding: 8px 0; }
+
+/* ===== MARQUEE STRIP ===== */
+.status-strip {
+  position: sticky; top: 64px; z-index: 50;
+  background: linear-gradient(90deg, var(--color-bg-alt), var(--color-bg) 50%, var(--color-bg-alt));
+  border-bottom: 1px solid var(--color-border);
+  overflow: hidden; height: 32px; display: flex; align-items: center;
+  font-family: var(--font-mono); font-size: 11px; color: var(--color-text-muted);
+  letter-spacing: 0.2px;
+}
+.status-strip .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--color-primary); box-shadow: 0 0 10px var(--color-primary); animation: pulseDot 1.6s ease-in-out infinite; margin: 0 10px 0 14px; flex-shrink: 0; }
+.status-strip .label { font-weight: 600; color: var(--color-primary-deep); text-transform: uppercase; letter-spacing: 1.2px; font-size: 10px; margin-right: 12px; flex-shrink: 0; border-right: 1px solid var(--color-border); padding-right: 12px; }
+@keyframes pulseDot { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+.marquee-track { display: flex; gap: 48px; animation: marquee 45s linear infinite; white-space: nowrap; padding-left: 16px; }
+.marquee-track span { display: inline-flex; align-items: center; gap: 8px; }
+.marquee-track span::before { content: "›"; color: var(--color-primary-dark); }
+@keyframes marquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+
+/* ===== HERO ===== */
+.hero {
+  min-height: calc(100vh - 96px);
+  display: grid;
+  grid-template-columns: 1.1fr 1fr;
+  gap: 48px;
+  align-items: center;
+  max-width: 1180px; margin: 0 auto;
+  padding: 100px 32px 80px;
+  position: relative;
+}
+.hero-left { position: relative; }
+
+.hero-eyebrow {
+  display: inline-flex; align-items: center; gap: 10px;
+  font-size: 12px; font-weight: 600; letter-spacing: 2px; text-transform: uppercase;
+  color: var(--color-primary-deep);
+  background: var(--color-primary-bg);
+  border: 1px solid var(--color-primary-border);
+  padding: 7px 14px; border-radius: 999px;
+  margin-bottom: 24px;
+  animation: fadeUp .9s cubic-bezier(.16,1,.3,1) both;
+}
+.hero-eyebrow .spark { width: 6px; height: 6px; border-radius: 50%; background: var(--color-primary); box-shadow: 0 0 10px var(--color-primary); animation: pulseDot 2s infinite; }
+
+h1.hero-title {
+  font-family: var(--font-serif); font-weight: 400;
+  font-size: clamp(42px, 6vw, 76px);
+  line-height: 1.02; letter-spacing: -2.2px;
+  color: var(--color-ink);
+  animation: fadeUp .9s cubic-bezier(.16,1,.3,1) .08s both;
+}
+h1.hero-title em {
+  font-style: italic; font-weight: 500;
+  background: linear-gradient(135deg, #FFB800 0%, #F5A623 40%, #D97706 100%);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+  display: inline-block;
+  position: relative;
+}
+h1.hero-title em::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: 2px; height: 8px;
+  background: linear-gradient(90deg, rgba(225,177,44,0.0), rgba(225,177,44,0.35), rgba(225,177,44,0.0));
+  border-radius: 4px; z-index: -1; transform: scaleX(.9);
+}
+.hero-tagline { display: flex; align-items: center; gap: 14px; margin-top: 20px; animation: fadeUp .9s cubic-bezier(.16,1,.3,1) .16s both; }
+.hero-tagline .hero-line { width: 32px; height: 1px; background: linear-gradient(90deg, transparent, var(--color-primary-dark)); }
+.hero-tagline span { font-family: var(--font-serif); font-size: 17px; font-style: italic; color: var(--color-primary-deep); }
+.hero-description {
+  font-size: 17px; color: var(--color-text-muted);
+  max-width: 520px; line-height: 1.65; margin-top: 20px;
+  animation: fadeUp .9s cubic-bezier(.16,1,.3,1) .24s both;
+}
+.hero-description b { font-weight: 600; color: var(--color-ink-2); }
+
+@keyframes fadeUp { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: translateY(0); } }
+
+/* waitlist form */
+.waitlist-form-wrapper { margin-top: 32px; max-width: 460px; animation: fadeUp .9s cubic-bezier(.16,1,.3,1) .32s both; }
+.waitlist-form {
+  display: flex; gap: 8px; position: relative;
+  padding: 6px; border-radius: 14px;
+  background: color-mix(in oklab, var(--color-bg-alt) 70%, white);
+  border: 1px solid var(--color-border-strong);
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow .3s ease, border-color .3s ease;
+}
+.waitlist-form:focus-within {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 4px rgba(225,177,44,0.14), var(--shadow-md);
+}
+.waitlist-input {
+  flex: 1; padding: 12px 14px; background: transparent; border: none;
+  color: var(--color-text); font-family: inherit; font-size: 15px; outline: none;
+  min-width: 0;
+}
+.waitlist-input::placeholder { color: var(--color-text-dim); }
+.waitlist-btn {
+  padding: 12px 22px;
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-dark) 100%);
+  color: #fff; border: none; border-radius: 10px;
+  font-weight: 700; font-size: 14px; cursor: pointer;
+  white-space: nowrap;
+  box-shadow: 0 6px 18px rgba(217,119,6,0.28), inset 0 1px 0 rgba(255,255,255,0.30);
+  transition: transform .25s ease, box-shadow .25s ease, filter .2s ease;
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.waitlist-btn:hover { transform: translateY(-1px); box-shadow: 0 10px 24px rgba(217,119,6,0.36), inset 0 1px 0 rgba(255,255,255,0.30); }
+.waitlist-btn:disabled { opacity: .6; cursor: not-allowed; transform: none; }
+.waitlist-btn .arrow { transition: transform .25s ease; }
+.waitlist-btn:hover .arrow { transform: translateX(3px); }
+.waitlist-msg { margin-top: 10px; font-size: 13px; min-height: 18px; }
+.waitlist-msg.ok { color: var(--color-success); }
+.waitlist-msg.err { color: var(--color-danger); }
+.waitlist-fineprint { margin-top: 10px; font-size: 13px; color: var(--color-text-dim); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.waitlist-fineprint .avatars { display: inline-flex; margin-right: 2px; }
+.waitlist-fineprint .av { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--color-bg); margin-right: -6px; background: linear-gradient(135deg, #FCD34D, #D97706); display: grid; place-items: center; color: #fff; font-size: 10px; font-weight: 700; }
+.waitlist-fineprint .av.a2 { background: linear-gradient(135deg, #F5A623, #A35F05); }
+.waitlist-fineprint .av.a3 { background: linear-gradient(135deg, #FFB800, #F59E0B); }
+
+.hero-stats {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px;
+  margin-top: 44px; max-width: 520px;
+  animation: fadeUp .9s cubic-bezier(.16,1,.3,1) .4s both;
+}
+.stat { border-left: 1px solid var(--color-border-strong); padding-left: 12px; }
+.stat:first-child { border-left: none; padding-left: 0; }
+.stat-value { font-family: var(--font-serif); font-size: 28px; font-weight: 500; color: var(--color-ink); line-height: 1; letter-spacing: -.5px; }
+.stat-label { font-size: 10px; color: var(--color-text-dim); text-transform: uppercase; letter-spacing: 1.5px; margin-top: 6px; font-weight: 600; }
+
+/* ===== HERO RIGHT: Console + Mascot ===== */
+.hero-right { position: relative; display: grid; gap: 20px; min-height: 500px; animation: fadeUp 1s cubic-bezier(.16,1,.3,1) .25s both; padding-top: 180px; }
+
+.mascot-orb {
+  position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+  width: clamp(130px, 14vw, 160px); aspect-ratio: 1;
+  z-index: 3;
+  pointer-events: none;
+}
+.mascot-orb .glow {
+  position: absolute; inset: -10%; border-radius: 50%;
+  background: radial-gradient(circle, rgba(225,177,44,0.12), rgba(225,177,44,0.03) 50%, transparent 70%);
+}
+.mascot-orb .rays {
+  position: absolute; inset: -60%; border-radius: 50%;
+  background:
+    repeating-conic-gradient(from -90deg at 50% 50%,
+      rgba(225,177,44,0.055) 0deg,
+      rgba(225,177,44,0.055) 0.6deg,
+      transparent 0.6deg,
+      transparent 10deg);
+  mask-image: radial-gradient(circle, transparent 35%, black 50%, black 70%, transparent 95%);
+  -webkit-mask-image: radial-gradient(circle, transparent 35%, black 50%, black 70%, transparent 95%);
+  opacity: 0.9;
+}
+.mascot-orb img {
+  position: relative; width: 100%; height: 100%; object-fit: contain;
+  filter: drop-shadow(0 12px 24px rgba(217,119,6,0.35)) brightness(1.08) saturate(1.25);
+  animation: bob 4.5s ease-in-out infinite alternate;
+}
+@keyframes bob { to { transform: translateY(-10px); } }
+
+/* AI Console */
+.console {
+  background: linear-gradient(180deg, #15100A, #1B140C);
+  border: 1px solid rgba(225,177,44,0.22);
+  border-radius: 18px; overflow: hidden;
+  box-shadow: var(--shadow-lg), 0 0 0 1px rgba(255,255,255,0.02) inset;
+  font-family: var(--font-mono); color: #E6DDCB;
+  position: relative;
+  margin-top: 10px;
+}
+body.dark .console { background: linear-gradient(180deg, #0C0906, #14100A); }
+.console-header {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 14px; border-bottom: 1px solid rgba(225,177,44,0.18);
+  background: rgba(225,177,44,0.04);
+}
+.console-dots { display: inline-flex; gap: 6px; }
+.console-dots span { width: 10px; height: 10px; border-radius: 50%; display: block; }
+.console-dots span:nth-child(1) { background: #F87171; }
+.console-dots span:nth-child(2) { background: #FBBF24; }
+.console-dots span:nth-child(3) { background: #34D399; }
+.console-title { font-size: 11px; color: rgba(255,245,220,.65); letter-spacing: .4px; flex: 1; }
+.console-status { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: #FCD34D; }
+.console-status .dot { width: 6px; height: 6px; border-radius: 50%; background: #FCD34D; box-shadow: 0 0 8px #FCD34D; animation: pulseDot 1.4s infinite; }
+.console-body {
+  padding: 18px 18px 22px; font-size: 12.5px; line-height: 1.8;
+  max-height: 260px; min-height: 220px;
+  overflow: hidden; position: relative;
+}
+.console-body::after {
+  content: ""; position: absolute; inset: auto 0 0 0; height: 40px;
+  background: linear-gradient(180deg, transparent, #15100A);
+  pointer-events: none;
+}
+body.dark .console-body::after { background: linear-gradient(180deg, transparent, #0C0906); }
+.log-line { display: flex; gap: 10px; opacity: 0; animation: logIn .4s ease forwards; }
+.log-line .ts { color: #8A7D6B; flex-shrink: 0; }
+.log-line .tag { flex-shrink: 0; padding: 0 7px; height: 18px; display: inline-flex; align-items: center; border-radius: 5px; font-size: 10px; font-weight: 600; letter-spacing: .5px; text-transform: uppercase; }
+.log-line .tag.build { background: rgba(52, 211, 153, 0.15); color: #6EE7B7; }
+.log-line .tag.mkt   { background: rgba(251, 191, 36, 0.15); color: #FCD34D; }
+.log-line .tag.ops   { background: rgba(167, 139, 250, 0.15); color: #C4B5FD; }
+.log-line .tag.growth{ background: rgba(96, 165, 250, 0.15); color: #93C5FD; }
+.log-line .tag.ok    { background: rgba(74, 222, 128, 0.15); color: #86EFAC; }
+.log-line .msg { color: #E6DDCB; }
+.log-line .msg .hl { color: #FFD88F; }
+@keyframes logIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
+/* Playground */
+.playground {
+  padding: 14px; border: 1px dashed rgba(225,177,44,0.4); border-radius: 14px;
+  background: rgba(225,177,44,0.03);
+}
+.playground-label { font-family: var(--font-serif); font-style: italic; font-size: 14px; color: var(--color-primary-deep); margin-bottom: 8px; }
+.playground-row { display: flex; gap: 8px; }
+.playground-input { flex: 1; padding: 10px 12px; background: var(--color-bg); border: 1px solid var(--color-border); border-radius: 8px; font-family: inherit; font-size: 13px; color: var(--color-text); outline: none; min-width: 0; transition: border-color .2s; }
+.playground-input:focus { border-color: var(--color-primary); }
+.playground-btn { padding: 10px 14px; background: var(--color-ink); color: var(--color-bg); border: none; border-radius: 8px; font-weight: 600; font-size: 13px; cursor: pointer; white-space: nowrap; transition: transform .2s, background .2s; }
+.playground-btn:hover { transform: translateY(-1px); }
+.playground-btn:disabled { opacity: .6; cursor: not-allowed; }
+.playground-examples { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  font-family: var(--font-sans); font-size: 11px; color: var(--color-primary-deep);
+  background: var(--color-primary-bg); border: 1px solid var(--color-primary-border);
+  padding: 4px 10px; border-radius: 999px; cursor: pointer;
+  transition: transform .2s, background .2s;
+}
+.chip:hover { transform: translateY(-1px); background: rgba(225,177,44,0.18); }
+.playground-out {
+  margin-top: 12px; padding: 14px; background: var(--color-bg); border: 1px solid var(--color-border); border-radius: 10px;
+  font-size: 13px; line-height: 1.6; color: var(--color-text-muted);
+  display: none;
+  max-height: 240px; overflow-y: auto;
+}
+.playground-out.show { display: block; animation: fadeUp .4s ease both; }
+.playground-out strong { color: var(--color-ink); font-weight: 600; }
+.playground-out .thinking { display: inline-flex; align-items: center; gap: 6px; color: var(--color-primary-dark); font-family: var(--font-serif); font-style: italic; }
+.playground-out .thinking .dots span { display: inline-block; width: 4px; height: 4px; background: currentColor; border-radius: 50%; margin: 0 1px; animation: blink 1.2s infinite; }
+.playground-out .thinking .dots span:nth-child(2) { animation-delay: .2s; }
+.playground-out .thinking .dots span:nth-child(3) { animation-delay: .4s; }
+@keyframes blink { 0%,80%,100% { opacity: .2; } 40% { opacity: 1; } }
+
+/* ===== SCROLL REVEAL ===== */
+.reveal { opacity: 0; transform: translateY(30px); transition: opacity .8s cubic-bezier(.16,1,.3,1), transform .8s cubic-bezier(.16,1,.3,1); }
+.reveal.in { opacity: 1; transform: translateY(0); }
+.reveal.delay-1 { transition-delay: .08s; }
+.reveal.delay-2 { transition-delay: .16s; }
+.reveal.delay-3 { transition-delay: .24s; }
+.reveal.delay-4 { transition-delay: .32s; }
+.reveal.delay-5 { transition-delay: .40s; }
+
+/* ===== SECTIONS ===== */
+.section { padding: 110px 32px; max-width: 1120px; margin: 0 auto; position: relative; }
+.section-head { max-width: 640px; margin-bottom: 56px; }
+.section-label {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 3px;
+  color: var(--color-primary-deep); font-weight: 700; margin-bottom: 14px;
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.section-label::before { content: ""; width: 18px; height: 1px; background: var(--color-primary-dark); }
+.section-title { font-family: var(--font-serif); font-size: clamp(32px, 4.4vw, 52px); font-weight: 400; letter-spacing: -1.2px; line-height: 1.05; color: var(--color-ink); margin-bottom: 10px; }
+.section-title em { font-style: italic; color: var(--color-primary-deep); }
+.section-subtitle { font-family: var(--font-serif); font-size: 18px; font-style: italic; color: var(--color-primary-dark); margin-bottom: 16px; }
+.section-desc { font-size: 16px; color: var(--color-text-muted); max-width: 560px; line-height: 1.7; }
+.divider { max-width: 1120px; margin: 0 auto; padding: 0 32px; }
+.divider hr { border: none; height: 1px; background: linear-gradient(90deg, transparent, var(--color-border-strong), transparent); }
+
+/* ===== DEPARTMENTS (features as a tabbed interactive panel) ===== */
+.depts {
+  display: grid; grid-template-columns: 280px 1fr; gap: 28px;
+  background: var(--color-bg-alt);
+  border: 1px solid var(--color-border);
+  border-radius: 24px; padding: 24px;
+  box-shadow: var(--shadow-sm);
+}
+.dept-tabs { display: flex; flex-direction: column; gap: 6px; }
+.dept-tab {
+  display: flex; align-items: center; gap: 12px;
+  text-align: left; padding: 14px 14px; border-radius: 12px;
+  background: transparent; border: 1px solid transparent; color: var(--color-text-muted);
+  cursor: pointer; transition: all .25s ease; font-size: 14px; font-weight: 500;
+  position: relative;
+}
+.dept-tab:hover { background: color-mix(in oklab, var(--color-bg) 75%, transparent); color: var(--color-ink); }
+.dept-tab.active {
+  background: var(--color-bg);
+  border-color: var(--color-border-strong);
+  color: var(--color-ink);
+  box-shadow: var(--shadow-sm);
+}
+.dept-tab .ico {
+  width: 30px; height: 30px; border-radius: 8px;
+  background: var(--color-primary-bg); border: 1px solid var(--color-primary-border);
+  color: var(--color-primary-deep);
+  display: grid; place-items: center; flex-shrink: 0;
+}
+.dept-tab.active .ico { background: linear-gradient(135deg, var(--color-primary), var(--color-primary-dark)); color: #fff; border-color: transparent; box-shadow: var(--shadow-gold); }
+.dept-tab .name { font-weight: 600; }
+.dept-tab .desc { display: block; font-size: 11px; color: var(--color-text-dim); font-weight: 500; margin-top: 2px; }
+.dept-tab.active .desc { color: var(--color-text-muted); }
+
+.dept-panel {
+  background: var(--color-bg); border-radius: 16px; padding: 28px;
+  border: 1px solid var(--color-border);
+  min-height: 380px; position: relative; overflow: hidden;
+}
+.dept-panel .bigtitle { font-family: var(--font-serif); font-size: clamp(24px, 3vw, 32px); font-weight: 400; letter-spacing: -.6px; margin-bottom: 8px; }
+.dept-panel .bigtitle em { font-style: italic; color: var(--color-primary-deep); }
+.dept-panel .blurb { font-size: 14px; color: var(--color-text-muted); line-height: 1.65; max-width: 520px; margin-bottom: 22px; }
+.dept-tasks { display: grid; gap: 10px; }
+.dept-task {
+  display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: center;
+  background: var(--color-bg-alt); border: 1px solid var(--color-border);
+  border-radius: 10px; padding: 10px 14px; font-size: 13px; color: var(--color-text);
+  transition: transform .3s ease;
+}
+.dept-task:hover { transform: translateX(3px); border-color: var(--color-border-strong); }
+.dept-task .check {
+  width: 18px; height: 18px; border-radius: 50%;
+  background: linear-gradient(135deg, #34D399, #047857);
+  display: grid; place-items: center; color: #fff; font-size: 10px;
+  flex-shrink: 0;
+}
+.dept-task .meta { font-family: var(--font-mono); font-size: 10.5px; color: var(--color-text-dim); }
+.dept-visual {
+  position: absolute; bottom: -40px; right: -40px; width: 220px; height: 220px;
+  opacity: .09; pointer-events: none;
+  background: radial-gradient(circle at center, var(--color-primary), transparent 60%);
+  border-radius: 50%;
+}
+
+/* ===== HOW IT WORKS: interactive vertical timeline ===== */
+.timeline { position: relative; display: grid; gap: 12px; max-width: 920px; margin: 0 auto; }
+.timeline::before {
+  content: ""; position: absolute; left: 30px; top: 10px; bottom: 10px; width: 2px;
+  background: linear-gradient(180deg, transparent, var(--color-primary-border) 10%, var(--color-primary-border) 90%, transparent);
+}
+.tl-step {
+  display: grid; grid-template-columns: 64px 1fr; gap: 20px;
+  padding: 20px 22px 20px 0; border-radius: 14px;
+  position: relative; transition: background .3s ease;
+  cursor: pointer;
+}
+.tl-step:hover { background: color-mix(in oklab, var(--color-bg-alt) 70%, transparent); }
+.tl-node {
+  width: 60px; height: 60px; border-radius: 50%;
+  background: var(--color-bg); border: 2px solid var(--color-primary-border);
+  display: grid; place-items: center;
+  font-family: var(--font-serif); font-size: 22px; font-style: italic; font-weight: 500; color: var(--color-primary-deep);
+  position: relative; z-index: 1;
+  transition: all .3s ease;
+}
+.tl-step.active .tl-node, .tl-step:hover .tl-node {
+  background: linear-gradient(135deg, var(--color-primary), var(--color-primary-dark));
+  color: #fff; border-color: transparent;
+  box-shadow: var(--shadow-gold);
+  transform: scale(1.04);
+}
+.tl-content h3 { font-family: var(--font-serif); font-size: 22px; font-weight: 500; letter-spacing: -.4px; margin-bottom: 6px; color: var(--color-ink); }
+.tl-content p { font-size: 15px; color: var(--color-text-muted); line-height: 1.65; }
+.tl-content .tl-detail {
+  margin-top: 10px; font-family: var(--font-mono); font-size: 12px; color: var(--color-primary-deep);
+  display: none;
+  padding: 10px 14px; background: var(--color-primary-bg); border-left: 2px solid var(--color-primary); border-radius: 6px;
+}
+.tl-step.active .tl-detail { display: block; animation: fadeUp .4s ease both; }
+
+/* ===== FAQ ===== */
+.faq-list { max-width: 760px; margin: 0 auto; }
+.faq-item { border: 1px solid var(--color-border); border-radius: 14px; margin-bottom: 10px; overflow: hidden; background: var(--color-bg-alt); transition: all .3s; }
+.faq-item:hover { border-color: var(--color-border-strong); }
+.faq-item.open { background: var(--color-bg); border-color: var(--color-primary-border); box-shadow: var(--shadow-sm); }
+.faq-question { width: 100%; background: none; border: none; padding: 22px 26px; display: flex; align-items: center; justify-content: space-between; cursor: pointer; font-family: inherit; font-size: 15.5px; font-weight: 600; color: var(--color-ink); text-align: left; gap: 16px; }
+.faq-question .q-icon {
+  width: 26px; height: 26px; border-radius: 50%;
+  display: grid; place-items: center; flex-shrink: 0;
+  background: var(--color-primary-bg); color: var(--color-primary-deep);
+  transition: all .3s;
+  position: relative;
+}
+.faq-question .q-icon::before, .faq-question .q-icon::after {
+  content: ""; position: absolute; background: currentColor; border-radius: 1px;
+}
+.faq-question .q-icon::before { width: 10px; height: 2px; }
+.faq-question .q-icon::after { width: 2px; height: 10px; transition: transform .3s; }
+.faq-item.open .q-icon { background: var(--color-primary-dark); color: #fff; }
+.faq-item.open .q-icon::after { transform: rotate(90deg); }
+.faq-answer { max-height: 0; overflow: hidden; transition: max-height .35s ease; }
+.faq-answer-inner { padding: 0 26px 22px; font-size: 14.5px; color: var(--color-text-muted); line-height: 1.75; }
+
+/* ===== QUOTE ===== */
+.quote-section { padding: 100px 32px; text-align: center; max-width: 760px; margin: 0 auto; position: relative; }
+.quote-section::before {
+  content: '"'; position: absolute; left: 50%; top: 30px; transform: translateX(-50%);
+  font-family: var(--font-serif); font-style: italic; font-size: 140px; line-height: 1;
+  color: var(--color-primary); opacity: .15;
+}
+.quote-text { font-family: var(--font-serif); font-size: clamp(22px, 3.6vw, 36px); font-weight: 400; font-style: italic; line-height: 1.32; color: var(--color-ink); margin-bottom: 16px; letter-spacing: -.3px; }
+.quote-author { font-size: 12px; color: var(--color-text-dim); text-transform: uppercase; letter-spacing: 2.5px; font-weight: 600; }
+
+/* ===== BOTTOM CTA ===== */
+.cta-section { padding: 80px 32px 110px; position: relative; overflow: hidden; }
+.cta-box {
+  max-width: 780px; margin: 0 auto; padding: 72px 48px 64px;
+  background:
+    radial-gradient(ellipse 80% 60% at 50% 0%, rgba(225,177,44,0.12), transparent 60%),
+    linear-gradient(180deg, var(--color-bg), var(--color-bg-alt));
+  border: 1px solid var(--color-primary-border);
+  border-radius: 28px; text-align: center;
+  box-shadow: var(--shadow-lg), inset 0 1px 0 rgba(255,255,255,0.05);
+  position: relative; overflow: hidden;
+}
+.cta-box::before {
+  content: ""; position: absolute; top: -40%; left: -40%; width: 200%; height: 200%;
+  background: conic-gradient(from 0deg, transparent, rgba(225,177,44,0.08), transparent 60%);
+  animation: raysSpin 40s linear infinite;
+  pointer-events: none;
+}
+.cta-box > * { position: relative; z-index: 1; }
+.cta-mascot { width: 72px; height: 72px; margin: 0 auto 20px; filter: drop-shadow(0 6px 16px rgba(217,119,6,0.35)) brightness(1.1) saturate(1.3); }
+.cta-box h2 { font-family: var(--font-serif); font-size: clamp(32px, 4.5vw, 46px); font-weight: 400; margin-bottom: 10px; letter-spacing: -1px; }
+.cta-box h2 em { font-style: italic; background: linear-gradient(135deg, #FFB800, #D97706); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+.cta-subtitle { font-family: var(--font-serif); font-size: 17px; font-style: italic; color: var(--color-primary-dark); margin-bottom: 10px; }
+.cta-box > p { color: var(--color-text-muted); font-size: 16px; margin-bottom: 34px; line-height: 1.6; max-width: 500px; margin-left: auto; margin-right: auto; }
+.cta-form { display: flex; gap: 8px; max-width: 440px; margin: 0 auto; padding: 6px;
+  border-radius: 14px; background: var(--color-bg); border: 1px solid var(--color-border-strong);
+  box-shadow: var(--shadow-sm);
+}
+.cta-form:focus-within { border-color: var(--color-primary); box-shadow: 0 0 0 4px rgba(225,177,44,0.14); }
+.cta-form .waitlist-input { padding: 12px 14px; }
+.cta-incentive { margin-top: 18px; font-size: 13px; color: var(--color-primary-deep); font-weight: 500; }
+.cta-trust { margin-top: 22px; display: flex; gap: 22px; justify-content: center; flex-wrap: wrap; font-size: 12px; color: var(--color-text-dim); }
+.cta-trust span { display: inline-flex; align-items: center; gap: 6px; }
+.cta-trust svg { width: 12px; height: 12px; color: var(--color-success); }
+
+/* ===== FOOTER ===== */
+footer { padding: 36px 32px 56px; display: flex; justify-content: space-between; align-items: center; max-width: 1120px; margin: 0 auto; flex-wrap: wrap; gap: 16px; position: relative; }
+footer::before { content: ""; position: absolute; top: 0; left: 32px; right: 32px; height: 1px; background: linear-gradient(90deg, transparent, var(--color-border), transparent); }
+.footer-left { display: flex; align-items: center; gap: 10px; }
+.footer-left img { width: 26px; height: 26px; filter: drop-shadow(0 0 8px rgba(225,177,44,0.25)) brightness(1.1) saturate(1.3); }
+.footer-left .footer-name { font-size: 14px; color: var(--color-ink); font-weight: 600; letter-spacing: .3px; }
+.footer-left .footer-tagline { font-family: var(--font-serif); font-size: 13px; color: var(--color-primary-dark); font-style: italic; margin-left: 2px; }
+.footer-right { font-size: 12px; color: var(--color-text-dim); }
+
+/* ===== CONFETTI CANVAS ===== */
+#confetti { position: fixed; inset: 0; pointer-events: none; z-index: 9999; }
+
+/* ===== TWEAKS PANEL ===== */
+.tweaks-panel {
+  position: fixed; right: 20px; bottom: 20px; z-index: 500;
+  width: 280px; padding: 16px;
+  background: var(--color-bg); border: 1px solid var(--color-border-strong);
+  border-radius: 14px; box-shadow: var(--shadow-lg);
+  font-size: 13px; display: none;
+}
+.tweaks-panel.show { display: block; animation: fadeUp .3s ease both; }
+.tweaks-panel h4 { font-family: var(--font-serif); font-size: 16px; margin-bottom: 12px; letter-spacing: -.2px; }
+.tweak-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-top: 1px solid var(--color-border); }
+.tweak-row:first-of-type { border-top: none; }
+.tweak-row label { color: var(--color-text-muted); font-size: 12px; font-weight: 500; }
+.tweak-row select, .tweak-row input[type=color] { background: var(--color-bg-alt); border: 1px solid var(--color-border); border-radius: 6px; padding: 4px 8px; font-size: 12px; color: var(--color-text); font-family: inherit; }
+.tweak-row input[type=color] { width: 34px; height: 28px; padding: 2px; cursor: pointer; }
+.tweak-toggle-row { display: flex; gap: 6px; }
+.tweak-toggle-row button { padding: 4px 10px; font-size: 11px; border: 1px solid var(--color-border); background: var(--color-bg-alt); border-radius: 6px; cursor: pointer; color: var(--color-text-muted); }
+.tweak-toggle-row button.active { background: var(--color-primary-dark); color: #fff; border-color: transparent; }
+
+/* ===== RESPONSIVE ===== */
+@media (max-width: 1024px) {
+  .hero { grid-template-columns: 1fr; gap: 40px; padding-top: 80px; }
+  .hero-right { min-height: unset; }
+  .hero-right { padding-top: 0; }
+  .mascot-orb { position: relative; top: 0; left: auto; transform: none; margin: 0 auto; }
+  .depts { grid-template-columns: 1fr; }
+  .dept-tabs { flex-direction: row; overflow-x: auto; gap: 8px; padding-bottom: 4px; }
+  .dept-tab { flex-shrink: 0; min-width: 180px; }
+}
+@media (max-width: 768px) {
+  nav { padding: 0 18px; height: 58px; }
+  .nav-right a:not(.nav-cta):not(.theme-toggle) { display: none; }
+  .nav-tagline { display: none; }
+  .hamburger { display: flex; }
+  .status-strip { top: 58px; }
+  .hero { padding: 90px 20px 60px; }
+  .waitlist-form { flex-direction: column; padding: 8px; }
+  .waitlist-btn { width: 100%; justify-content: center; }
+  .hero-stats { grid-template-columns: repeat(2, 1fr); gap: 20px; max-width: 100%; }
+  .stat { border-left: none; padding-left: 0; }
+  .section { padding: 70px 20px; }
+  .cta-box { padding: 54px 28px; }
+  .cta-form { flex-direction: column; }
+  footer { flex-direction: column; text-align: center; padding: 24px 20px; }
+  footer::before { left: 20px; right: 20px; }
+  .tl-step { grid-template-columns: 44px 1fr; gap: 14px; padding: 16px 0; }
+  .tl-node { width: 44px; height: 44px; font-size: 16px; }
+  .timeline::before { left: 22px; }
+  .tweaks-panel { right: 10px; bottom: 10px; left: 10px; width: auto; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}
+</style>
+</head>
+<body>
+
+<a href="#main-content" class="skip-link">Skip to main content</a>
+
+<div class="bg-layer">
+  <div class="bg-aurora"></div>
+  <div class="bg-grain"></div>
+</div>
+<div class="cursor-glow" id="cursorGlow"></div>
+<canvas id="confetti"></canvas>
+
+<!-- NAV -->
+<nav role="navigation" aria-label="Main navigation" id="nav">
+  <div class="nav-left">
+    <img src="assets/mascot.png" class="nav-logo" alt="Baljia AI logo">
+    <span class="nav-name">Baljia AI</span>
+    <span class="nav-tagline">· Your AI Angel</span>
+  </div>
+  <div class="nav-right">
+    <a href="#live">Live</a>
+    <a href="#features">Departments</a>
+    <a href="#how">How It Works</a>
+    <a href="#faq">FAQ</a>
+    <button class="theme-toggle" id="themeToggle" aria-label="Toggle theme" title="Toggle theme">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+    </button>
+    <a href="#waitlist" class="nav-cta">Get Early Access</a>
+    <button class="hamburger" aria-label="Open menu" aria-expanded="false" onclick="toggleMenu()">
+      <span></span><span></span><span></span>
+    </button>
+  </div>
+</nav>
+
+<div class="mobile-menu" id="mobileMenu">
+  <a href="#live" onclick="toggleMenu()">Live</a>
+  <a href="#features" onclick="toggleMenu()">Departments</a>
+  <a href="#how" onclick="toggleMenu()">How It Works</a>
+  <a href="#faq" onclick="toggleMenu()">FAQ</a>
+  <a href="#waitlist" onclick="toggleMenu()">Get Early Access</a>
+</div>
+
+<!-- Waitlist status strip -->
+<div class="status-strip" aria-hidden="true">
+  <span class="dot"></span>
+  <div class="marquee-track" id="marquee"></div>
+</div>
+
+<main id="main-content">
+
+<!-- HERO -->
+<section class="hero" id="waitlist">
+  <div class="hero-left">
+    <div class="hero-eyebrow"><span class="spark"></span> Q2 2026 · Now accepting founding members</div>
+    <h1 class="hero-title">Build &amp; run your<br>business with <em>Baljia&nbsp;AI</em></h1>
+    <div class="hero-tagline">
+      <span class="hero-line"></span>
+      <span>Your AI Angel — from idea to revenue</span>
+    </div>
+    <p class="hero-description">Your AI Angel <b>builds the product</b>, <b>runs the marketing</b>, <b>handles operations</b>, and <b>drives growth</b>. You? Give the vision and enjoy the journey.</p>
+
+    <div class="waitlist-form-wrapper" id="live">
+      <form class="waitlist-form" onsubmit="event.preventDefault(); joinWL();" aria-label="Join waitlist">
+        <input type="email" class="waitlist-input" id="eIn" placeholder="your@email.com" required aria-label="Email address" autocomplete="email">
+        <button type="submit" class="waitlist-btn" id="wBtn">
+          Get Early Access
+          <span class="arrow">→</span>
+        </button>
+      </form>
+      <div class="waitlist-msg" id="wMsg" role="status" aria-live="polite"></div>
+      <div class="waitlist-fineprint">
+        <span class="avatars"><span class="av">A</span><span class="av a2">M</span><span class="av a3">J</span></span>
+        <span id="wC">Join early founders.</span>
+        <span>· Free to start. No credit card.</span>
+      </div>
+    </div>
+
+    <div class="hero-stats" aria-label="Key stats">
+      <div class="stat"><div class="stat-value" id="wT" data-count="1200">—</div><div class="stat-label">On Waitlist</div></div>
+      <div class="stat"><div class="stat-value">24/7</div><div class="stat-label">AI Working</div></div>
+      <div class="stat"><div class="stat-value">1</div><div class="stat-label">Founder Needed</div></div>
+      <div class="stat"><div class="stat-value">Q2 '26</div><div class="stat-label">Launch</div></div>
+    </div>
+  </div>
+
+  <div class="hero-right">
+    <div class="mascot-orb" id="mascot">
+      <div class="rays"></div>
+      <div class="glow"></div>
+      <img src="assets/mascot.png" alt="Baljia AI angel mascot">
+    </div>
+
+    <div class="console" aria-hidden="true">
+      <div class="console-header">
+        <span class="console-dots"><span></span><span></span><span></span></span>
+        <span class="console-title">baljia-angel · live activity</span>
+        <span class="console-status"><span class="dot"></span> online</span>
+      </div>
+      <div class="console-body" id="consoleBody"></div>
+    </div>
+
+    <div class="playground">
+      <div class="playground-label">Try it → What would Baljia build for you?</div>
+      <div class="playground-row">
+        <input type="text" class="playground-input" id="ideaIn" placeholder="e.g. a marketplace for vintage mechanical keyboards" maxlength="160">
+        <button class="playground-btn" id="ideaBtn" onclick="runPlayground()">See the plan</button>
+      </div>
+      <div class="playground-examples">
+        <button class="chip" onclick="setIdea(this)">SaaS for pet groomers</button>
+        <button class="chip" onclick="setIdea(this)">Newsletter about AI ethics</button>
+        <button class="chip" onclick="setIdea(this)">Online course platform</button>
+      </div>
+      <div class="playground-out" id="ideaOut"></div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"><hr></div>
+
+<!-- DEPARTMENTS -->
+<section class="section" id="features">
+  <div class="section-head reveal">
+    <div class="section-label">What your AI Angel does</div>
+    <h2 class="section-title">Not a chatbot.<br>An <em>entire team</em> in one.</h2>
+    <div class="section-subtitle">Click through the departments your AI Angel runs for you.</div>
+    <p class="section-desc">It doesn't suggest things for you to do — it does them. Tap a department to see live examples of what it handles.</p>
+  </div>
+
+  <div class="depts reveal">
+    <div class="dept-tabs" role="tablist" id="deptTabs"></div>
+    <div class="dept-panel" id="deptPanel">
+      <div class="dept-visual" aria-hidden="true"></div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"><hr></div>
+
+<!-- HOW IT WORKS -->
+<section class="section" id="how">
+  <div class="section-head reveal">
+    <div class="section-label">How it works</div>
+    <h2 class="section-title">Dream it.<br>Baljia <em>builds</em> it.</h2>
+    <div class="section-subtitle">Six steps. Zero effort. One founder.</div>
+    <p class="section-desc">No coding, no hiring, no complexity. Just tell your AI Angel what you want — click a step below to see what happens under the hood.</p>
+  </div>
+
+  <div class="timeline" id="timeline"></div>
+</section>
+
+<div class="divider"><hr></div>
+
+<!-- FAQ -->
+<section class="section" id="faq">
+  <div class="section-head reveal">
+    <div class="section-label">FAQ</div>
+    <h2 class="section-title">Common questions</h2>
+    <div class="section-subtitle">Everything you need to know before joining.</div>
+  </div>
+
+  <div class="faq-list reveal" id="faqList"></div>
+</section>
+
+<!-- QUOTE -->
+<section class="quote-section reveal">
+  <blockquote>
+    <p class="quote-text">"You focus on the vision.<br>Your AI Angel handles everything else."</p>
+    <cite class="quote-author">— Baljia AI · Bringing your ideas to reality</cite>
+  </blockquote>
+</section>
+
+<!-- BOTTOM CTA -->
+<section class="cta-section">
+  <div class="cta-box reveal">
+    <img src="assets/mascot.png" class="cta-mascot" alt="">
+    <h2>Meet your <em>AI Angel</em></h2>
+    <div class="cta-subtitle">Bringing your ideas to reality.</div>
+    <p>Join the waitlist and be among the first to meet your AI Angel — a new way of building and running a business, powered entirely by AI.</p>
+    <form class="cta-form" onsubmit="event.preventDefault(); joinWL2();">
+      <input type="email" class="waitlist-input" id="eIn2" placeholder="your@email.com" aria-label="Email address" autocomplete="email">
+      <button type="submit" class="waitlist-btn">Get Early Access <span class="arrow">→</span></button>
+    </form>
+    <div class="waitlist-msg" id="wMsg2" style="margin-top:10px" role="status" aria-live="polite"></div>
+    <div class="cta-incentive">✨ Founding members get priority access &amp; lifetime pricing</div>
+    <div class="cta-trust">
+      <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg> Free to start</span>
+      <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg> No credit card</span>
+      <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg> Cancel anytime</span>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer role="contentinfo">
+  <div class="footer-left">
+    <img src="assets/mascot.png" alt="">
+    <span class="footer-name">Baljia AI</span>
+    <span class="footer-tagline">· Your AI Angel</span>
+  </div>
+  <div class="footer-right">Bringing your ideas to reality · © 2026 Baljia AI</div>
+</footer>
+
+<!-- Tweaks panel -->
+<div class="tweaks-panel" id="tweaksPanel">
+  <h4>Tweaks</h4>
+  <div class="tweak-row">
+    <label>Theme</label>
+    <div class="tweak-toggle-row">
+      <button data-theme="light" class="active">Light</button>
+      <button data-theme="dark">Dark</button>
+    </div>
+  </div>
+  <div class="tweak-row">
+    <label>Accent</label>
+    <input type="color" id="accentPicker" value="#E1B12C">
+  </div>
+  <div class="tweak-row">
+    <label>Hero density</label>
+    <select id="densitySelect">
+      <option value="comfy">Comfy</option>
+      <option value="compact">Compact</option>
+    </select>
+  </div>
+  <div class="tweak-row">
+    <label>Console speed</label>
+    <select id="speedSelect">
+      <option value="slow">Slow</option>
+      <option value="normal" selected>Normal</option>
+      <option value="fast">Fast</option>
+    </select>
+  </div>
+</div>
+
+<script>
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "theme": "light",
+  "accent": "#E1B12C",
+  "density": "comfy",
+  "consoleSpeed": "normal"
+}/*EDITMODE-END*/;
+</script>
+
+<!-- ============================================================
+     DATA
+============================================================ -->
+<script>
+const DEPARTMENTS = [
+  {
+    id: "build", icon: "⚡", name: "Engineering",
+    desc: "Codes. Ships. Repeats.",
+    headline: "Builds <em>real software</em>, not suggestions.",
+    blurb: "Full-stack apps, APIs, and databases — coded, tested, and deployed. Production-ready software within hours, not months. No devs needed.",
+    tasks: [
+      { title: "Scaffolded Next.js app with auth + Stripe", meta: "· 2m ago" },
+      { title: "Deployed landing page to custom domain", meta: "· 8m ago" },
+      { title: "Set up Postgres + schema migrations", meta: "· 14m ago" },
+      { title: "Pushed hotfix for broken checkout flow", meta: "· 22m ago" }
+    ]
+  },
+  {
+    id: "mkt", icon: "📣", name: "Marketing",
+    desc: "Campaigns on autopilot.",
+    headline: "Runs your <em>marketing</em> 24/7.",
+    blurb: "Landing pages, ad copy, social campaigns, email sequences, and funnel optimization — created, scheduled, and optimized automatically.",
+    tasks: [
+      { title: "Drafted 12 A/B variants for hero headline", meta: "· 3m ago" },
+      { title: "Scheduled LinkedIn launch thread for 9am", meta: "· 11m ago" },
+      { title: "Built 3-email welcome sequence", meta: "· 19m ago" },
+      { title: "Optimized Google Ads — CPC down 28%", meta: "· 31m ago" }
+    ]
+  },
+  {
+    id: "ops", icon: "✉", name: "Operations",
+    desc: "Support, updates, admin.",
+    headline: "Handles <em>ops</em> so you don't have to.",
+    blurb: "Customer support, investor updates, vendor communications, and daily admin — managed automatically while you focus on strategy.",
+    tasks: [
+      { title: "Replied to 14 customer tickets (avg 1.2m)", meta: "· 5m ago" },
+      { title: "Sent monthly investor update to 8 angels", meta: "· 16m ago" },
+      { title: "Reconciled Stripe payouts with bank", meta: "· 24m ago" },
+      { title: "Renewed 3 vendor contracts automatically", meta: "· 40m ago" }
+    ]
+  },
+  {
+    id: "growth", icon: "📈", name: "Growth",
+    desc: "Revenue, retention, research.",
+    headline: "Drives <em>revenue</em> while you sleep.",
+    blurb: "Finds what's working and doubles down. Runs experiments, analyzes cohorts, and iterates on pricing, onboarding, and activation.",
+    tasks: [
+      { title: "Launched pricing experiment — +14% ARPU", meta: "· 7m ago" },
+      { title: "Identified 3 power-user cohorts", meta: "· 18m ago" },
+      { title: "Improved onboarding activation 22→31%", meta: "· 28m ago" },
+      { title: "Shipped referral program v1", meta: "· 55m ago" }
+    ]
+  },
+  {
+    id: "eyes", icon: "👁", name: "Oversight",
+    desc: "You're always in control.",
+    headline: "Fully <em>transparent</em>. Always in your control.",
+    blurb: "See every task, every action, every result. Approve or reject anything from your dashboard. No black box. Nothing runs without your visibility.",
+    tasks: [
+      { title: "4 tasks awaiting your approval", meta: "· pending" },
+      { title: "All spend under your set $500 budget", meta: "· ok" },
+      { title: "Full audit log for every decision", meta: "· ok" },
+      { title: "One-tap rollback for any change", meta: "· ok" }
+    ]
+  },
+  {
+    id: "brain", icon: "🧠", name: "Learning",
+    desc: "Smarter every day.",
+    headline: "Gets <em>smarter</em> the more you use it.",
+    blurb: "Every interaction teaches Baljia about your market, your customers, and your goals. Your AI Angel learns, adapts, and improves every day.",
+    tasks: [
+      { title: "Learned your brand voice from 24 writeups", meta: "· synced" },
+      { title: "Mapped 6 competitor playbooks", meta: "· synced" },
+      { title: "Personalized copy to your customer segments", meta: "· synced" },
+      { title: "Predicted churn risk for 47 accounts", meta: "· synced" }
+    ]
+  }
+];
+
+const STEPS = [
+  { n: "01", title: "Tell your AI Angel your idea", body: "Describe what you want to build — SaaS, e-commerce, marketplace, anything. Share a URL, upload a doc, or just say what's on your mind.", detail: "> idea received: \"a marketplace for vintage mechanical keyboards\"\n> parsing scope · defining MVP · running market research" },
+  { n: "02", title: "Your company gets set up", body: "Website, database, email, market research, strategy, and a roadmap — all created automatically in minutes based on your idea.", detail: "> spinning up repo + hosting\n> generating brand + landing page\n> scaffolding backend + auth + payments" },
+  { n: "03", title: "Your AI Angel runs operations", body: "Engineering, marketing, outreach, support, analytics, and more. Tasks get planned, executed, and verified around the clock.", detail: "> 24 tasks queued across 4 departments\n> ~3 running · ~21 scheduled\n> avg completion: 4.2 min" },
+  { n: "04", title: "Launch to the world", body: "Your AI Angel takes you live — launches your product publicly, gets your first users, and starts generating revenue from day one.", detail: "> product hunt draft ready\n> launch posts scheduled across 5 channels\n> first 50 users targeted via lookalike audiences" },
+  { n: "05", title: "You stay in control", body: "Everything runs through a simple dashboard. Approve or reject tasks, review progress, and see exactly what's happening. Nothing runs without your visibility.", detail: "> approval queue: 3 items\n> monthly spend: $142 / $500\n> any action: one-tap rollback" },
+  { n: "06", title: "Your AI Angel never sleeps", body: "Every night, your AI Angel checks what's working, what's broken, and what's missing — then fixes it. Your business improves while you rest.", detail: "> overnight report delivered @ 7:00am\n> 3 bugs fixed · 2 experiments started\n> revenue ↑ 4.1% vs. last week" }
+];
+
+const FAQ = [
+  { q: "What is Baljia?", a: "Baljia is an all-in-one AI workspace for solo founders. It validates your business ideas, builds full-stack products, creates and schedules marketing campaigns, handles operations like support and investor updates, and helps with revenue growth — all from a single AI-powered platform." },
+  { q: "How is Baljia different from ChatGPT or other AI tools?", a: "While ChatGPT is a general-purpose conversational AI, Baljia is purpose-built for running a business. It doesn't just give advice — it takes action. Baljia builds real deployable software, creates and schedules marketing campaigns, drafts investor decks, and automates operational workflows." },
+  { q: "What can Baljia actually build?", a: "Baljia builds full-stack applications including SaaS products, e-commerce stores, marketplaces, and internal tools. It generates working code, sets up databases, creates APIs, deploys landing pages, and produces marketing assets — all within hours of receiving your idea." },
+  { q: "When does Baljia launch and how much does it cost?", a: "Baljia is launching in Q2 2026. There will be a generous free tier for early waitlist members. The first 1,000 founders who join the waitlist receive priority access and exclusive lifetime early-adopter pricing." },
+  { q: "Who is Baljia built for?", a: "Baljia is designed for solo founders, solopreneurs, and early-stage startup founders who need to move fast without hiring a full team. If you have a business idea but lack the engineering, marketing, or operations resources to bring it to life, Baljia is built for you." },
+  { q: "Can I use Baljia if I'm not technical?", a: "Absolutely. Baljia is designed for non-technical founders. You describe what you want in plain language — no coding required. Baljia handles all the technical complexity: writing code, setting up infrastructure, deploying applications, and managing ongoing operations." }
+];
+
+const LOG_LINES = [
+  ["build",  "Shipped auth flow · <span class='hl'>/api/auth</span> live"],
+  ["mkt",    "Scheduled 3 tweets + launch teaser"],
+  ["ops",    "Replied to support ticket <span class='hl'>#4821</span> in 1m 18s"],
+  ["growth", "A/B test started: pricing page headline"],
+  ["build",  "Fixed bug in checkout · <span class='hl'>production</span>"],
+  ["mkt",    "Generated 12 ad creatives for Meta"],
+  ["ok",     "Nightly revenue report · <span class='hl'>$1,284</span> · ↑ 9%"],
+  ["ops",    "Sent investor update to 8 angels"],
+  ["growth", "Identified new pricing tier opportunity"],
+  ["build",  "Deployed Postgres schema migration v12"],
+  ["mkt",    "Published SEO blog post · 1,400 words"],
+  ["ops",    "Renewed vendor contracts · 3 renewed"],
+  ["growth", "Onboarding activation · <span class='hl'>31%</span> (↑ from 22%)"],
+  ["build",  "Generated API docs from OpenAPI spec"],
+  ["ok",     "All systems nominal · 0 incidents"]
+];
+
+const MARQUEE_ITEMS = [
+  "Launching Q2 2026",
+  "Founding members get lifetime pricing",
+  "First 1,000 on the list get priority access",
+  "Built for solo founders",
+  "From idea to revenue · one founder, one AI Angel",
+  "Free to start · no credit card required",
+  "Early access invites rolling out monthly",
+  "Join the waitlist to be first in line"
+];
+</script>
+
+<!-- ============================================================
+     BEHAVIOR
+============================================================ -->
+<script>
+// ===== SUPABASE CONFIG (preserved from original) =====
+const SB = 'https://euxsrdmnxlewoicqfhhc.supabase.co';
+const SK = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV1eHNyZG1ueGxld29pY3FmaGhjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ1MTU1MTEsImV4cCI6MjA5MDA5MTUxMX0.arbz6fd6NxIGtTg8EKM8MHRxhBPUfiacvDm8ST0_fnE';
+const H = { 'Content-Type': 'application/json', apikey: SK, Authorization: 'Bearer ' + SK };
+
+// ===== BUILD MARQUEE =====
+(function buildMarquee() {
+  const m = document.getElementById('marquee');
+  const items = [...MARQUEE_ITEMS, ...MARQUEE_ITEMS]; // duplicate for seamless loop
+  m.innerHTML = items.map(i => `<span>${i}</span>`).join('');
+})();
+
+// ===== BUILD DEPARTMENTS =====
+(function buildDepts() {
+  const tabsEl = document.getElementById('deptTabs');
+  tabsEl.innerHTML = DEPARTMENTS.map((d, i) => `
+    <button class="dept-tab ${i === 0 ? 'active' : ''}" data-idx="${i}" role="tab" aria-selected="${i === 0}">
+      <span class="ico" aria-hidden="true">${d.icon}</span>
+      <span>
+        <span class="name">${d.name}</span>
+        <span class="desc">${d.desc}</span>
+      </span>
+    </button>
+  `).join('');
+
+  tabsEl.addEventListener('click', e => {
+    const btn = e.target.closest('.dept-tab');
+    if (!btn) return;
+    document.querySelectorAll('.dept-tab').forEach(b => { b.classList.remove('active'); b.setAttribute('aria-selected','false'); });
+    btn.classList.add('active'); btn.setAttribute('aria-selected','true');
+    showDept(+btn.dataset.idx);
+  });
+
+  showDept(0);
+})();
+
+function showDept(idx) {
+  const d = DEPARTMENTS[idx];
+  const panel = document.getElementById('deptPanel');
+  panel.innerHTML = `
+    <div class="dept-visual"></div>
+    <h3 class="bigtitle">${d.headline}</h3>
+    <p class="blurb">${d.blurb}</p>
+    <div class="dept-tasks">
+      ${d.tasks.map((t, i) => `
+        <div class="dept-task" style="animation: fadeUp .5s cubic-bezier(.16,1,.3,1) ${i * 0.06}s both;">
+          <span class="check" aria-hidden="true">✓</span>
+          <span>${t.title}</span>
+          <span class="meta">${t.meta}</span>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+// ===== BUILD TIMELINE =====
+(function buildTimeline() {
+  const tl = document.getElementById('timeline');
+  tl.innerHTML = STEPS.map((s, i) => `
+    <div class="tl-step reveal" data-idx="${i}">
+      <div class="tl-node">${s.n}</div>
+      <div class="tl-content">
+        <h3>${s.title}</h3>
+        <p>${s.body}</p>
+        <pre class="tl-detail">${s.detail}</pre>
+      </div>
+    </div>
+  `).join('');
+  tl.addEventListener('click', e => {
+    const step = e.target.closest('.tl-step');
+    if (!step) return;
+    const wasActive = step.classList.contains('active');
+    document.querySelectorAll('.tl-step').forEach(s => s.classList.remove('active'));
+    if (!wasActive) step.classList.add('active');
+  });
+})();
+
+// ===== BUILD FAQ =====
+(function buildFaq() {
+  const list = document.getElementById('faqList');
+  list.innerHTML = FAQ.map((f, i) => `
+    <div class="faq-item reveal" data-idx="${i}">
+      <button class="faq-question" aria-expanded="false" onclick="toggleFaq(this)">
+        <span>${f.q}</span>
+        <span class="q-icon" aria-hidden="true"></span>
+      </button>
+      <div class="faq-answer" role="region"><div class="faq-answer-inner">${f.a}</div></div>
+    </div>
+  `).join('');
+})();
+
+function toggleFaq(btn) {
+  const item = btn.parentElement;
+  const answer = item.querySelector('.faq-answer');
+  const isOpen = item.classList.toggle('open');
+  btn.setAttribute('aria-expanded', isOpen);
+  answer.style.maxHeight = isOpen ? answer.scrollHeight + 'px' : '0';
+}
+
+// ===== CONSOLE ACTIVITY LOG (live typing) =====
+const consoleBody = document.getElementById('consoleBody');
+let logIdx = 0;
+const speedMap = { slow: 2400, normal: 1400, fast: 700 };
+function pushLog() {
+  const [tag, msg] = LOG_LINES[logIdx % LOG_LINES.length];
+  logIdx++;
+  const now = new Date();
+  const ts = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
+  const line = document.createElement('div');
+  line.className = 'log-line';
+  line.innerHTML = `<span class="ts">${ts}</span><span class="tag ${tag}">${tag}</span><span class="msg">${msg}</span>`;
+  consoleBody.appendChild(line);
+  // keep last ~8 lines
+  while (consoleBody.children.length > 9) consoleBody.removeChild(consoleBody.firstChild);
+}
+// seed
+for (let i = 0; i < 5; i++) pushLog();
+let consoleSpeed = TWEAK_DEFAULTS.consoleSpeed;
+let consoleTimer;
+function startConsole() {
+  clearInterval(consoleTimer);
+  consoleTimer = setInterval(pushLog, speedMap[consoleSpeed] || 1400);
+}
+startConsole();
+
+// ===== WAITLIST: Hero form =====
+async function joinWL() {
+  const e = document.getElementById('eIn').value.trim();
+  const b = document.getElementById('wBtn');
+  const m = document.getElementById('wMsg');
+  if (!e || !e.includes('@')) { m.textContent = 'Please enter a valid email.'; m.className = 'waitlist-msg err'; return; }
+  b.disabled = true; b.innerHTML = 'Joining…';
+  try {
+    const r = await fetch(SB + '/rest/v1/waitlist', {
+      method: 'POST',
+      headers: { ...H, Prefer: 'return=minimal' },
+      body: JSON.stringify({ email: e, source: 'landing_page' })
+    });
+    if (r.ok) {
+      m.textContent = "✨ You're in! Your AI Angel is on its way.";
+      m.className = 'waitlist-msg ok';
+      document.getElementById('eIn').value = '';
+      fireConfetti();
+      uC();
+    } else if (r.status === 409) {
+      m.textContent = "Already on the list — you're all set!";
+      m.className = 'waitlist-msg ok';
+    } else throw 0;
+  } catch (x) {
+    m.textContent = 'Something went wrong. Please try again.';
+    m.className = 'waitlist-msg err';
+  }
+  b.disabled = false; b.innerHTML = 'Get Early Access <span class="arrow">→</span>';
+}
+
+function joinWL2() {
+  const e = document.getElementById('eIn2').value.trim();
+  const m = document.getElementById('wMsg2');
+  if (!e || !e.includes('@')) { m.textContent = 'Please enter a valid email.'; m.className = 'waitlist-msg err'; return; }
+  document.getElementById('eIn').value = e;
+  joinWL().then(() => {
+    m.textContent = document.getElementById('wMsg').textContent;
+    m.className = document.getElementById('wMsg').className;
+    document.getElementById('eIn2').value = '';
+  });
+}
+
+// ===== UPDATE COUNTER =====
+async function uC() {
+  try {
+    const r = await fetch(SB + '/rest/v1/waitlist?select=id', { headers: { ...H, Prefer: 'count=exact' } });
+    const n = parseInt(r.headers.get('content-range')?.split('/')[1] || '0');
+    const display = n > 0 ? n.toLocaleString() : '—';
+    document.getElementById('wT').textContent = display;
+    document.getElementById('wT').setAttribute('data-count', n || 1200);
+    const wC = document.getElementById('wC');
+    if (wC) wC.textContent = n > 0 ? `Join ${n.toLocaleString()}+ founders.` : 'Join early founders.';
+  } catch (e) {
+    document.getElementById('wT').textContent = '—';
+  }
+}
+uC();
+
+// ===== HAMBURGER =====
+function toggleMenu() {
+  const menu = document.getElementById('mobileMenu');
+  const btn = document.querySelector('.hamburger');
+  const isOpen = menu.classList.toggle('open');
+  btn.classList.toggle('active');
+  btn.setAttribute('aria-expanded', isOpen);
+}
+
+// ===== SCROLL REVEAL =====
+const io = new IntersectionObserver((entries) => {
+  entries.forEach(e => {
+    if (e.isIntersecting) {
+      e.target.classList.add('in');
+      io.unobserve(e.target);
+    }
+  });
+}, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' });
+document.querySelectorAll('.reveal').forEach(el => io.observe(el));
+
+// ===== NAV SHRINK =====
+const navEl = document.getElementById('nav');
+window.addEventListener('scroll', () => {
+  if (window.scrollY > 30) navEl.classList.add('scrolled'); else navEl.classList.remove('scrolled');
+}, { passive: true });
+
+// ===== CURSOR GLOW + MASCOT PARALLAX =====
+const glow = document.getElementById('cursorGlow');
+const mascot = document.getElementById('mascot');
+window.addEventListener('pointermove', (e) => {
+  glow.style.left = e.clientX + 'px';
+  glow.style.top = e.clientY + 'px';
+  if (mascot) {
+    const r = mascot.getBoundingClientRect();
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
+    const dx = (e.clientX - cx) / 30;
+    const dy = (e.clientY - cy) / 30;
+    mascot.style.transform = `translate3d(${Math.max(-8, Math.min(8, dx))}px, ${Math.max(-8, Math.min(8, dy))}px, 0)`;
+  }
+});
+
+// ===== PLAYGROUND (uses window.claude if available) =====
+function setIdea(el) {
+  document.getElementById('ideaIn').value = el.textContent;
+  document.getElementById('ideaIn').focus();
+}
+
+async function runPlayground() {
+  const input = document.getElementById('ideaIn');
+  const out = document.getElementById('ideaOut');
+  const btn = document.getElementById('ideaBtn');
+  const idea = input.value.trim();
+  if (!idea) { input.focus(); return; }
+  btn.disabled = true;
+  out.classList.add('show');
+  out.innerHTML = `<div class="thinking">Your AI Angel is thinking<span class="dots"><span></span><span></span><span></span></span></div>`;
+
+  const prompt = `You are "Baljia", an AI angel that runs a business for a solo founder. The founder just said they want to build: "${idea}".
+
+In ≤120 words, respond in this exact format (use these literal headers with emoji):
+🏗  Build: <one concrete product you'd ship, 1 sentence>
+📣  Market: <one marketing channel / first campaign, 1 sentence>
+⚙  Ops: <one ops workflow you'd automate, 1 sentence>
+📈  Grow: <one growth experiment, 1 sentence>
+
+No intro, no outro. Be specific, punchy, use concrete numbers or examples. Keep each line short.`;
+
+  try {
+    if (window.claude && typeof window.claude.complete === 'function') {
+      const text = await window.claude.complete(prompt);
+      renderPlan(text);
+    } else {
+      // Fallback template plan
+      const fallback = templatePlan(idea);
+      renderPlan(fallback);
+    }
+  } catch (err) {
+    renderPlan(templatePlan(idea));
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function templatePlan(idea) {
+  return [
+    `🏗  Build: A lean v1 for "${idea}" — landing page, signup, Stripe, and a single core workflow, live in 48 hours.`,
+    `📣  Market: 5-day warm launch on X / LinkedIn + a Product Hunt teaser, targeting 500 founders in adjacent niches.`,
+    `⚙  Ops: Auto-reply customer support (<2m), weekly investor update, Stripe ↔ bank reconciliation nightly.`,
+    `📈  Grow: A/B pricing page headline + a 10% referral program, aiming for 20% activation by week 2.`
+  ].join('\n');
+}
+
+function renderPlan(text) {
+  const out = document.getElementById('ideaOut');
+  const lines = text.split(/\n+/).filter(l => l.trim());
+  out.innerHTML = lines.map(l => {
+    const [head, ...rest] = l.split(':');
+    const body = rest.join(':').trim();
+    return `<div style="margin-bottom:8px"><strong>${head}:</strong> ${body}</div>`;
+  }).join('');
+}
+
+// ===== CONFETTI =====
+const confettiCanvas = document.getElementById('confetti');
+const ctx = confettiCanvas.getContext('2d');
+function sizeConfetti() { confettiCanvas.width = innerWidth; confettiCanvas.height = innerHeight; }
+sizeConfetti();
+window.addEventListener('resize', sizeConfetti);
+const colors = ['#E1B12C', '#FCD34D', '#F59E0B', '#D97706', '#FFB800', '#FEF3C7'];
+function fireConfetti() {
+  const particles = [];
+  const count = 120;
+  for (let i = 0; i < count; i++) {
+    particles.push({
+      x: innerWidth / 2, y: innerHeight / 3,
+      vx: (Math.random() - 0.5) * 14,
+      vy: Math.random() * -12 - 4,
+      g: 0.28, size: Math.random() * 6 + 4,
+      rot: Math.random() * Math.PI,
+      vr: (Math.random() - 0.5) * 0.3,
+      color: colors[Math.floor(Math.random() * colors.length)],
+      life: 0, max: 140 + Math.random() * 60
+    });
+  }
+  let t = 0;
+  function step() {
+    ctx.clearRect(0, 0, confettiCanvas.width, confettiCanvas.height);
+    particles.forEach(p => {
+      p.life++;
+      p.vy += p.g;
+      p.x += p.vx; p.y += p.vy;
+      p.rot += p.vr;
+      const alpha = Math.max(0, 1 - p.life / p.max);
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.rot);
+      ctx.fillStyle = p.color;
+      ctx.globalAlpha = alpha;
+      ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size * 0.5);
+      ctx.restore();
+    });
+    t++;
+    if (t < 200) requestAnimationFrame(step); else ctx.clearRect(0, 0, confettiCanvas.width, confettiCanvas.height);
+  }
+  step();
+}
+
+// ===== STAT COUNTER ANIMATION =====
+const statEl = document.getElementById('wT');
+let counted = false;
+const cio = new IntersectionObserver((entries) => {
+  entries.forEach(e => {
+    if (e.isIntersecting && !counted) {
+      counted = true;
+      const target = parseInt(statEl.dataset.count || '1200');
+      let start = 0;
+      const duration = 1400;
+      const startT = performance.now();
+      function tick(now) {
+        const p = Math.min(1, (now - startT) / duration);
+        const eased = 1 - Math.pow(1 - p, 3);
+        const val = Math.floor(start + (target - start) * eased);
+        statEl.textContent = val.toLocaleString();
+        if (p < 1) requestAnimationFrame(tick);
+      }
+      requestAnimationFrame(tick);
+    }
+  });
+}, { threshold: 0.3 });
+cio.observe(statEl);
+
+// ===== TWEAKS =====
+const tweaks = { ...TWEAK_DEFAULTS };
+const panel = document.getElementById('tweaksPanel');
+applyTweaks(tweaks);
+
+function applyTweaks(t) {
+  document.body.classList.toggle('dark', t.theme === 'dark');
+  // accent color
+  if (t.accent) {
+    const root = document.documentElement.style;
+    root.setProperty('--color-primary', t.accent);
+    root.setProperty('--color-primary-dark', shade(t.accent, -20));
+    root.setProperty('--color-primary-mid', shade(t.accent, -10));
+    root.setProperty('--color-primary-light', shade(t.accent, 20));
+    root.setProperty('--color-primary-deep', shade(t.accent, -35));
+    root.setProperty('--color-primary-bg', hexA(t.accent, 0.10));
+    root.setProperty('--color-primary-border', hexA(t.accent, 0.28));
+  }
+  // density
+  document.body.style.setProperty('--hero-pad', t.density === 'compact' ? '80px' : '100px');
+  // console speed
+  consoleSpeed = t.consoleSpeed || 'normal';
+  startConsole();
+  // reflect in UI
+  document.querySelectorAll('[data-theme]').forEach(b => b.classList.toggle('active', b.dataset.theme === t.theme));
+  const accP = document.getElementById('accentPicker'); if (accP) accP.value = t.accent;
+  const dS = document.getElementById('densitySelect'); if (dS) dS.value = t.density;
+  const sS = document.getElementById('speedSelect'); if (sS) sS.value = t.consoleSpeed;
+}
+
+function setTweak(key, val) {
+  tweaks[key] = val;
+  applyTweaks(tweaks);
+  try {
+    window.parent.postMessage({ type: '__edit_mode_set_keys', edits: { [key]: val } }, '*');
+  } catch (e) {}
+}
+
+// helpers
+function shade(hex, pct) {
+  const n = parseInt(hex.replace('#',''), 16);
+  let r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  const d = pct / 100;
+  r = Math.min(255, Math.max(0, Math.round(r + (d > 0 ? (255 - r) : r) * d)));
+  g = Math.min(255, Math.max(0, Math.round(g + (d > 0 ? (255 - g) : g) * d)));
+  b = Math.min(255, Math.max(0, Math.round(b + (d > 0 ? (255 - b) : b) * d)));
+  return '#' + ((r << 16) | (g << 8) | b).toString(16).padStart(6, '0');
+}
+function hexA(hex, a) {
+  const n = parseInt(hex.replace('#',''), 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+}
+
+// theme toggle (nav)
+document.getElementById('themeToggle').addEventListener('click', () => {
+  setTweak('theme', tweaks.theme === 'dark' ? 'light' : 'dark');
+});
+
+// Tweaks panel bindings
+document.querySelectorAll('[data-theme]').forEach(b => b.addEventListener('click', () => setTweak('theme', b.dataset.theme)));
+document.getElementById('accentPicker').addEventListener('input', e => setTweak('accent', e.target.value));
+document.getElementById('densitySelect').addEventListener('change', e => setTweak('density', e.target.value));
+document.getElementById('speedSelect').addEventListener('change', e => setTweak('consoleSpeed', e.target.value));
+
+// Edit-mode host handshake
+window.addEventListener('message', (ev) => {
+  const d = ev && ev.data;
+  if (!d || !d.type) return;
+  if (d.type === '__activate_edit_mode') panel.classList.add('show');
+  else if (d.type === '__deactivate_edit_mode') panel.classList.remove('show');
+});
+try { window.parent.postMessage({ type: '__edit_mode_available' }, '*'); } catch (e) {}
+</script>
+
+</body>
+</html>
