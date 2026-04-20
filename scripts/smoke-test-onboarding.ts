@@ -29,6 +29,8 @@ const args = process.argv.slice(2);
 const journey: OnboardingJourney = (args[0] as OnboardingJourney) ?? 'build_my_idea';
 const ideaFlagIdx = args.indexOf('--idea');
 const urlFlagIdx = args.indexOf('--url');
+const nameFlagIdx = args.indexOf('--name');
+const emailFlagIdx = args.indexOf('--email');
 
 const DEFAULT_IDEA = 'AI-powered client feedback management tool for freelance designers';
 const DEFAULT_URL = 'https://linear.app'; // real public site for Grow test
@@ -39,8 +41,21 @@ const input =
   : journey === 'build_my_idea' ? DEFAULT_IDEA
   : undefined;
 
-const SMOKE_EMAIL = 'smoke-test@baljia.app';
-const SMOKE_NAME = 'Smoke Test';
+// For Surprise Me: default to a well-known founder name so Tavily LinkedIn/Twitter
+// enrichment returns meaningful content. For other journeys: generic smoke user
+// (enrichment isn't used for idea generation, so no need for real footprint).
+const DEFAULT_SURPRISE_NAME = 'Paul Graham';
+const DEFAULT_SURPRISE_EMAIL = 'surprise-smoke@baljia.app';
+
+const SMOKE_NAME =
+  nameFlagIdx !== -1 ? args[nameFlagIdx + 1]
+  : journey === 'surprise_me' ? DEFAULT_SURPRISE_NAME
+  : 'Smoke Test';
+
+const SMOKE_EMAIL =
+  emailFlagIdx !== -1 ? args[emailFlagIdx + 1]
+  : journey === 'surprise_me' ? DEFAULT_SURPRISE_EMAIL
+  : 'smoke-test@baljia.app';
 const POLL_INTERVAL_MS = 3_000;
 const POLL_TIMEOUT_MS = 10 * 60 * 1_000;
 
@@ -88,9 +103,16 @@ function assertPass(cond: boolean, passMsg: string, failMsg: string): void {
 // ──────────────────────────────────────────────────────────────────────────
 
 async function ensureSmokeUser(): Promise<{ id: string }> {
-  const [existing] = await db.select({ id: users.id })
+  const [existing] = await db.select({ id: users.id, name: users.name })
     .from(users).where(eq(users.email, SMOKE_EMAIL)).limit(1);
-  if (existing) return existing;
+  if (existing) {
+    // Update name if it has drifted — important for Surprise journey where Tavily
+    // searches use name for enrichment.
+    if (existing.name !== SMOKE_NAME) {
+      await db.update(users).set({ name: SMOKE_NAME }).where(eq(users.id, existing.id));
+    }
+    return { id: existing.id };
+  }
   const [created] = await db.insert(users)
     .values({ email: SMOKE_EMAIL, name: SMOKE_NAME, auth_provider: 'magic_link' })
     .returning({ id: users.id });
