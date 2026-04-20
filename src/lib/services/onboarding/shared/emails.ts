@@ -1,7 +1,7 @@
 // Startup + completion email composers — Polsia parity
 
 import { createLogger } from '@/lib/logger';
-import { sendEmail } from '@/lib/services/email.service';
+import { trackedSendEmail as sendEmail } from './tracked-calls';
 import * as taskService from '@/lib/services/task.service';
 import type { PipelineContext } from '../types';
 

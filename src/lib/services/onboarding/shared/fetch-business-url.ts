@@ -4,7 +4,8 @@
 // Falls back to Tavily site:url search if fetch fails.
 
 import { createLogger } from '@/lib/logger';
-import { tavilySearchText, isTavilyAvailable } from '@/lib/tavily';
+import { isTavilyAvailable } from '@/lib/tavily';
+import { trackedTavilySearch as tavilySearchText } from './tracked-calls';
 import { callSmallLLMJson } from './json-mode';
 import { emitActivity } from '../stage-runner';
 import { appendMemorySection } from './memory-sections';

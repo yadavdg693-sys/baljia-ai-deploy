@@ -10,12 +10,26 @@ import { OnboardingLogStrip } from '@/components/onboarding/OnboardingLogStrip';
 type Step = 'level1' | 'level2' | 'idea_input' | 'url_input' | 'creating';
 
 interface StageUpdate {
-  type: 'stage' | 'completed' | 'failed' | 'ping' | 'timeout';
+  type: 'stage' | 'activity' | 'mood' | 'completed' | 'failed' | 'ping' | 'timeout';
   stage?: string;
-  status?: 'running' | 'done' | 'error';
+  status?: 'running' | 'done' | 'error' | 'skipped';
   label?: string;
   company_name?: string;
   error?: string;
+  // activity
+  text?: string;
+  tool?: string | null;
+  timestamp?: number;
+  // mood
+  mood?: string;
+}
+
+export interface ActivityLine {
+  id: number;
+  text: string;
+  tool: string | null;
+  stage: string | null;
+  timestamp: number;
 }
 
 // Stage order — rendered as a checklist during onboarding. Note that different
@@ -44,6 +58,8 @@ const STAGE_ORDER = [
   'generate_landing_page',
   'post_launch_tweet',
   'generate_ceo_summary',
+  'generate_magic_link',
+  'send_inbox_message',
   'send_completion_email',
   'flush_diagnostics',
   'celebrate',
@@ -66,8 +82,12 @@ function OnboardingPageInner() {
   const [idea, setIdea] = useState('');
   const [businessUrl, setBusinessUrl] = useState('');
   const [companyId, setCompanyId] = useState<string | null>(resumeCompanyId);
-  const [stages, setStages] = useState<Record<string, 'running' | 'done' | 'error'>>({});
+  const [stages, setStages] = useState<Record<string, 'running' | 'done' | 'error' | 'skipped'>>({});
   const [currentStageLabel, setCurrentStageLabel] = useState('Starting up...');
+  const [activityLines, setActivityLines] = useState<ActivityLine[]>([]);
+  const [mood, setMood] = useState<string>('listening');
+  const [logDone, setLogDone] = useState(false);
+  const activityIdRef = useRef(0);
   const [error, setError] = useState<string | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const resumeTriggered = useRef(false);
@@ -120,19 +140,39 @@ function OnboardingPageInner() {
         }
       }
 
+      if (update.type === 'activity' && update.text) {
+        setActivityLines(prev => [
+          ...prev,
+          {
+            id: ++activityIdRef.current,
+            text: update.text!,
+            tool: update.tool ?? null,
+            stage: update.stage ?? null,
+            timestamp: update.timestamp ?? Date.now(),
+          },
+        ]);
+      }
+
+      if (update.type === 'mood' && update.mood) {
+        setMood(update.mood);
+      }
+
       if (update.type === 'completed') {
+        setLogDone(true);
         es.close();
         // Short delay so user sees the final "Ready!" state
         setTimeout(() => router.push(`/dashboard/${companyId}`), 1200);
       }
 
       if (update.type === 'failed') {
+        setLogDone(true);
         es.close();
         setError(update.error ?? 'Setup failed. Please try again.');
         setStep('level1');
       }
 
       if (update.type === 'timeout') {
+        setLogDone(true);
         es.close();
         // Audit #14: Don't blindly navigate — show a recoverable message.
         // The company exists but setup may be incomplete.
@@ -462,12 +502,16 @@ function OnboardingPageInner() {
               })}
             </div>
 
-            {/* Live activity log — Phase 1 observability */}
-            {companyId && (
-              <div className="mt-6">
-                <OnboardingLogStrip companyId={companyId} />
-              </div>
-            )}
+            {/* Live activity log — Phase 1 observability. State is lifted to this
+                page so we use a single SSE stream instead of two. */}
+            <div className="mt-6">
+              <OnboardingLogStrip
+                lines={activityLines}
+                mood={mood}
+                currentStageLabel={currentStageLabel}
+                done={logDone}
+              />
+            </div>
           </div>
         )}
       </div>

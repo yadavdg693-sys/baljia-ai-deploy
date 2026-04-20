@@ -1,11 +1,18 @@
 // callSmallLLM — renamed from callHaiku (reflects actual routing to Codex GPT-5.4 primary)
 // Provider-ordered fallback: OpenAI → Anthropic → Gemini (respects PRIMARY_LLM_PROVIDER env)
+// Auto-records LLM cost via AsyncLocalStorage when called inside an onboarding stage.
 
 import Anthropic from '@anthropic-ai/sdk';
+import { onboardingContext } from '../context';
+import { recordLLMCall } from '../shared/cost-tracker';
 
 export const SMALL_LLM_FALLBACK_MODEL = 'claude-haiku-4-5-20251001';
 
 export async function callSmallLLM(prompt: string, maxTokens = 256): Promise<string> {
+  // Auto-record cost if we're inside an onboarding stage (ALS populated by stage-runner)
+  const store = onboardingContext.getStore();
+  if (store) recordLLMCall(store.ctx, store.stage, maxTokens);
+
   const { isAnthropicAvailable, isOpenAIAvailable, callOpenAI, OPENAI_MODELS, getPreferredProvider } = await import('@/lib/llm-provider');
 
   const preferred = getPreferredProvider();

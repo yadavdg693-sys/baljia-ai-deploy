@@ -1,7 +1,8 @@
 // Market research — Surprise Me journey
 // Build-shaped plus Why Now + Idea Refinements to justify the system-invented idea
 
-import { tavilySearchText, isTavilyAvailable } from '@/lib/tavily';
+import { isTavilyAvailable } from '@/lib/tavily';
+import { trackedTavilySearch as tavilySearchText } from './tracked-calls';
 import { callSmallLLMJson } from './json-mode';
 import { emitActivity } from '../stage-runner';
 import { persistMarketResearch, renderSurpriseMarkdown } from './market-research-render';

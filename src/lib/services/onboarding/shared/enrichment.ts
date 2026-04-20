@@ -3,7 +3,8 @@
 
 import { db, users } from '@/lib/db';
 import { eq } from 'drizzle-orm';
-import { tavilySearchText, isTavilyAvailable } from '@/lib/tavily';
+import { isTavilyAvailable } from '@/lib/tavily';
+import { trackedTavilySearch as tavilySearchText } from './tracked-calls';
 import { createLogger } from '@/lib/logger';
 import { callSmallLLM } from '../llm/small-llm';
 import { appendMemorySection } from './memory-sections';

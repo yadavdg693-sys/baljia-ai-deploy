@@ -2,7 +2,8 @@
 // Distribution-focused: competitor traffic sources, acquisition channels, conversion,
 // positioning gaps for an EXISTING business. Denser schema than Build.
 
-import { tavilySearchText, isTavilyAvailable } from '@/lib/tavily';
+import { isTavilyAvailable } from '@/lib/tavily';
+import { trackedTavilySearch as tavilySearchText } from './tracked-calls';
 import { callSmallLLMJson } from './json-mode';
 import { emitActivity } from '../stage-runner';
 import { persistMarketResearch, renderGrowMarkdown } from './market-research-render';

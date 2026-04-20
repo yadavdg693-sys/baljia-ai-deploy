@@ -1,12 +1,13 @@
 'use client';
 
-// OnboardingLogStrip — terminal-style scrolling log for the onboarding waiting page.
-// Subscribes to the status SSE endpoint and renders activity lines in real time.
-// Auto-scrolls to bottom as new lines arrive.
+// OnboardingLogStrip — terminal-style scrolling activity log.
+// Pure presentational component. Activity lines + mood + stage label are passed
+// in from the parent (the onboarding page), which owns the single SSE stream.
+// Prior version opened its own EventSource; consolidated to one stream per page.
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 
-interface ActivityLine {
+export interface LogStripActivityLine {
   id: number;
   text: string;
   tool: string | null;
@@ -14,67 +15,20 @@ interface ActivityLine {
   timestamp: number;
 }
 
-interface StageUpdate {
-  stage: string;
-  status: 'running' | 'done' | 'skipped' | 'error';
-  label: string;
-}
-
-interface MoodUpdate {
+interface OnboardingLogStripProps {
+  lines: LogStripActivityLine[];
   mood: string;
-  stage: string | null;
+  currentStageLabel: string | null;
+  done: boolean;
 }
 
-export function OnboardingLogStrip({ companyId }: { companyId: string }) {
-  const [lines, setLines] = useState<ActivityLine[]>([]);
-  const [currentStage, setCurrentStage] = useState<string | null>(null);
-  const [mood, setMood] = useState<string>('listening');
-  const [done, setDone] = useState(false);
-  const lineIdRef = useRef(0);
+export function OnboardingLogStrip({
+  lines,
+  mood,
+  currentStageLabel,
+  done,
+}: OnboardingLogStripProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    const eventSource = new EventSource(`/api/onboarding/status?company_id=${companyId}`);
-
-    eventSource.onmessage = (ev) => {
-      try {
-        const data = JSON.parse(ev.data);
-        if (data.type === 'activity') {
-          setLines((prev) => [
-            ...prev,
-            {
-              id: ++lineIdRef.current,
-              text: String(data.text ?? ''),
-              tool: data.tool ?? null,
-              stage: data.stage ?? null,
-              timestamp: Number(data.timestamp ?? Date.now()),
-            },
-          ]);
-        } else if (data.type === 'stage') {
-          const stageUpdate = data as StageUpdate;
-          if (stageUpdate.status === 'running') {
-            setCurrentStage(stageUpdate.label);
-          }
-        } else if (data.type === 'mood') {
-          const moodUpdate = data as MoodUpdate;
-          setMood(moodUpdate.mood);
-        } else if (data.type === 'completed' || data.type === 'failed' || data.type === 'timeout') {
-          setDone(true);
-          eventSource.close();
-        }
-      } catch {
-        // Non-fatal parse error
-      }
-    };
-
-    eventSource.onerror = () => {
-      // Browser will retry automatically
-    };
-
-    return () => {
-      eventSource.close();
-    };
-  }, [companyId]);
 
   // Auto-scroll to bottom on new lines
   useEffect(() => {
@@ -93,7 +47,7 @@ export function OnboardingLogStrip({ companyId }: { companyId: string }) {
             }`}
           />
           <span className="text-[#888]">
-            {done ? 'Done' : currentStage ?? 'Starting...'}
+            {done ? 'Done' : currentStageLabel ?? 'Starting...'}
           </span>
         </span>
         <span className="text-[10px] uppercase tracking-wider text-[#666]">

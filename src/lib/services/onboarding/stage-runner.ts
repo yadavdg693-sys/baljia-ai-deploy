@@ -5,6 +5,7 @@
 
 import * as eventService from '@/lib/services/event.service';
 import { createLogger } from '@/lib/logger';
+import { onboardingContext } from './context';
 import type { OnboardingStage, PipelineContext, MoodState } from './types';
 
 const log = createLogger('OnboardingStage');
@@ -109,8 +110,10 @@ export async function stage(
 
   watchdogTick?.(name);
 
+  // Wrap fn() with AsyncLocalStorage so nested LLM / Tavily / email calls can
+  // attribute their cost to the current stage via onboardingContext.getStore()
   const executeOnce = async (): Promise<void> => {
-    await fn();
+    await onboardingContext.run({ ctx, stage: name }, fn);
   };
 
   try {
