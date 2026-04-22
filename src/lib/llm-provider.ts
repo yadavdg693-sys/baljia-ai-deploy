@@ -69,6 +69,14 @@ export function isGeminiAvailable(): boolean {
 export const OPENROUTER_MODELS = {
   GLM_5_1: 'z-ai/glm-5.1',
   QWEN_3_6_PLUS: 'qwen/qwen3.6-plus',
+  /** Moonshot AI Kimi K2.6 — latest Kimi release (via OpenRouter) */
+  KIMI_K2_6: 'moonshotai/kimi-k2.6',
+  /** Kimi K2.5 — prior stable */
+  KIMI_K2_5: 'moonshotai/kimi-k2.5',
+  /** Kimi K2 Thinking — reasoning variant */
+  KIMI_K2_THINKING: 'moonshotai/kimi-k2-thinking',
+  /** Kimi K2 (original, Sep 2024 snapshot) */
+  KIMI_K2: 'moonshotai/kimi-k2',
   FULL_AGENT: 'z-ai/glm-5.1',
   TEMPLATE: 'qwen/qwen3.6-plus',
   DETERMINISTIC: 'qwen/qwen3.6-plus',
