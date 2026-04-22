@@ -22,9 +22,9 @@ import { getMetaAdsTools, handleMetaAdsTool } from './tools/meta-ads.tools';
 import { getOutreachTools, handleOutreachTool } from './tools/outreach.tools';
 import { getEngineeringTools, handleEngineeringTool } from './tools/engineering.tools';
 import { callAnthropicWithTimeout, callOpenRouterWithTimeout, callGeminiWithTimeout } from '@/lib/llm-safety';
-import { isAnthropicAvailable, isOpenRouterAvailable, OPENROUTER_MODELS } from '@/lib/llm-provider';
+import { isAnthropicAvailable, isBedrockAvailable, isDirectAnthropicAvailable, isOpenAIAvailable, getOpenAIApiKey, isOpenRouterAvailable, OPENROUTER_MODELS, OPENAI_MODELS, getPreferredProvider } from '@/lib/llm-provider';
 import { sanitizeForPrompt, moderateOutput } from '@/lib/content-safety';
-import { db, agents as agentsTable, reports, companies } from '@/lib/db';
+import { db, agents as agentsTable, reports, companies, tasks as tasksTable, taskExecutions } from '@/lib/db';
 import { eq, and, desc } from 'drizzle-orm';
 import { createLogger } from '@/lib/logger';
 import type { Task, TaskExecution } from '@/types';
@@ -603,6 +603,40 @@ This task follows a known pattern. Customize a standard approach with project-sp
       sections.push(`## Prior Work (recent reports)\n${summaries.join('\n\n')}`);
     }
   } catch { /* continue without prior reports */ }
+
+  // 2A-6: Related task context — inject logs from prior attempts so agent doesn't repeat mistakes
+  try {
+    const relatedIds = (task.related_task_ids as string[] | null) ?? [];
+    if (relatedIds.length > 0) {
+      const priorAttempts: string[] = [];
+      for (const relatedId of relatedIds.slice(0, 3)) {
+        const [relatedTask] = await db.select({
+          title: tasksTable.title, status: tasksTable.status, tag: tasksTable.tag,
+        }).from(tasksTable).where(eq(tasksTable.id, relatedId)).limit(1);
+
+        const [execution] = await db.select({
+          error_summary: taskExecutions.error_summary,
+          status: taskExecutions.status,
+          turn_count: taskExecutions.turn_count,
+        }).from(taskExecutions).where(eq(taskExecutions.task_id, relatedId))
+          .orderBy(desc(taskExecutions.completed_at)).limit(1);
+
+        if (relatedTask) {
+          let attempt = `### Prior: "${relatedTask.title}" (${relatedTask.status})`;
+          if (execution?.error_summary) {
+            attempt += `\n**Failed because:** ${execution.error_summary}`;
+          }
+          if (execution?.turn_count) {
+            attempt += `\n**Turns used:** ${execution.turn_count}`;
+          }
+          priorAttempts.push(attempt);
+        }
+      }
+      if (priorAttempts.length > 0) {
+        sections.push(`## Prior Attempts (DO NOT repeat these mistakes)\n${priorAttempts.join('\n\n')}`);
+      }
+    }
+  } catch { /* continue without related task context */ }
 
   // Memory packet — use pre-built ContextPacket if available, otherwise assemble fresh
   if (contextPacket?.compiled_briefing?.trim()) {
@@ -1209,9 +1243,11 @@ export interface AgentResult {
 export interface AgentLoopConfig {
   /** Claude model ID to use (e.g. Sonnet for full_agent, Haiku for deterministic/template) */
   claudeModel: string;
-  /** OpenRouter model ID for second fallback (defaults to qwen-plus) */
+  /** OpenAI model ID for second fallback (defaults to gpt-4o) */
+  openAIModel?: string;
+  /** OpenRouter model ID for third fallback (defaults to qwen-plus) */
   openRouterModel?: string;
-  /** Gemini model ID for third fallback (defaults to gemini-2.5-flash) */
+  /** Gemini model ID for fourth fallback (defaults to gemini-2.5-flash) */
   geminiModel?: string;
   /** Max turns for this execution (overrides task.max_turns) */
   maxTurns: number;
@@ -1237,40 +1273,50 @@ export async function runAgentLoop(input: AgentInput, config: AgentLoopConfig): 
   const tools = getAgentTools(agentId);
   const logEntries: Record<string, unknown>[] = [];
 
-  // Fallback chain: Claude → OpenRouter (GLM/Qwen) → Gemini
-  if (isAnthropicAvailable()) {
+  // Provider-ordered fallback: respects PRIMARY_LLM_PROVIDER env var
+  // Default: OpenAI → Claude → OpenRouter → Gemini
+  const oaiModel = config.openAIModel ?? OPENAI_MODELS.GPT_4O;
+  const orModel = config.openRouterModel ?? OPENROUTER_MODELS.FULL_AGENT;
+  const gemModel = config.geminiModel ?? GEMINI_MODEL;
+
+  type RunFn = () => Promise<AgentResult>;
+  const providers: { name: string; available: () => boolean; run: RunFn }[] = [
+    { name: 'openai',     available: isOpenAIAvailable,     run: () => runWithOpenAI(systemPrompt, tools, task, agentId, watchdog, logEntries, oaiModel) },
+    { name: 'anthropic',  available: isAnthropicAvailable,  run: () => runWithClaude(systemPrompt, tools, task, agentId, watchdog, logEntries, claudeModel) },
+    { name: 'openrouter', available: isOpenRouterAvailable, run: () => runWithOpenRouter(systemPrompt, tools, task, agentId, watchdog, logEntries, orModel) },
+    { name: 'gemini',     available: () => true,            run: () => runWithGemini(systemPrompt, tools, task, agentId, watchdog, logEntries, gemModel) },
+  ];
+
+  // Sort by preferred provider order
+  const preferred = getPreferredProvider();
+  const sorted = [
+    providers.find(p => p.name === preferred)!,
+    ...providers.filter(p => p.name !== preferred),
+  ];
+
+  let lastError: unknown;
+  for (const p of sorted) {
+    if (!p.available()) continue;
     try {
-      return await runWithClaude(systemPrompt, tools, task, agentId, watchdog, logEntries, claudeModel);
-    } catch (claudeError) {
-      log.warn('Claude failed, trying OpenRouter', { taskId: task.id });
+      return await p.run();
+    } catch (err) {
+      log.warn(`${p.name} failed, trying next provider`, { taskId: task.id });
+      lastError = err;
     }
   }
-
-  if (isOpenRouterAvailable()) {
-    try {
-      const orModel = config.openRouterModel ?? OPENROUTER_MODELS.FULL_AGENT;
-      return await runWithOpenRouter(systemPrompt, tools, task, agentId, watchdog, logEntries, orModel);
-    } catch (openRouterError) {
-      log.warn('OpenRouter failed, trying Gemini', { taskId: task.id });
-    }
-  }
-
-  try {
-    return await runWithGemini(systemPrompt, tools, task, agentId, watchdog, logEntries, config.geminiModel ?? GEMINI_MODEL);
-  } catch (geminiError) {
-    log.error('All providers failed', { taskId: task.id }, geminiError);
-    throw geminiError;
-  }
+  throw lastError ?? new Error('All LLM providers failed');
 }
 
 /**
  * Full agent execution — Sonnet model, full turn budget.
  * This is the default execution mode for complex tasks.
+ * All agents use GPT-5.4 when falling back to OpenAI.
  */
 export async function executeAgent(input: AgentInput): Promise<AgentResult> {
   return runAgentLoop(input, {
     claudeModel: CLAUDE_MODEL_SONNET,
     maxTurns: input.task.max_turns,
+    openAIModel: OPENAI_MODELS.GPT_5_4,
   });
 }
 
@@ -1296,7 +1342,16 @@ async function runWithClaude(
   log_entries: Record<string, unknown>[],
   modelId: string = CLAUDE_MODEL_SONNET,
 ): Promise<AgentResult> {
-  const anthropic = new Anthropic();
+  let anthropic: Anthropic;
+  if (isBedrockAvailable() && !isDirectAnthropicAvailable()) {
+    const AnthropicBedrock = require('@anthropic-ai/bedrock-sdk').default;
+    const region = process.env.AWS_BEDROCK_REGION || process.env.AWS_REGION || 'us-east-1';
+    anthropic = new AnthropicBedrock({ awsRegion: region }) as unknown as Anthropic;
+    if (modelId === CLAUDE_MODEL_SONNET) modelId = process.env.AWS_BEDROCK_MODEL_ID || 'us.anthropic.claude-sonnet-4-20250514-v1:0';
+    if (modelId === CLAUDE_MODEL_HAIKU) modelId = process.env.AWS_BEDROCK_HAIKU_MODEL_ID || 'us.anthropic.claude-haiku-4-5-20251001-v1:0';
+  } else {
+    anthropic = new Anthropic();
+  }
   const messages: Anthropic.MessageParam[] = [
     { role: 'user', content: `Execute the task described in your briefing. Begin.` },
   ];
@@ -1397,6 +1452,198 @@ async function runWithClaude(
   return { turnCount, log: log_entries };
 }
 
+// ── OpenAI execution (Codex OAuth or OPENAI_API_KEY) ──
+
+async function runWithOpenAI(
+  systemPrompt: string,
+  tools: ReturnType<typeof getAgentTools>,
+  task: Task,
+  agentId: number,
+  watchdog: Watchdog,
+  log_entries: Record<string, unknown>[],
+  modelId: string = OPENAI_MODELS.GPT_4O,
+): Promise<AgentResult> {
+  const apiKey = getOpenAIApiKey();
+  if (!apiKey) throw new Error('No OpenAI API key available');
+
+  // Codex OAuth JWTs cannot hit api.openai.com — they go through chatgpt.com/backend-api.
+  // Branch to the pi-ai-based Codex tool loop. Detect 3-part JWT starting with `eyJ`.
+  const isCodexJwt = apiKey.startsWith('eyJ') && apiKey.split('.').length === 3;
+  if (isCodexJwt) {
+    return runWithCodex(systemPrompt, tools, task, agentId, watchdog, log_entries, apiKey);
+  }
+
+  const OpenAI = (await import('openai')).default;
+  const client = new OpenAI({
+    apiKey,
+    baseURL: process.env.OPENAI_BASE_URL || undefined,
+  });
+
+  const openaiTools = tools.map((t) => ({
+    type: 'function' as const,
+    function: {
+      name: t.name,
+      description: t.description,
+      parameters: t.input_schema,
+    },
+  }));
+
+  const messages: Array<{ role: 'system' | 'user' | 'assistant' | 'tool'; content: string; tool_call_id?: string }> = [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: 'Execute the task described in your briefing. Begin.' },
+  ];
+
+  let turnCount = 0;
+
+  while (true) {
+    const healthVerdict = watchdog.checkHealth();
+    if (healthVerdict === 'kill') {
+      pushLog(log_entries, { turn: turnCount + 1, event: 'watchdog_health_kill', reason: 'idle/stuck detected' });
+      break;
+    }
+
+    const response = await client.chat.completions.create({
+      model: modelId,
+      messages: messages as Parameters<typeof client.chat.completions.create>[0]['messages'],
+      tools: openaiTools,
+      max_tokens: 4096,
+    });
+
+    turnCount++;
+
+    const verdict = watchdog.recordTurn(null);
+    if (verdict === 'kill') {
+      pushLog(log_entries, { turn: turnCount, event: 'watchdog_kill', reason: 'turn/time limit' });
+      break;
+    }
+
+    const choice = response.choices[0];
+    if (!choice) break;
+
+    const assistantMessage = choice.message;
+    const toolCalls = assistantMessage.tool_calls;
+
+    messages.push(assistantMessage as any);
+
+    if (!toolCalls || toolCalls.length === 0) {
+      pushLog(log_entries, { turn: turnCount, event: 'completed', summary: (assistantMessage.content ?? '').substring(0, 500) });
+      break;
+    }
+
+    let loopKill = false;
+    for (const tc of toolCalls) {
+      if (!('function' in tc)) continue; // skip non-standard tool call types
+      const fnName = tc.function.name;
+      const loopVerdict = watchdog.recordToolCall(fnName);
+      if (loopVerdict === 'kill') {
+        pushLog(log_entries, { turn: turnCount, event: 'loop_kill', tool: fnName, reason: 'Repeated tool-call loop detected' });
+        loopKill = true;
+        break;
+      }
+
+      let args: Record<string, unknown> = {};
+      try { args = JSON.parse(tc.function.arguments || '{}'); } catch { args = {}; }
+
+      const toolResult = await handleToolCall(fnName, args, task, agentId);
+      pushLog(log_entries, { turn: turnCount, tool: fnName, input: args, result: toolResult });
+
+      messages.push({ role: 'tool', content: toolResult, tool_call_id: tc.id });
+    }
+
+    if (loopKill) break;
+  }
+
+  return { turnCount, log: log_entries };
+}
+
+// ── Codex execution (via pi-ai → chatgpt.com/backend-api) ──
+//
+// Used when getOpenAIApiKey() returns a Codex OAuth JWT. The OpenAI SDK can't
+// talk to ChatGPT's backend, so we use pi-ai's Codex Responses provider. Same
+// agent loop semantics as runWithClaude/runWithOpenAI: turn budget, watchdog,
+// per-tool loop detection, multi-turn with tool results.
+
+async function runWithCodex(
+  systemPrompt: string,
+  tools: ReturnType<typeof getAgentTools>,
+  task: Task,
+  agentId: number,
+  watchdog: Watchdog,
+  log_entries: Record<string, unknown>[],
+  apiKey: string,
+): Promise<AgentResult> {
+  const { runCodexAgentTurn } = await import('@/lib/llm-provider');
+
+  const codexTools = tools.map((t) => ({
+    name: t.name,
+    description: t.description,
+    input_schema: t.input_schema as Record<string, unknown>,
+  }));
+
+  const messages: Array<{ role: 'user' | 'assistant' | 'tool'; content: string; tool_call_id?: string; tool_name?: string; raw?: unknown }> = [
+    { role: 'user', content: 'Execute the task described in your briefing. Begin.' },
+  ];
+
+  let turnCount = 0;
+  while (true) {
+    const healthVerdict = watchdog.checkHealth();
+    if (healthVerdict === 'kill') {
+      pushLog(log_entries, { turn: turnCount + 1, event: 'watchdog_health_kill', reason: 'idle/stuck detected' });
+      break;
+    }
+
+    const turn = await runCodexAgentTurn({
+      apiKey,
+      systemPrompt,
+      messages,
+      tools: codexTools,
+      maxTokens: 4096,
+      reasoning: 'medium',
+    });
+
+    turnCount++;
+
+    const turnVerdict = watchdog.recordTurn(null);
+    if (turnVerdict === 'kill') {
+      pushLog(log_entries, { turn: turnCount, event: 'watchdog_kill', reason: 'turn/time limit' });
+      break;
+    }
+
+    // CRITICAL: push the raw pi-ai AssistantMessage (which embeds toolCalls with
+    // their call_ids) back into history. Otherwise next turn's tool-result
+    // messages can't be paired with the originating call → 400 error.
+    if (turn.rawAssistantMessage) {
+      messages.push({ role: 'assistant', content: turn.text, raw: turn.rawAssistantMessage });
+    } else if (turn.text) {
+      messages.push({ role: 'assistant', content: turn.text });
+    }
+
+    if (turn.toolCalls.length === 0) {
+      pushLog(log_entries, { turn: turnCount, event: 'completed', summary: turn.text.substring(0, 500) });
+      break;
+    }
+
+    let loopKill = false;
+    for (const tc of turn.toolCalls) {
+      const loopVerdict = watchdog.recordToolCall(tc.name);
+      if (loopVerdict === 'kill') {
+        pushLog(log_entries, { turn: turnCount, event: 'loop_kill', tool: tc.name, reason: 'Repeated tool-call loop detected' });
+        loopKill = true;
+        break;
+      }
+
+      const toolResult = await handleToolCall(tc.name, tc.arguments, task, agentId);
+      pushLog(log_entries, { turn: turnCount, tool: tc.name, input: tc.arguments, result: toolResult });
+
+      messages.push({ role: 'tool', content: toolResult, tool_call_id: tc.id, tool_name: tc.name });
+    }
+
+    if (loopKill) break;
+  }
+
+  return { turnCount, log: log_entries };
+}
+
 // ── Gemini execution ──
 
 async function runWithGemini(
@@ -1417,7 +1664,6 @@ async function runWithGemini(
   const model = genAI.getGenerativeModel({
     model: modelId,
     systemInstruction: systemPrompt,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     tools: [{ functionDeclarations: tools.map((t) => ({
       name: t.name,
       description: t.description,
@@ -1503,7 +1749,6 @@ async function runWithGemini(
 
     // H-AGENT-009/010: Send proper function response parts (not JSON string)
     // Gemini SDK expects an array of FunctionResponsePart objects
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     currentMessage = functionResponses as any;
   }
 
@@ -1589,7 +1834,6 @@ async function runWithOpenRouter(
     const toolCalls = assistantMessage.tool_calls;
 
     // Add assistant message to conversation
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     messages.push(assistantMessage as any);
 
     if (!toolCalls || toolCalls.length === 0) {

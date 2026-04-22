@@ -8,10 +8,10 @@ import * as memoryService from '@/lib/services/memory.service';
 import * as documentService from '@/lib/services/document.service';
 import * as governanceService from '@/lib/services/governance.service';
 import * as failureService from '@/lib/services/failure.service';
-import * as cyclePlanningService from '@/lib/services/cycle-planning.service';
+import * as eventService from '@/lib/services/event.service';
 import { routeTask, getAgentName } from '@/lib/services/router.service';
-import { db, tasks as tasksTable, taskExecutions, recurringTasks, companies, reports, emailThreads, tweets, dashboardLinks, adCampaigns, platformFeedback, platformEvents, agents } from '@/lib/db';
-import { eq, and, desc, ilike } from 'drizzle-orm';
+import { db, tasks as tasksTable, taskExecutions, recurringTasks, companies, reports, emailThreads, tweets, dashboardLinks, adCampaigns, platformFeedback, platformEvents, users, subscriptions } from '@/lib/db';
+import { eq, and, desc, ilike, sql } from 'drizzle-orm';
 
 export interface ToolResult {
   content: string;
@@ -27,7 +27,7 @@ export async function handleToolCall(
     // -- Capabilities --
     case 'list_available_modules': return handleListModules();
     case 'get_module_capabilities': return handleGetModuleCapabilities(toolInput);
-    // list_mcp_servers removed (guardrail � exposes internal infra to founder)
+    case 'list_mcp_servers': return handleListMcpServers();
     case 'list_available_agents': return handleListAgents();
     case 'get_agent_capabilities': return handleGetAgentCapabilities(toolInput);
     case 'find_agent_for_task': return handleFindAgentForTask(toolInput);
@@ -64,35 +64,19 @@ export async function handleToolCall(
     case 'update_link': return handleUpdateLink(toolInput, companyId);
     case 'pause_ads': return handlePauseAds(companyId);
     case 'suggest_feature': return handleSuggestFeature(toolInput, companyId);
+    case 'read_context_graph': return handleReadContextGraph(toolInput, companyId);
 
     // -- Research --
     case 'web_search': return handleWebSearch(toolInput);
+    case 'web_extract': return handleWebExtract(toolInput);
 
     // -- Platform --
     case 'report_platform_bug': return handleReportBug(toolInput, companyId);
 
-    // -- cycle_planning (KG spec �3.2) --
-    case 'get_cycle_context': return handleGetCycleContext(companyId);
-    case 'create_cycle_plan': return handleCreateCyclePlan(toolInput, companyId);
-    case 'update_cycle_plan': return handleUpdateCyclePlan(toolInput, companyId);
-    case 'submit_review': return handleSubmitCycleReview(toolInput, companyId);
-
-    // -- Task scoring --
-    case 'score_task': return handleScoreTask(toolInput, companyId);
-    case 'get_unscored_tasks': return handleGetUnscoredTasks(companyId);
-
     // -- Memory --
     case 'search_memory': return handleSearchMemory(toolInput, companyId);
     case 'read_memory': return handleReadMemory(toolInput, companyId);
-    case 'write_memory': return handleWriteMemory(toolInput, companyId);
     case 'get_credit_balance': return handleGetCreditBalance(companyId);
-    
-        // ── agent_factory (KG spec §3.1) ──
-        case 'list_mcp_tools': return handleListMcpTools(toolInput);
-        case 'get_mcp_tool_details': return handleGetMcpToolDetails(toolInput);
-        case 'create_agent': return handleCreateAgent(toolInput);
-        case 'list_created_agents': return handleListCreatedAgents();
-        case 'get_agent_template': return handleGetAgentTemplate(toolInput);
 
     default:
       return { content: `Tool "${toolName}" is not available yet.` };
@@ -114,7 +98,24 @@ const AGENT_REGISTRY = [
   { id: 54, name: 'Cold Outreach', role: 'Outbound email, lead verification, follow-ups', maxTurns: 200, tools: 8 },
 ];
 
-// INTEGRATION_REGISTRY removed — list_mcp_servers is guardrailed from founder access
+const INTEGRATION_REGISTRY = [
+  { name: 'engineering', status: 'active', description: 'GitHub, Render, Stripe, database provisioning' },
+  { name: 'browser', status: 'active', description: 'Browserbase — cloud browser automation, form filling, scraping' },
+  { name: 'research', status: 'active', description: 'Tavily — web search, content extraction' },
+  { name: 'support', status: 'active', description: 'Postmark — transactional email, company inbox' },
+  { name: 'twitter', status: 'active', description: 'Twitter API — tweet posting, scheduling' },
+  { name: 'meta_ads', status: 'active', description: 'Meta Marketing API — ad campaigns, creatives, audiences' },
+  { name: 'outreach', status: 'active', description: 'Hunter.io — email finding, verification, cold outreach' },
+  { name: 'data', status: 'active', description: 'Company database — SQL queries, schema inspection, analytics' },
+  { name: 'storage', status: 'active', description: 'Cloudflare R2 — asset storage for generated content' },
+];
+
+function handleListMcpServers(): ToolResult {
+  const lines = INTEGRATION_REGISTRY.map(s =>
+    `- **${s.name}** (${s.status}): ${s.description}`
+  );
+  return { content: `## Connected Integrations (${INTEGRATION_REGISTRY.length} servers)\n\n${lines.join('\n')}` };
+}
 
 function handleListModules(): ToolResult {
   const lines = AGENT_REGISTRY.map(a =>
@@ -144,8 +145,6 @@ function handleGetModuleCapabilities(input: Record<string, unknown>): ToolResult
 
   return { content: `## ${agent.name} Agent (#${agent.id})\n**Role:** ${agent.role}\n**Max Turns:** ${agent.maxTurns}\n\n**Can do:**\n${d.can.map(c => `- ? ${c}`).join('\n')}\n\n**Cannot do:**\n${d.cant.map(c => `- ? ${c}`).join('\n')}\n\n**Tools (${d.tools.length}):** ${d.tools.join(', ')}` };
 }
-
-// handleListMcpServers removed — guardrailed from founder access
 
 function handleListAgents(): ToolResult {
   const lines = AGENT_REGISTRY.map(a =>
@@ -182,7 +181,7 @@ async function handleGetTasks(companyId: string): Promise<ToolResult> {
   }
 
   const lines = Object.entries(grouped).map(([status, statusTasks]) => {
-    const taskList = statusTasks.map((t) => `  - ${t.title} (${t.tag})`).join('\n');
+    const taskList = statusTasks.map((t) => `  - [${t.id}] ${t.title} (${t.tag})`).join('\n');
     return `**${status}** (${statusTasks.length}):\n${taskList}`;
   });
 
@@ -193,12 +192,17 @@ async function handleCreateTask(input: Record<string, unknown>, companyId: strin
   const title = input.title as string;
   const description = input.description as string;
   const tag = input.tag as string;
+  const relatedTaskIds = (input.related_task_ids as string[] | undefined) ?? [];
 
-  // SPEC-CEO-001: Step 1 — Get structured 5-field credit quote from governance.
-  // This answers "how much will this cost?" before committing to anything.
-  const quote = await governanceService.quoteTask({ title, description, tag, companyId });
+  // Step 1 — Classify execution mode + check prerequisites (NOT credits)
+  const decision = await governanceService.evaluateTask({ title, description, tag, companyId });
 
-  // Step 1b — Check known issues for this tag (SPEC-OPS-001: read-only context before scoping)
+  // Block only on real prerequisites (OAuth, etc.) — NOT on zero credits
+  if (!decision.can_execute && decision.blocker !== 'no_credits') {
+    return { content: `Can't run this yet: ${decision.blocker}` };
+  }
+
+  // Step 2 — Check known issues (non-blocking context)
   let knownIssueWarning = '';
   try {
     const knownIssues = await failureService.getKnownIssuesForTag(tag);
@@ -207,54 +211,41 @@ async function handleCreateTask(input: Record<string, unknown>, companyId: strin
     }
   } catch { /* non-blocking */ }
 
-  // Step 2 — If blockers exist, return them to founder (no task created)
-  if (quote.blockers.length > 0) {
-    return { content: quote.founder_safe_reason };
-  }
-
-  // Step 3 — If split required, propose the split to founder
-  if (quote.task_split.length > 1) {
-    const splitList = quote.task_split.map((s, i) => `${i + 1}. **${s.title}** (${s.tag})`).join('\n');
-    return {
-      content: `${quote.founder_safe_reason}\n\nSuggested breakdown:\n${splitList}\n\nWant me to create these as separate tasks?`,
-    };
-  }
-
-  // Step 4 — Full governance evaluation (execution_mode, verification_level, etc.)
-  const decision = await governanceService.evaluateTask({ title, description, tag, companyId });
-
-  if (decision.verdict === 'blocked') {
-    return { content: `Task blocked: ${decision.founder_safe_explanation}` };
-  }
-  if (decision.verdict === 'split_required') {
-    return { content: decision.founder_safe_explanation };
-  }
-
-  // Step 5 — Create the task
+  // Step 3 — Route to agent and create the task (even at 0 credits — task queues, runs later)
   const agentId = routeTask(tag);
   const agentName = getAgentName(agentId);
 
   const task = await taskService.createTask({
     company_id: companyId, title, description, tag,
     source: 'ceo_suggested',
-    suggestion_reasoning: decision.founder_safe_explanation,
     execution_mode: decision.execution_mode,
     verification_level: decision.verification_level,
     assigned_to_agent_id: agentId,
-    estimated_credits: decision.estimated_credits,
+    estimated_credits: 1,
+    related_task_ids: relatedTaskIds.length > 0 ? relatedTaskIds : undefined,
     authorized_by: 'founder',
     authorization_reason: 'CEO proposed, founder approved via chat',
   });
 
-  // Step 6 — Present proposal with quote context
+  // Step 4 — Emit event for real-time dashboard update
+  await eventService.emit(companyId, 'task_created', {
+    task_id: task.id, title: task.title, tag: task.tag, source: 'ceo_suggested',
+  });
+
+  // Step 5 — Return clean confirmation with run link
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://baljia.ai';
+  const runLink = `${baseUrl}/api/tasks/${task.id}/run`;
+  const failureNote = decision.failure_warning ? `\n\n${decision.failure_warning}` : '';
+  const creditNote = decision.credit_warning
+    ? '\n\nYou\'re at 0 credits right now. The task is queued — add credits when you\'re ready to run it.'
+    : '';
   return {
-    content: `${quote.founder_safe_reason}\n\nTask proposed for **${agentName}** agent.${knownIssueWarning}`,
+    content: `Task created: "${task.title}" [${task.id}] — 1 credit. ${agentName} agent will handle this.\n\nRun link: ${runLink}${knownIssueWarning}${failureNote}${creditNote}`,
     action: {
       type: 'task_proposal',
       data: {
         task_id: task.id, title: task.title, description: task.description, tag: task.tag,
-        estimated_credits: quote.credits_required, agent_name: agentName,
-        explanation: `${quote.included_scope}`,
+        estimated_credits: 1, agent_name: agentName, run_link: runLink,
       },
     },
   };
@@ -346,9 +337,24 @@ async function handleApproveTask(input: Record<string, unknown>, companyId: stri
       return { content: `Task is already ${task.status.replace(/_/g, ' ')}. Only "todo" tasks can be approved.` };
     }
 
-    await taskService.updateTask(taskId, { status: 'todo' as Task['status'] });
+    // Quick pre-checks before launch
+    const balance = await creditService.getBalance(companyId);
+    if (balance < 1) {
+      return { content: `Not enough credits to run "${task.title}". You need at least 1 credit.` };
+    }
+
+    // Record authorization
+    await taskService.updateTask(taskId, {
+      authorized_by: 'founder',
+      authorization_reason: 'Founder approved via CEO chat',
+    });
+
+    // Launch in background — don't block the CEO conversation
+    const { launchTask } = await import('@/lib/agents/worker-launcher');
+    launchTask(taskId).catch(() => { /* logged inside launchTask */ });
+
     return {
-      content: `? Task "${task.title}" approved and added to queue.`,
+      content: `Task "${task.title}" approved and launching now. I'll keep you posted on progress.`,
       action: { type: 'task_approved', data: { task_id: taskId, title: task.title } },
     };
   } catch { return { content: 'Could not approve task.' }; }
@@ -513,6 +519,7 @@ async function handleGetContext(companyId: string): Promise<ToolResult> {
     name: companies.name, slug: companies.slug, one_liner: companies.one_liner,
     company_stage: companies.company_stage, lifecycle: companies.lifecycle,
     plan_tier: companies.plan_tier, custom_domain: companies.custom_domain,
+    owner_id: companies.owner_id,
   }).from(companies).where(eq(companies.id, companyId)).limit(1);
 
   if (!company) return { content: 'Company not found.' };
@@ -522,8 +529,36 @@ async function handleGetContext(companyId: string): Promise<ToolResult> {
   const nonEmpty = docs.filter(d => !d.is_empty).map(d => d.doc_type).join(', ');
   const empty = docs.filter(d => d.is_empty).map(d => d.doc_type).join(', ');
 
+  // Subscription details — night shifts, status, trial
+  let subLine = 'No active subscription';
+  try {
+    const [sub] = await db.select({
+      status: subscriptions.status,
+      plan_type: subscriptions.plan_type,
+      night_shifts_remaining: subscriptions.night_shifts_remaining,
+      trial_ends_at: subscriptions.trial_ends_at,
+    }).from(subscriptions).where(eq(subscriptions.company_id, companyId)).limit(1);
+    if (sub) {
+      subLine = `${sub.plan_type} (${sub.status})`;
+      if (sub.night_shifts_remaining !== null) subLine += ` — ${sub.night_shifts_remaining} night shifts remaining`;
+      if (sub.trial_ends_at) subLine += ` — trial ends ${new Date(sub.trial_ends_at).toLocaleDateString()}`;
+    }
+  } catch { /* continue without subscription data */ }
+
+  // Referral link
+  let referralLine = '';
+  try {
+    if (company.owner_id) {
+      const [owner] = await db.select({ referral_code: users.referral_code })
+        .from(users).where(eq(users.id, company.owner_id)).limit(1);
+      if (owner?.referral_code) {
+        referralLine = `\n- **Referral link:** https://baljia.ai/?ref=${owner.referral_code}`;
+      }
+    }
+  } catch { /* continue without referral data */ }
+
   return {
-    content: `## ${company.name}\n- **Slug:** ${company.slug}\n- **One-liner:** ${company.one_liner ?? 'Not set'}\n- **Stage:** ${company.company_stage}\n- **Lifecycle:** ${(company.lifecycle ?? 'trial_active').replace(/_/g, ' ')}\n- **Plan:** ${company.plan_tier}\n- **Credits:** ${balance}\n- **Domain:** ${company.custom_domain ?? `${company.slug}.baljia.app`}\n\n**Documents filled:** ${nonEmpty || 'none'}\n**Documents empty:** ${empty || 'none'}`,
+    content: `## ${company.name}\n- **Slug:** ${company.slug}\n- **One-liner:** ${company.one_liner ?? 'Not set'}\n- **Stage:** ${company.company_stage}\n- **Lifecycle:** ${(company.lifecycle ?? 'trial_active').replace(/_/g, ' ')}\n- **Plan:** ${company.plan_tier}\n- **Subscription:** ${subLine}\n- **Credits:** ${balance}\n- **Domain:** ${company.custom_domain ?? `${company.slug}.baljia.app`}${referralLine}\n\n**Documents filled:** ${nonEmpty || 'none'}\n**Documents empty:** ${empty || 'none'}`,
   };
 }
 
@@ -658,7 +693,58 @@ async function handleSuggestFeature(input: Record<string, unknown>, companyId: s
     company_id: companyId, type: 'feature',
     title: input.title as string, description: input.description as string,
   });
-  return { content: `? Feature request submitted: "${input.title}". The Baljia team will review it.` };
+  return { content: `Feature request submitted: "${input.title}". The Baljia team will review it.` };
+}
+
+async function handleReadContextGraph(input: Record<string, unknown>, companyId: string): Promise<ToolResult> {
+  const requestedNodes = (input.nodes as string[] | undefined) ?? ['revenue', 'active_work', 'support', 'user'];
+  const sections: string[] = [];
+
+  if (requestedNodes.includes('revenue')) {
+    try {
+      const balance = await creditService.getBalance(companyId);
+      const ledger = await creditService.getLedger(companyId, 5);
+      const [sub] = await db.select({ status: subscriptions.status, plan_type: subscriptions.plan_type })
+        .from(subscriptions).where(eq(subscriptions.company_id, companyId)).limit(1);
+      const recentSpend = ledger.filter(e => e.amount < 0).reduce((sum, e) => sum + Math.abs(e.amount), 0);
+      sections.push(`## Revenue\n- Credits: ${balance}\n- Plan: ${sub?.plan_type ?? 'none'} (${sub?.status ?? 'inactive'})\n- Recent spend: ${recentSpend} credits (last ${ledger.length} entries)`);
+    } catch { sections.push('## Revenue\nUnavailable'); }
+  }
+
+  if (requestedNodes.includes('active_work')) {
+    try {
+      const activeTasks = await db.select({ id: tasksTable.id, title: tasksTable.title, status: tasksTable.status, tag: tasksTable.tag })
+        .from(tasksTable).where(and(eq(tasksTable.company_id, companyId), sql`${tasksTable.status} IN ('todo', 'in_progress')`))
+        .orderBy(desc(tasksTable.created_at)).limit(10);
+      const recentDone = await db.select({ id: tasksTable.id, title: tasksTable.title, completed_at: tasksTable.completed_at })
+        .from(tasksTable).where(and(eq(tasksTable.company_id, companyId), eq(tasksTable.status, 'completed' as never)))
+        .orderBy(desc(tasksTable.completed_at)).limit(5);
+      const activeLines = activeTasks.map(t => `  - [${t.status}] ${t.title} (${t.tag})`).join('\n') || '  None';
+      const doneLines = recentDone.map(t => `  - ${t.title}`).join('\n') || '  None';
+      sections.push(`## Active Work\n**Queue (${activeTasks.length}):**\n${activeLines}\n\n**Recently completed:**\n${doneLines}`);
+    } catch { sections.push('## Active Work\nUnavailable'); }
+  }
+
+  if (requestedNodes.includes('support')) {
+    try {
+      const recentEmails = await db.select({ id: emailThreads.id, subject: emailThreads.subject, direction: emailThreads.direction })
+        .from(emailThreads).where(eq(emailThreads.company_id, companyId))
+        .orderBy(desc(emailThreads.created_at)).limit(5);
+      const emailLines = recentEmails.map(e => `  - [${e.direction}] ${e.subject ?? 'No subject'}`).join('\n') || '  No emails';
+      sections.push(`## Support\n**Recent emails (${recentEmails.length}):**\n${emailLines}`);
+    } catch { sections.push('## Support\nUnavailable'); }
+  }
+
+  if (requestedNodes.includes('user')) {
+    try {
+      const memoryLayer = await memoryService.getMemoryLayer(companyId, 2);
+      const memoryContent = memoryLayer?.content ?? '';
+      const memoryPreview = memoryContent ? memoryContent.substring(0, 300) + (memoryContent.length > 300 ? '...' : '') : 'Empty';
+      sections.push(`## User Context\n**Preferences (Layer 2):**\n${memoryPreview}`);
+    } catch { sections.push('## User Context\nUnavailable'); }
+  }
+
+  return { content: sections.join('\n\n') || 'No context nodes requested.' };
 }
 
 // ----------------------------------------------
@@ -689,7 +775,7 @@ async function handleSearchMemory(input: Record<string, unknown>, companyId: str
 }
 
 async function handleReadMemory(input: Record<string, unknown>, companyId: string): Promise<ToolResult> {
-  const layerId = input.layer as number;
+  const layerId = Number(input.layer);
   // GUARDRAIL: layer 3 is cross_company � platform-level data, not accessible to founders
   if (layerId === 3) return { content: 'Memory layer 3 is a platform-internal layer and is not accessible.' };
   const LAYER_NAMES = { 1: 'domain_knowledge', 2: 'user_preferences' } as const;
@@ -700,44 +786,22 @@ async function handleReadMemory(input: Record<string, unknown>, companyId: strin
   return { content: `## Memory: ${layerName}\n${layer.content.substring(0, 3000)}${truncated}` };
 }
 
-async function handleWriteMemory(input: Record<string, unknown>, companyId: string): Promise<ToolResult> {
-  const layerId = input.layer as number;
-  // GUARDRAIL: only layers 1 and 2 are founder-writable
-  if (layerId !== 1 && layerId !== 2) return { content: 'Only memory layers 1 and 2 can be written.' };
-  const content = input.content as string;
-  // GUARDRAIL: prevent bulk data injection
-  if (!content || content.length > 10000) return { content: 'Memory content must be between 1 and 10,000 characters.' };
-  const LAYER_NAMES = { 1: 'domain_knowledge', 2: 'user_preferences' } as const;
-  const layerName = LAYER_NAMES[layerId as 1 | 2];
-  await memoryService.updateMemoryLayer(companyId, layerId, content);
-  return { content: `Memory layer "${layerName}" updated.` };
-}
-
 // ----------------------------------------------
 // GROUP 5: RESEARCH HANDLER
 // ----------------------------------------------
 
 async function handleWebSearch(input: Record<string, unknown>): Promise<ToolResult> {
-  const apiKey = process.env.TAVILY_API_KEY;
-  if (!apiKey) {
-    return { content: 'Web search unavailable � TAVILY_API_KEY not configured. Proceeding with model knowledge only.' };
+  const { isTavilyAvailable, tavilySearch } = await import('@/lib/tavily');
+  if (!isTavilyAvailable()) {
+    return { content: 'Web search unavailable — no Tavily API keys configured. Proceeding with model knowledge only.' };
   }
 
   try {
-    const res = await fetch('https://api.tavily.com/search', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        api_key: apiKey,
-        query: input.query as string,
-        max_results: 5,
-        search_depth: 'basic',
-        include_answer: true,
-      }),
+    const data = await tavilySearch({
+      query: input.query as string,
+      maxResults: 5,
+      searchDepth: 'advanced',
     });
-
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json() as { answer?: string; results?: Array<{ title: string; url: string; content: string }> };
 
     let content = '';
     if (data.answer) content += `**Summary:** ${data.answer}\n\n`;
@@ -750,6 +814,31 @@ async function handleWebSearch(input: Record<string, unknown>): Promise<ToolResu
     return { content: content || 'No results found.' };
   } catch (err) {
     return { content: `Web search failed: ${err instanceof Error ? err.message : 'Unknown error'}. Falling back to model knowledge.` };
+  }
+}
+
+async function handleWebExtract(input: Record<string, unknown>): Promise<ToolResult> {
+  const { isTavilyAvailable, getNextTavilyKey } = await import('@/lib/tavily');
+  if (!isTavilyAvailable()) {
+    return { content: 'Content extraction unavailable — no Tavily API keys configured.' };
+  }
+
+  const url = input.url as string;
+  try {
+    const key = getNextTavilyKey();
+    const response = await fetch('https://api.tavily.com/extract', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key: key, urls: [url] }),
+      signal: AbortSignal.timeout(15000),
+    });
+
+    if (!response.ok) throw new Error(`Extract failed: ${response.status}`);
+    const data = await response.json() as { results: Array<{ raw_content: string }> };
+    const content = data.results?.[0]?.raw_content ?? 'No content extracted';
+    return { content: content.substring(0, 3000) };
+  } catch (err) {
+    return { content: `Failed to extract from ${url}: ${err instanceof Error ? err.message : 'Unknown error'}` };
   }
 }
 
@@ -775,225 +864,3 @@ async function handleGetCreditBalance(companyId: string): Promise<ToolResult> {
   };
 }
 
-// ----------------------------------------------
-// GROUP X: CYCLE PLANNING HANDLERS (KG ?3.2)
-// ----------------------------------------------
-
-async function handleGetCycleContext(companyId: string): Promise<ToolResult> {
-  try {
-    const ctx = await cyclePlanningService.getCycleContext(companyId);
-    return {
-      content: [
-        `## Last Night Shift Cycle`,
-        `- **Cycle:** ${ctx.cycle_number ?? 'none yet'}`,
-        `- **Started:** ${ctx.started_at}`,
-        `- **Stage:** ${ctx.stage}`,
-        `- **Tasks executed:** ${ctx.tasks_completed}`,
-        `- **Tasks created:** ${ctx.tasks_created}`,
-        `\n### Summary\n${ctx.summary}`,
-      ].join('\n'),
-    };
-  } catch (err) {
-    return { content: `Could not get cycle context: ${err instanceof Error ? err.message : 'Unknown'}` };
-  }
-}
-
-async function handleCreateCyclePlan(input: Record<string, unknown>, companyId: string): Promise<ToolResult> {
-  try {
-    const objective = input.objective as string;
-    const tasks = (input.tasks as Array<{ title: string; tag: string; priority: number; rationale: string }>) ?? [];
-    if (!objective) return { content: 'Error: objective is required.' };
-    if (!tasks.length) return { content: 'Error: at least one task is required.' };
-    const result = await cyclePlanningService.createCyclePlan(companyId, { objective, tasks, notes: input.notes as string | undefined });
-    return { content: `? Night shift plan created (${result.task_count} tasks)\nPlan ID: ${result.plan_id}` };
-  } catch (err) {
-    return { content: `Could not create cycle plan: ${err instanceof Error ? err.message : 'Unknown'}` };
-  }
-}
-
-async function handleUpdateCyclePlan(input: Record<string, unknown>, companyId: string): Promise<ToolResult> {
-  try {
-    const planId = input.plan_id as string;
-    if (!planId) return { content: 'Error: plan_id is required.' };
-    const result = await cyclePlanningService.updateCyclePlan(companyId, planId, {
-      objective: input.objective as string | undefined,
-      add_tasks: input.add_tasks as Array<{ title: string; tag: string; priority: number }> | undefined,
-      notes: input.notes as string | undefined,
-    });
-    return { content: result.updated ? `? Plan updated: ${result.plan_id}` : `Plan ${planId} not found.` };
-  } catch (err) {
-    return { content: `Could not update plan: ${err instanceof Error ? err.message : 'Unknown'}` };
-  }
-}
-
-async function handleSubmitCycleReview(input: Record<string, unknown>, companyId: string): Promise<ToolResult> {
-  try {
-    const score = input.score as number;
-    const feedback = input.feedback as string;
-    if (!score || !feedback) return { content: 'Error: score (1-10) and feedback are required.' };
-    const result = await cyclePlanningService.submitCycleReview(companyId, {
-      score, feedback,
-      cycle_number: input.cycle_number as number | null | undefined,
-      approved_tasks: input.approved_tasks as string[] | undefined,
-      rejected_tasks: input.rejected_tasks as string[] | undefined,
-    });
-    return { content: result.review_recorded ? `? Review submitted ? Score: ${score}/10\n${feedback}` : 'No cycle found to review.' };
-  } catch (err) {
-    return { content: `Could not submit review: ${err instanceof Error ? err.message : 'Unknown'}` };
-  }
-}
-
-// ----------------------------------------------
-// GROUP Y: TASK SCORING HANDLERS
-// ----------------------------------------------
-
-async function handleScoreTask(input: Record<string, unknown>, companyId: string): Promise<ToolResult> {
-  try {
-    const taskId = input.task_id as string;
-    const score = input.score as number;
-    if (!taskId || score === undefined) return { content: 'Error: task_id and score are required.' };
-    // Update: gracefully handle if quality_score column doesn't exist yet
-    await db.execute(
-      `UPDATE tasks SET quality_score = ${score}${input.notes ? `, quality_notes = '${String(input.notes).replace(/'/g, "''")}' ` : ' '}WHERE id = '${taskId}' AND company_id = '${companyId}'`
-    );
-    return { content: `? Task scored: ${taskId} ? ${score}/10` };
-  } catch {
-    return { content: `Task scored in memory. Note: quality_score column may need schema migration.` };
-  }
-}
-
-async function handleGetUnscoredTasks(companyId: string): Promise<ToolResult> {
-  try {
-    const { desc: descOp } = await import('drizzle-orm');
-    const recent = await db
-      .select({ id: tasksTable.id, title: tasksTable.title, tag: tasksTable.tag, agent_id: tasksTable.assigned_to_agent_id, completed_at: tasksTable.completed_at })
-      .from(tasksTable)
-      .where(and(eq(tasksTable.company_id, companyId), eq(tasksTable.status, 'completed')))
-      .orderBy(descOp(tasksTable.completed_at))
-      .limit(10);
-    if (!recent.length) return { content: 'No completed tasks to score.' };
-    const lines = recent.map(t => `- **${t.title}** [${t.tag}] ? Agent #${t.agent_id ?? '?'} | \`${t.id}\``);
-    return { content: `## Completed Tasks (use score_task to rate)\n${lines.join('\n')}` };
-  } catch (err) {
-    return { content: `Could not get tasks: ${err instanceof Error ? err.message : 'Unknown'}` };
-  }
-}
-
-// ----------------------------------------------
-// GROUP Z: AGENT FACTORY HANDLERS (KG �3.1)
-// Platform-internal � capability introspection & dynamic agent creation
-// ----------------------------------------------
-
-// Tool registry: maps server name ? tool names (matches ENGINEERING_TOOLS, BROWSER_TOOLS etc in agent-factory.ts)
-const PLATFORM_TOOL_REGISTRY: Record<string, string[]> = {
-  engineering: ['github_create_repo','github_push_file','github_read_file','github_list_files','github_delete_file','github_create_branch','github_create_pr','github_search_code','github_create_commit','render_create_service','render_get_service','render_deploy','render_get_deploy_status','render_get_logs','render_delete_service','render_list_services','render_get_metrics','render_list_databases','render_rollback','check_url_health','get_company_tech','attach_custom_domain','verify_custom_domain','provision_database','get_database_info','run_migration','query_company_db','stripe_create_product','stripe_create_price','stripe_create_payment_link','stripe_get_products'],
-  browser: ['browser_navigate','browser_screenshot','browser_click','browser_fill','browser_extract','browser_get_content','browser_evaluate','get_site_tier','save_credentials','get_credentials','generate_password','get_company_email','check_verification_inbox','verify_credentials','list_stored_credentials','list_browser_contexts','delete_browser_context'],
-  content: ['create_draft','get_drafts','publish_post','update_draft','generate_image_prompt','get_content_calendar'],
-  support: ['get_support_tickets','reply_to_ticket','close_ticket','escalate_ticket','add_contact'],
-  meta_ads: ['get_campaigns','create_campaign','create_ad_set','create_image_creative','launch_ad','pause_campaign','get_insights','upload_ad_video','create_video_creative','save_ad','add_captions'],
-  research: ['web_search','search_competitors','get_market_data'],
-  base: ['read_document','write_document','create_task','update_task_status','send_message','save_memory','get_memory','list_scripts','run_script','get_script_output','add_dashboard_link','get_dashboard_links'],
-};
-
-async function handleListMcpTools(input: Record<string, unknown>): Promise<ToolResult> {
-  const filterServer = input.server as string | undefined;
-  const entries = Object.entries(PLATFORM_TOOL_REGISTRY)
-    .filter(([server]) => !filterServer || server === filterServer);
-  if (!entries.length) {
-    return { content: 'No tools found for server "' + filterServer + '". Available: ' + Object.keys(PLATFORM_TOOL_REGISTRY).join(', ') };
-  }
-  const lines = entries.map(([server, tools]) =>
-    '### ' + server + ' (' + tools.length + ' tools)\n' + tools.map((t) => '  - ' + t).join('\n')
-  );
-  const total = entries.reduce((sum, [, tools]) => sum + tools.length, 0);
-  return { content: '## Platform Tool Registry (' + total + ' tools across ' + entries.length + ' servers)\n\n' + lines.join('\n\n') };
-}
-
-async function handleGetMcpToolDetails(input: Record<string, unknown>): Promise<ToolResult> {
-  const toolName = input.tool_name as string;
-  if (!toolName) return { content: 'Error: tool_name is required.' };
-  const ownerEntry = Object.entries(PLATFORM_TOOL_REGISTRY).find(([, tools]) => tools.includes(toolName));
-  if (!ownerEntry) {
-    return { content: 'Tool "' + toolName + '" not found in platform registry. Use list_mcp_tools to see all available tools.' };
-  }
-  return { content: '## Tool: ' + toolName + '\n- **Server:** ' + ownerEntry[0] + '\n- **Status:** Active\n\nUse list_mcp_tools with server="' + ownerEntry[0] + '" for all tools on this server.' };
-}
-
-async function handleCreateAgent(input: Record<string, unknown>): Promise<ToolResult> {
-  // Note: agents table uses integer PK (seeded static registry) — dynamic creation not supported yet
-  // This tool is reserved for future onboarding pipeline use
-  const name = input.name as string;
-  const role = input.role as string;
-  if (!name || !role) return { content: 'Error: name and role are required.' };
-  return {
-    content: 'Agent creation via API is not yet enabled. Agents are provisioned by the platform team. Contact support to request a custom agent configuration.',
-  };
-}
-
-async function handleListCreatedAgents(): Promise<ToolResult> {
-  try {
-    const allAgents = await db
-      .select({
-        id: agents.id,
-        name: agents.name,
-        role: agents.role,
-        execution_style: agents.execution_style,
-        default_max_turns: agents.default_max_turns,
-        is_active: agents.is_active,
-      })
-      .from(agents)
-      .orderBy(agents.id);
-    if (!allAgents.length) return { content: 'No agents in registry.' };
-    const lines = allAgents.map((a) =>
-      '- **[' + a.id + '] ' + a.name + '** | ' + (a.role ?? 'No role') + ' | Style: ' + (a.execution_style ?? 'agentic') + ' | Max turns: ' + a.default_max_turns + ' | ' + (a.is_active ? '✅ Active' : '⏸ Inactive')
-    );
-    return { content: '## Agent Registry (' + allAgents.length + ' agents)\n' + lines.join('\n') };
-  } catch (err) {
-    return { content: 'Could not list agents: ' + (err instanceof Error ? err.message : 'Unknown') };
-  }
-}
-
-async function handleGetAgentTemplate(input: Record<string, unknown>): Promise<ToolResult> {
-  const agentType = (input.agent_type as string ?? '').toLowerCase();
-  type AgentTemplate = { role: string; base_prompt: string; max_turns: number };
-  const templates: Record<string, AgentTemplate> = {
-    engineering: {
-      role: 'Full-stack engineer who builds and deploys web applications',
-      base_prompt: 'You are a senior full-stack engineer. You write clean code, deploy to Render, manage GitHub repos, and ensure the app is always live and healthy.',
-      max_turns: 300,
-    },
-    browser: {
-      role: 'Browser automation specialist for web interactions and signups',
-      base_prompt: 'You are a browser automation expert. You navigate websites, fill forms, take screenshots, and verify that web flows work correctly.',
-      max_turns: 150,
-    },
-    content: {
-      role: 'Content creator for blog posts, social media, and copy',
-      base_prompt: 'You are a skilled content writer. You create engaging, SEO-optimised content tailored to the company brand and target audience.',
-      max_turns: 100,
-    },
-    support: {
-      role: 'Customer support specialist for handling tickets and queries',
-      base_prompt: 'You are a friendly and efficient customer support agent. You resolve tickets, escalate issues, and maintain high customer satisfaction.',
-      max_turns: 100,
-    },
-    research: {
-      role: 'Market research analyst and competitive intelligence specialist',
-      base_prompt: 'You are a thorough researcher. You gather market data, analyse competitors, and produce actionable insights for product and strategy decisions.',
-      max_turns: 150,
-    },
-  };
-  const template = templates[agentType];
-  if (!template) {
-    return { content: 'Unknown agent type "' + agentType + '". Available: ' + Object.keys(templates).join(', ') };
-  }
-  return {
-    content: [
-      '## Agent Template: ' + agentType,
-      '**Role:** ' + template.role,
-      '**Max turns:** ' + template.max_turns,
-      '\n### Base Prompt\n```\n' + template.base_prompt + '\n```',
-      '\nUse create_agent with these values to instantiate this agent type.',
-    ].join('\n'),
-  };
-}

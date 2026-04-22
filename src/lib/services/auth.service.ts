@@ -53,15 +53,26 @@ export async function createMagicLink(email: string): Promise<{ success: boolean
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000';
   const verifyUrl = `${baseUrl}/api/auth/verify?token=${encodeURIComponent(token)}`;
 
-  // Send via Postmark
-  await sendEmail({
-    to: normalizedEmail,
-    from: 'hello@baljia.app',
-    subject: 'Your Baljia login link',
-    textBody: `Click this link to sign in to Baljia:\n\n${verifyUrl}\n\nThis link expires in ${MAGIC_LINK_EXPIRY_MINUTES} minutes.\n\nIf you didn't request this, you can safely ignore this email.`,
-    tag: 'magic-link',
-    companyId: 'platform',
-  });
+  // In dev, log the magic link to console so login works without Postmark approval.
+  // Set BALJIA_FORCE_EMAIL=true to ALSO send via Postmark in dev (for testing the
+  // real delivery pipeline locally without flipping NODE_ENV).
+  const forceEmailInDev = process.env.BALJIA_FORCE_EMAIL === 'true';
+  if (process.env.NODE_ENV === 'development' && !forceEmailInDev) {
+    log.info(`\n✉️  Magic link for ${normalizedEmail}:\n${verifyUrl}\n`);
+  } else {
+    // Sender must be a Postmark-verified address on a verified domain.
+    // Platform sender = system@baljia.ai (the .ai apex — platform side).
+    // Override with BALJIA_AUTH_FROM_EMAIL if running under a different sender.
+    const fromAddress = process.env.BALJIA_AUTH_FROM_EMAIL || 'system@baljia.ai';
+    await sendEmail({
+      to: normalizedEmail,
+      from: fromAddress,
+      subject: 'Your Baljia login link',
+      textBody: `Click this link to sign in to Baljia:\n\n${verifyUrl}\n\nThis link expires in ${MAGIC_LINK_EXPIRY_MINUTES} minutes.\n\nIf you didn't request this, you can safely ignore this email.`,
+      tag: 'magic-link',
+      companyId: 'platform',
+    });
+  }
 
   log.info('Magic link sent', { email: normalizedEmail });
   return { success: true };
@@ -175,6 +186,66 @@ export async function findOrCreateGoogleUser(profile: GoogleProfile): Promise<{ 
     .returning({ id: users.id, email: users.email });
 
   log.info('Google login — new user created', { userId: newUser.id });
+  return { userId: newUser.id, email: newUser.email };
+}
+
+// ── OpenAI Codex OAuth ──────────────────────────
+
+interface CodexProfile {
+  accountId: string;
+  email: string;
+  name: string | null;
+  planType: string | null;
+}
+
+export async function findOrCreateCodexUser(profile: CodexProfile): Promise<{ userId: string; email: string }> {
+  // Try find by openai_codex_id first
+  const [byCodexId] = await db
+    .select({ id: users.id, email: users.email })
+    .from(users)
+    .where(eq(users.openai_codex_id, profile.accountId))
+    .limit(1);
+
+  if (byCodexId) {
+    log.info('Codex login — existing user by codex_id', { userId: byCodexId.id });
+    return { userId: byCodexId.id, email: byCodexId.email };
+  }
+
+  // Try find by email
+  const [byEmail] = await db
+    .select({ id: users.id, email: users.email })
+    .from(users)
+    .where(eq(users.email, profile.email.toLowerCase()))
+    .limit(1);
+
+  if (byEmail) {
+    // Link Codex account to existing user
+    await db
+      .update(users)
+      .set({
+        openai_codex_id: profile.accountId,
+        email_verified: true,
+        auth_provider: 'openai_codex',
+      })
+      .where(eq(users.id, byEmail.id));
+
+    log.info('Codex login — linked to existing user', { userId: byEmail.id });
+    return { userId: byEmail.id, email: byEmail.email };
+  }
+
+  // Create new user
+  const [newUser] = await db
+    .insert(users)
+    .values({
+      email: profile.email.toLowerCase(),
+      name: profile.name,
+      openai_codex_id: profile.accountId,
+      auth_provider: 'openai_codex',
+      email_verified: true,
+    })
+    .returning({ id: users.id, email: users.email });
+
+  log.info('Codex login — new user created', { userId: newUser.id });
   return { userId: newUser.id, email: newUser.email };
 }
 

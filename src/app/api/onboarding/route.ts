@@ -5,7 +5,7 @@ import { eq } from 'drizzle-orm';
 import * as companyService from '@/lib/services/company.service';
 import * as creditService from '@/lib/services/credit.service';
 import * as eventService from '@/lib/services/event.service';
-import { runOnboardingPipeline } from '@/lib/services/onboarding.service';
+import { runOnboardingPipeline } from '@/lib/services/onboarding/orchestrator';
 import { onboardingSchema } from '@/lib/validations';
 import { requireAuth, parseJsonBody, isApiError } from '@/lib/api-utils';
 
@@ -21,12 +21,14 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  // Capture request IP for silent GeoIP enrichment (best-effort, never blocks)
+  // Capture request metadata for enrichment (best-effort, never blocks)
   const requestIp =
     request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
     request.headers.get('x-real-ip') ??
     null;
   const timezone = parsed.data.timezone ?? null;
+  const browserLocale = request.headers.get('accept-language')?.split(',')[0]?.trim() ?? null;
+  const userAgent = request.headers.get('user-agent') ?? null;
 
   // Check if user already has a company
   const existing = await companyService.getCompaniesByOwner(auth.user.id);
@@ -36,10 +38,18 @@ export async function POST(request: NextRequest) {
 
     // If company was created via quick-start (pending_auth), resume the pipeline now
     if (company.onboarding_status === 'pending_auth') {
-      // Use stored journey from quick-start, falling back to POST body
       const resolvedJourney = company.onboarding_journey ?? parsed.data.journey;
       const input = parsed.data.idea ?? parsed.data.business_url ?? company.original_idea;
-      runOnboardingPipeline(company.id, auth.user.id, resolvedJourney, input ?? undefined, requestIp, timezone).catch(() => {
+      runOnboardingPipeline(
+        company.id,
+        auth.user.id,
+        resolvedJourney,
+        input ?? undefined,
+        requestIp,
+        timezone,
+        browserLocale,
+        userAgent,
+      ).catch(() => {
         // Error is handled inside runOnboardingPipeline
       });
       return NextResponse.json({ company_id: company.id }, { status: 200 });
@@ -47,7 +57,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(
       { error: 'User already has a company', company_id: company.id },
-      { status: 409 }
+      { status: 409 },
     );
   }
 
@@ -68,9 +78,17 @@ export async function POST(request: NextRequest) {
   ]);
 
   // Fire-and-forget the onboarding pipeline
-  // Next.js runs this in the background; UI polls /api/onboarding/status for progress
   const input = parsed.data.idea ?? parsed.data.business_url;
-  runOnboardingPipeline(company.id, auth.user.id, parsed.data.journey, input, requestIp, timezone).catch(() => {
+  runOnboardingPipeline(
+    company.id,
+    auth.user.id,
+    parsed.data.journey,
+    input,
+    requestIp,
+    timezone,
+    browserLocale,
+    userAgent,
+  ).catch(() => {
     // Error is handled inside runOnboardingPipeline (sets status=failed, emits event)
   });
 

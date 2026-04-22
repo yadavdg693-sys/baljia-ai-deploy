@@ -27,6 +27,9 @@ yarn-error.log*
 .env
 .env*.local
 
+# encrypted credentials (Codex OAuth tokens)
+/data/
+
 # vercel
 .vercel
 
@@ -48,3 +51,6 @@ implementation_plan_gap*
 
 # claude code
 .claude/
+
+# archived non-core material (mockups, old specs, parked code)
+/excluded/

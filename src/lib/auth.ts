@@ -88,9 +88,10 @@ export async function revokeAllUserSessions(userId: string): Promise<void> {
 // ── Cookie helpers ───────────────────────────────
 
 export function setSessionCookie(response: Response, token: string): void {
+  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
   response.headers.append(
     'Set-Cookie',
-    `${COOKIE_NAME}=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${30 * 24 * 60 * 60}`,
+    `${COOKIE_NAME}=${token}; HttpOnly${secure}; SameSite=Lax; Path=/; Max-Age=${30 * 24 * 60 * 60}`,
   );
 }
 

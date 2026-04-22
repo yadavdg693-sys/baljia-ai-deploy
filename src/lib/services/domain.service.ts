@@ -46,6 +46,50 @@ async function cloudflareCreateDNS(subdomain: string, target: string, type: 'CNA
   } catch (error) { log.error('Cloudflare DNS error', { subdomain }, error); return false; }
 }
 
+/**
+ * Replace (delete + create) a DNS record so the content is updated even if the
+ * record already exists. cloudflareCreateDNS silently returns true on "already
+ * exists" without updating the target — that breaks the parking → real Render
+ * swap. Use this when you specifically need the target to be the new value.
+ */
+async function cloudflareReplaceDNS(subdomain: string, target: string, type: 'CNAME' | 'MX' | 'TXT' = 'CNAME'): Promise<boolean> {
+  const token = process.env.CLOUDFLARE_API_TOKEN;
+  const zoneId = process.env.CLOUDFLARE_ZONE_ID_APP;
+  if (!token || !zoneId) return false;
+
+  // 1. Find existing records matching {name, type}
+  const fqdn = subdomain.includes('.') ? subdomain : `${subdomain}.baljia.app`;
+  try {
+    const listRes = await fetch(
+      `${CF_API}/zones/${zoneId}/dns_records?type=${type}&name=${encodeURIComponent(fqdn)}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    const listResult = await listRes.json() as { success: boolean; result?: Array<{ id: string; content: string }> };
+    const existing = listResult.success ? (listResult.result ?? []) : [];
+
+    // 2. Delete every matching record (handles duplicates from earlier mistakes)
+    for (const record of existing) {
+      if (record.content === target) continue; // already correct — leave it
+      await fetch(`${CF_API}/zones/${zoneId}/dns_records/${record.id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      log.info('Cloudflare DNS record deleted (will recreate)', { subdomain: fqdn, oldTarget: record.content });
+    }
+
+    // 3. If there was already a correctly-pointed record, we're done
+    if (existing.some((r) => r.content === target)) return true;
+  } catch (err) {
+    log.warn('Cloudflare DNS list/delete failed — falling back to create', {
+      subdomain: fqdn,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  // 4. Create the new record
+  return cloudflareCreateDNS(subdomain, target, type);
+}
+
 export async function provisionSubdomain(companyId: string, slug: string, renderServiceId: string): Promise<{ domain: string; status: string } | null> {
   if (!isDomainServiceConfigured()) { log.warn('Domain service not configured', { slug }); return null; }
   const domain = `${slug}.baljia.app`;
@@ -59,7 +103,10 @@ export async function provisionSubdomain(companyId: string, slug: string, render
     return { domain, status: 'parking' };
   }
 
-  await cloudflareCreateDNS(slug, `${slug}.onrender.com`);
+  // Use REPLACE not CREATE — at this point a parking CNAME may already exist
+  // from the initial onboarding pass, and CREATE would silently no-op without
+  // repointing it to the new Render service.
+  await cloudflareReplaceDNS(slug, `${slug}.onrender.com`);
   const renderDomain = await renderAddCustomDomain(renderServiceId, domain);
   if (!renderDomain) { log.error('Failed to attach domain on Render', { domain }); return null; }
 

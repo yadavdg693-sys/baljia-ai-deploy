@@ -64,17 +64,46 @@ export async function requireAuthAndCompany(
 }
 
 /**
- * Extract company_id from query params, returning 400 if missing or invalid UUID.
+ * Resolve a company identifier (UUID or slug) to a UUID.
+ * Returns the UUID string, or an ApiError if not found.
  */
-export function getRequiredCompanyId(request: NextRequest): string | ApiError {
+export async function resolveCompanyIdentifier(identifier: string): Promise<string | ApiError> {
+  if (isValidUUID(identifier)) return identifier;
+
+  // Treat as slug — look up company ID
+  const [row] = await db.select({ id: companies.id })
+    .from(companies)
+    .where(eq(companies.slug, identifier))
+    .limit(1);
+
+  if (!row) {
+    return NextResponse.json({ error: 'Company not found' }, { status: 404 });
+  }
+  return row.id;
+}
+
+/**
+ * Extract company_id from query params, returning 400 if missing.
+ * Accepts UUID or slug — resolves slug to UUID automatically.
+ */
+export async function getRequiredCompanyId(request: NextRequest): Promise<string | ApiError> {
   const companyId = request.nextUrl.searchParams.get('company_id');
   if (!companyId) {
     return NextResponse.json({ error: 'company_id required' }, { status: 400 });
   }
-  if (!isValidUUID(companyId)) {
-    return NextResponse.json({ error: 'company_id must be a valid UUID' }, { status: 400 });
+  return resolveCompanyIdentifier(companyId);
+}
+
+/**
+ * Resolve company_id from a parsed JSON body field.
+ * Accepts UUID or slug — resolves slug to UUID automatically.
+ */
+export async function resolveBodyCompanyId(body: Record<string, unknown>): Promise<string | ApiError> {
+  const companyId = body.company_id;
+  if (!companyId || typeof companyId !== 'string') {
+    return NextResponse.json({ error: 'company_id required' }, { status: 400 });
   }
-  return companyId;
+  return resolveCompanyIdentifier(companyId);
 }
 
 /**

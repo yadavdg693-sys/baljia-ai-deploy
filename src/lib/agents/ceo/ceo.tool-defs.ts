@@ -1,4 +1,4 @@
-// CEO Tool Definitions — 36 tools in 6 groups
+// CEO Tool Definitions — 40 tools (39 base + 1 extra)
 // Anthropic-compatible tool schemas
 
 // ── Group 1: Capabilities (6 tools) ──
@@ -20,7 +20,11 @@ const CAPABILITIES_TOOLS = [
       required: ['module_name'],
     },
   },
-  // list_mcp_servers removed — exposes internal platform integration names/env vars to founder (guardrail)
+  {
+    name: 'list_mcp_servers',
+    description: 'List all connected platform servers/integrations and their current status.',
+    input_schema: { type: 'object' as const, properties: {} },
+  },
   {
     name: 'list_available_agents',
     description: 'List all task-driven worker agents with their IDs, roles, and max turns.',
@@ -61,13 +65,14 @@ const TASK_TOOLS = [
   },
   {
     name: 'create_task',
-    description: 'Create a new task. Runs governance checks for sizing, credit quoting, and agent routing. Task needs founder approval before execution.',
+    description: 'Create a new task. Routes to the right agent based on tag. 1 credit per task, deducted when execution starts. Task needs founder approval before execution.',
     input_schema: {
       type: 'object' as const,
       properties: {
         title: { type: 'string' as const, description: 'Clear, action-oriented task title' },
         description: { type: 'string' as const, description: 'Detailed description of what should be done' },
         tag: { type: 'string' as const, description: 'Task category (e.g. landing-page, research, api, tweet, outreach)' },
+        related_task_ids: { type: 'array' as const, items: { type: 'string' as const }, description: 'IDs of related tasks (e.g. failed task being retried, so agent knows what was already tried)' },
       },
       required: ['title', 'description', 'tag'],
     },
@@ -343,9 +348,19 @@ const COMPANY_TOOLS = [
       required: ['title', 'description'],
     },
   },
+  {
+    name: 'read_context_graph',
+    description: 'Read context nodes across the company: revenue, active work, support activity, and user context. Returns a structured graph of the company\'s operational state.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        nodes: { type: 'array' as const, items: { type: 'string' as const }, description: 'Which nodes to read: revenue, active_work, support, user. Omit to read all.' },
+      },
+    },
+  },
 ];
 
-// ── Group 5: Research (1 tool) ──
+// ── Group 5: Research (2 tools) ──
 
 const RESEARCH_TOOLS = [
   {
@@ -357,6 +372,17 @@ const RESEARCH_TOOLS = [
         query: { type: 'string' as const, description: 'Search query' },
       },
       required: ['query'],
+    },
+  },
+  {
+    name: 'web_extract',
+    description: 'Extract the main content from a specific URL. Use this for deeper reading of a page found via web_search.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        url: { type: 'string' as const, description: 'URL to extract content from' },
+      },
+      required: ['url'],
     },
   },
 ];
@@ -399,7 +425,7 @@ const MEMORY_TOOLS = [
     input_schema: {
       type: 'object' as const,
       properties: {
-        layer: { type: 'number' as const, enum: [1, 2, 3], description: 'Memory layer to read' },
+        layer: { type: 'string' as const, enum: ['1', '2', '3'], description: 'Memory layer to read (1=domain, 2=preferences, 3=cross-company)' },
       },
       required: ['layer'],
     },
@@ -418,20 +444,8 @@ export const CEO_TOOLS = [
   ...MEMORY_TOOLS,
 ];
 
-// Also export extras CEO always had
+// Extra tools beyond the base 39 — kept separate for clean grouping
 export const CEO_EXTRA_TOOLS = [
-  {
-    name: 'write_memory',
-    description: 'Write to a memory layer. Use to persist important context about the founder or business.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        layer: { type: 'number' as const, enum: [1, 2], description: 'Layer to write (1=domain, 2=preferences)' },
-        content: { type: 'string' as const, description: 'Content to store' },
-      },
-      required: ['layer', 'content'],
-    },
-  },
   {
     name: 'get_credit_balance',
     description: 'Get current credit balance and recent ledger entries.',
@@ -439,133 +453,4 @@ export const CEO_EXTRA_TOOLS = [
   },
 ];
 
-// ── Group 7: Cycle Planning & Task Scoring (6 tools — KG spec) ──
-
-const CYCLE_PLANNING_TOOLS = [
-  {
-    name: 'get_cycle_context',
-    description: 'Get the current work cycle context: stage, active plan, and pending tasks.',
-    input_schema: { type: 'object' as const, properties: {} },
-  },
-  {
-    name: 'create_cycle_plan',
-    description: 'Create a new cycle plan with tasks to execute tonight or this week.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        title: { type: 'string' as const, description: 'Plan title' },
-        tasks: { type: 'array' as const, items: { type: 'string' as const }, description: 'List of task titles to include' },
-        notes: { type: 'string' as const, description: 'Optional planner notes' },
-      },
-      required: ['title', 'tasks'],
-    },
-  },
-  {
-    name: 'update_cycle_plan',
-    description: 'Update an existing cycle plan — add tasks, change status, or add notes.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        plan_id: { type: 'string' as const, description: 'Cycle plan ID to update' },
-        tasks: { type: 'array' as const, items: { type: 'string' as const }, description: 'Updated task list' },
-        notes: { type: 'string' as const, description: 'Updated notes' },
-        status: { type: 'string' as const, enum: ['draft', 'active', 'completed'], description: 'Plan status' },
-      },
-      required: ['plan_id'],
-    },
-  },
-  {
-    name: 'submit_review',
-    description: 'Submit a review or retrospective for a completed cycle.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        plan_id: { type: 'string' as const, description: 'Cycle plan being reviewed' },
-        summary: { type: 'string' as const, description: 'Review summary' },
-        wins: { type: 'string' as const, description: 'What went well' },
-        blockers: { type: 'string' as const, description: 'What was blocked or failed' },
-      },
-      required: ['plan_id', 'summary'],
-    },
-  },
-  {
-    name: 'score_task',
-    description: 'Rate a completed task by quality, speed, and accuracy (1-5 scale).',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        task_id: { type: 'string' as const, description: 'Task ID to score' },
-        quality: { type: 'number' as const, description: 'Quality score 1-5' },
-        speed: { type: 'number' as const, description: 'Speed score 1-5' },
-        accuracy: { type: 'number' as const, description: 'Accuracy score 1-5' },
-        notes: { type: 'string' as const, description: 'Optional scoring notes' },
-      },
-      required: ['task_id', 'quality', 'speed', 'accuracy'],
-    },
-  },
-  {
-    name: 'get_unscored_tasks',
-    description: 'Get a list of recently completed tasks that have not yet been scored.',
-    input_schema: { type: 'object' as const, properties: {} },
-  },
-];
-
-// ── Group 8: Agent Factory (5 tools — KG spec §3.1) ──
-// Platform-internal: used by CEO/onboarding for agent introspection and dynamic agent creation
-
-const AGENT_FACTORY_TOOLS = [
-  {
-    name: 'list_mcp_tools',
-    description: 'List all tools available across the platform by server — for capability introspection during onboarding or task routing.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        server: { type: 'string' as const, description: 'Optional: filter by server name (e.g. "engineering", "browser")' },
-      },
-    },
-  },
-  {
-    name: 'get_mcp_tool_details',
-    description: 'Get detailed schema and description for a specific platform tool by name.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        tool_name: { type: 'string' as const, description: 'Tool name to look up' },
-      },
-      required: ['tool_name'],
-    },
-  },
-  {
-    name: 'create_agent',
-    description: 'Create a new custom agent configuration for a company. Used during onboarding to specialise agents.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        name: { type: 'string' as const, description: 'Display name for the agent' },
-        role: { type: 'string' as const, description: 'Agent role description' },
-        base_prompt: { type: 'string' as const, description: 'System prompt for the agent' },
-        max_turns: { type: 'number' as const, description: 'Max turns (default 200)' },
-      },
-      required: ['name', 'role'],
-    },
-  },
-  {
-    name: 'list_created_agents',
-    description: 'List all active agents in the platform registry with their IDs, roles, and execution style.',
-    input_schema: { type: 'object' as const, properties: {} },
-  },
-  {
-    name: 'get_agent_template',
-    description: 'Get a template/scaffold for a specific agent type to use as a base for customisation.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        agent_type: { type: 'string' as const, description: 'Agent type (e.g. "engineering", "browser", "content", "support")' },
-      },
-      required: ['agent_type'],
-    },
-  },
-];
-
-export const ALL_CEO_TOOLS = [...CEO_TOOLS, ...CEO_EXTRA_TOOLS, ...CYCLE_PLANNING_TOOLS, ...AGENT_FACTORY_TOOLS];
 

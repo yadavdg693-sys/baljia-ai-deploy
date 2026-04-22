@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import * as eventService from '@/lib/services/event.service';
-import { getRequiredCompanyId, requireAuthAndCompany, isApiError } from '@/lib/api-utils';
+import { resolveCompanyIdentifier, requireAuthAndCompany, isApiError } from '@/lib/api-utils';
 
 export async function GET(request: NextRequest) {
   // Support both 'company_id' and 'companyId' query params
@@ -11,13 +11,16 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'company_id required' }, { status: 400 });
   }
 
-  const auth = await requireAuthAndCompany(companyIdRaw);
+  const companyId = await resolveCompanyIdentifier(companyIdRaw);
+  if (isApiError(companyId)) return companyId;
+
+  const auth = await requireAuthAndCompany(companyId);
   if (isApiError(auth)) return auth;
 
   const limitStr = request.nextUrl.searchParams.get('limit');
   const limit = limitStr ? Math.min(parseInt(limitStr, 10), 100) : 50;
 
-  const events = await eventService.getCompanyEvents(companyIdRaw, limit);
+  const events = await eventService.getCompanyEvents(companyId, limit);
 
   return NextResponse.json({ events });
 }

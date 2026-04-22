@@ -1,53 +1,9 @@
 // Research Agent Tools — Tavily web search (Agent #29)
 // Baljia improvement: Read-only public web; require citations or "insufficient evidence"
+// Uses shared @/lib/tavily with round-robin key rotation.
 
 import type { Task } from '@/types';
-
-// ══════════════════════════════════════════════
-// TAVILY SEARCH — read-only public web
-// Requires TAVILY_API_KEY environment variable
-// ══════════════════════════════════════════════
-
-const TAVILY_API_URL = 'https://api.tavily.com/search';
-
-interface TavilyResult {
-  title: string;
-  url: string;
-  content: string;
-  score: number;
-}
-
-interface TavilyResponse {
-  results: TavilyResult[];
-  answer?: string;
-  query: string;
-}
-
-async function tavilySearch(query: string, maxResults = 5): Promise<TavilyResponse> {
-  const apiKey = process.env.TAVILY_API_KEY;
-  if (!apiKey) {
-    throw new Error('TAVILY_API_KEY not configured');
-  }
-
-  const response = await fetch(TAVILY_API_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      api_key: apiKey,
-      query,
-      max_results: maxResults,
-      search_depth: 'basic',
-      include_answer: true,
-      include_raw_content: false,
-    }),
-  });
-
-  if (!response.ok) {
-    throw new Error(`Tavily search failed: ${response.status} ${response.statusText}`);
-  }
-
-  return response.json() as Promise<TavilyResponse>;
-}
+import { isTavilyAvailable, tavilySearch, getNextTavilyKey } from '@/lib/tavily';
 
 // ══════════════════════════════════════════════
 // RESEARCH TOOLS — web search + source verification
@@ -114,17 +70,19 @@ export async function handleResearchTool(
   input: Record<string, unknown>,
   _task: Task,
 ): Promise<string> {
-  const hasTavily = !!process.env.TAVILY_API_KEY;
-
   switch (toolName) {
     case 'web_search': {
-      if (!hasTavily) {
-        return 'Web search unavailable: TAVILY_API_KEY not configured. Proceeding with model knowledge only. State "based on model knowledge" in your analysis.';
+      if (!isTavilyAvailable()) {
+        return 'Web search unavailable: no Tavily API keys configured. Proceeding with model knowledge only. State "based on model knowledge" in your analysis.';
       }
 
       try {
         const maxResults = Math.min(Math.max((input.max_results as number) ?? 5, 1), 10);
-        const results = await tavilySearch(input.query as string, maxResults);
+        const results = await tavilySearch({
+          query: input.query as string,
+          maxResults,
+          searchDepth: 'advanced',
+        });
 
         let output = '';
         if (results.answer) {
@@ -133,7 +91,7 @@ export async function handleResearchTool(
 
         output += `**Sources (${results.results.length} results):**\n`;
         for (const r of results.results) {
-          output += `- [${r.title}](${r.url}) (relevance: ${(r.score * 100).toFixed(0)}%)\n`;
+          output += `- [${r.title}](${r.url}) (relevance: ${((r.score ?? 0) * 100).toFixed(0)}%)\n`;
           output += `  ${r.content.substring(0, 200)}${r.content.length > 200 ? '...' : ''}\n\n`;
         }
 
@@ -144,25 +102,26 @@ export async function handleResearchTool(
     }
 
     case 'web_extract': {
-      if (!hasTavily) {
-        return 'Content extraction unavailable: TAVILY_API_KEY not configured.';
+      if (!isTavilyAvailable()) {
+        return 'Content extraction unavailable: no Tavily API keys configured.';
       }
 
       try {
-        // Use Tavily extract endpoint
+        const key = getNextTavilyKey();
         const response = await fetch('https://api.tavily.com/extract', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            api_key: process.env.TAVILY_API_KEY,
+            api_key: key,
             urls: [input.url as string],
           }),
+          signal: AbortSignal.timeout(15000),
         });
 
         if (!response.ok) throw new Error(`Extract failed: ${response.status}`);
         const data = await response.json() as { results: Array<{ raw_content: string }> };
         const content = data.results?.[0]?.raw_content ?? 'No content extracted';
-        return content.substring(0, 3000); // Cap at 3k chars to save context
+        return content.substring(0, 3000);
       } catch (error) {
         return `Failed to extract from ${input.url}: ${error instanceof Error ? error.message : 'Unknown error'}`;
       }
@@ -172,16 +131,20 @@ export async function handleResearchTool(
       const company = input.company_name as string;
       const aspects = (input.aspects as string) ?? 'pricing,features,reviews';
 
-      if (!hasTavily) {
-        return `Competitor analysis for "${company}" (aspects: ${aspects}). Note: No live web search available. Analysis based on model knowledge only. State "based on model knowledge" in findings.`;
+      if (!isTavilyAvailable()) {
+        return `Competitor analysis for "${company}" (aspects: ${aspects}). Note: No live web search available. Analysis based on model knowledge only.`;
       }
 
       try {
         const queries = aspects.split(',').map((a) => `${company} ${a.trim()}`);
         const results: string[] = [];
 
-        for (const query of queries.slice(0, 3)) { // Max 3 aspect searches
-          const searchResult = await tavilySearch(query, 3);
+        for (const query of queries.slice(0, 3)) {
+          const searchResult = await tavilySearch({
+            query,
+            maxResults: 3,
+            searchDepth: 'advanced',
+          });
           if (searchResult.answer) {
             results.push(`### ${query}\n${searchResult.answer}`);
           }
@@ -200,12 +163,16 @@ export async function handleResearchTool(
       const industry = input.industry as string;
       const timeframe = (input.timeframe as string) ?? 'month';
 
-      if (!hasTavily) {
+      if (!isTavilyAvailable()) {
         return `Industry trends for "${industry}" (${timeframe}). Note: No live web search available. Analysis based on model knowledge.`;
       }
 
       try {
-        const result = await tavilySearch(`${industry} trends ${timeframe} 2025 2026`, 5);
+        const result = await tavilySearch({
+          query: `${industry} trends ${timeframe} 2025 2026`,
+          maxResults: 5,
+          searchDepth: 'advanced',
+        });
         let output = result.answer ? `**Summary:** ${result.answer}\n\n` : '';
         output += result.results
           .map((r) => `- [${r.title}](${r.url})\n  ${r.content.substring(0, 200)}`)

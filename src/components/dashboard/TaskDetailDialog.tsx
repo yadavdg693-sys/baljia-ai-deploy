@@ -55,14 +55,13 @@ const STATUS_ORDER: Record<string, number> = {
 
 export function TaskDetailDialog({ task, open, onOpenChange, onApprove, onReject }: TaskDetailDialogProps) {
   const [loading, setLoading] = useState<'approve' | 'reject' | 'retry' | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   if (!task) return null;
 
   const currentStep = STATUS_ORDER[task.status] ?? 0;
   const isFailed = task.status === 'failed';
   const isRejected = task.status === 'rejected';
-
-  const [error, setError] = useState<string | null>(null);
 
   const handleApprove = async () => {
     setLoading('approve');
@@ -74,7 +73,13 @@ export function TaskDetailDialog({ task, open, onOpenChange, onApprove, onReject
         onOpenChange(false);
       } else {
         const body = await res.json().catch(() => ({ error: 'Action failed' }));
-        setError(body.error ?? 'Could not approve task');
+        // 409 = approved but couldn't launch yet (slot busy, credits, etc.)
+        if (res.status === 409 && body?.approved) {
+          onApprove?.(task.id);
+          onOpenChange(false);
+        } else {
+          setError(body.error ?? 'Could not approve task');
+        }
       }
     } catch {
       setError('Network error — please try again');

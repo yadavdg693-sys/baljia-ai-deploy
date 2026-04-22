@@ -8,26 +8,31 @@ import { requireAuth, isApiError } from '@/lib/api-utils';
 import { db, companies, platformEvents } from '@/lib/db';
 import { eq, and, inArray, gt, asc } from 'drizzle-orm';
 
-// Stage labels shown in the UI
+// Stage labels shown in the UI — kept in sync with OnboardingStage in
+// src/lib/services/onboarding/types.ts
 const STAGE_LABELS: Record<string, string> = {
   heartbeat: 'Starting up...',
-  enrich_founder: 'Researching your background...',
-  enrich_business: 'Analyzing your business...',
-  persist_context: 'Saving context...',
+  enrich_geo: 'Detecting your location...',
+  enrich_linkedin: 'Reading your professional background...',
+  enrich_twitter: 'Reading your public profile...',
   extract_founder_angle: 'Analyzing your positioning...',
+  persist_context: 'Saving context...',
   select_strategy: 'Choosing strategy...',
-  classify_archetype: 'Classifying business type...',
+  refine_idea: 'Refining your idea...',
+  fetch_business_url: 'Reading your business site...',
+  invent_idea: 'Inventing an idea from your background...',
   name_company: 'Naming your company...',
   provision_infrastructure: 'Provisioning infrastructure...',
+  send_startup_email: 'Sending your first company email...',
   generate_market_research: 'Researching market opportunity...',
   save_mission: 'Writing mission statement...',
   generate_roadmap: 'Building your roadmap...',
   derive_active_milestone: 'Setting your first milestone...',
   create_starter_tasks: 'Creating your first tasks...',
   generate_landing_page: 'Generating your landing page...',
-  send_welcome_email: 'Sending welcome email...',
   post_launch_tweet: 'Posting launch announcement...',
   generate_ceo_summary: 'Preparing CEO briefing...',
+  send_completion_email: 'Sending your summary email...',
   flush_diagnostics: 'Finalizing setup...',
   celebrate: 'Ready!',
 };
@@ -90,10 +95,16 @@ export async function GET(request: NextRequest) {
         if (request.signal.aborted) break;
 
         try {
-          // Fetch new onboarding_stage events since last poll
+          // Fetch new onboarding events since last poll (stage + activity + mood + completed/failed)
           const conditions = [
             eq(platformEvents.company_id, companyId),
-            inArray(platformEvents.event_type, ['onboarding_stage', 'onboarding_completed', 'onboarding_failed']),
+            inArray(platformEvents.event_type, [
+              'onboarding_stage',
+              'onboarding_activity',
+              'onboarding_mood',
+              'onboarding_completed',
+              'onboarding_failed',
+            ]),
           ];
 
           if (lastEventCreatedAt) {
@@ -119,6 +130,20 @@ export async function GET(request: NextRequest) {
                 stage: stageName,
                 status: payload.status,
                 label: STAGE_LABELS[stageName] ?? stageName,
+              });
+            } else if (event.event_type === 'onboarding_activity') {
+              send({
+                type: 'activity',
+                text: payload.text,
+                tool: payload.tool ?? null,
+                stage: payload.stage ?? null,
+                timestamp: payload.timestamp ?? Date.now(),
+              });
+            } else if (event.event_type === 'onboarding_mood') {
+              send({
+                type: 'mood',
+                mood: payload.mood,
+                stage: payload.stage ?? null,
               });
             } else if (event.event_type === 'onboarding_completed') {
               send({ type: 'completed', ...payload });

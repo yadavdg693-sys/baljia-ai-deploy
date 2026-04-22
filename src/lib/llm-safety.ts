@@ -153,7 +153,6 @@ function isTransientError(error: unknown): boolean {
  * Wraps anthropic.messages.create() with safety guards.
  */
 export async function callAnthropicWithTimeout(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   anthropic: { messages: { create: (...args: any[]) => Promise<any> } },
   params: Record<string, unknown>,
   options?: { timeoutMs?: number; label?: string }

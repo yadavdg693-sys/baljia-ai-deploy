@@ -13,11 +13,15 @@ Founders sign up, get an AI team (CEO + 8 specialist agents), and the platform b
 - If a Polsia behavior is strong for founder experience → preserve it
 - If the underlying Polsia machinery is weak → redesign it rather than cloning it
 
-## Architecture Source of Truth
+## Architecture Reference (archived — NOT actively followed)
 
-The internal specs are the definitive architecture source. Read the relevant spec before making ANY architecture decision.
+The internal specs were the original architecture plan. We are **not** actively following them as source of truth anymore — the code has diverged in places, and many specs describe future state rather than current behavior. Treat them as historical reference only.
 
-**Specs location:** `specs/internal/`
+When making architecture decisions, **read the actual code first.** If you need historical context, the specs are still on disk:
+
+**Archived location:** `excluded/specs/internal/` (moved out of the active tree to keep focus on shipping code)
+
+The tables below remain as a map of what reference material exists.
 
 ### Core specs (8)
 

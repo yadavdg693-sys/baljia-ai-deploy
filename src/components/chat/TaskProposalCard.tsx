@@ -17,7 +17,13 @@ export function TaskProposalCard({ proposal }: TaskProposalCardProps) {
       if (res.ok) {
         setStatus('approved');
       } else {
-        setStatus('pending');
+        const body = await res.json().catch(() => null);
+        // 409 = approved but couldn't launch yet (slot busy, credits, etc.)
+        if (res.status === 409 && body?.approved) {
+          setStatus('approved');
+        } else {
+          setStatus('pending');
+        }
       }
     } catch {
       setStatus('pending');
@@ -95,7 +101,7 @@ export function TaskProposalCard({ proposal }: TaskProposalCardProps) {
         <div className="text-center py-1.5 text-xs text-text-muted animate-pulse">Rejecting...</div>
       )}
       {status === 'approved' && (
-        <div className="text-center py-1.5 text-xs text-green-400 font-medium">✓ Task approved — added to your queue</div>
+        <div className="text-center py-1.5 text-xs text-green-400 font-medium">✓ Task approved — running now</div>
       )}
       {status === 'rejected' && (
         <div className="text-center py-1.5 text-xs text-text-muted">Task rejected</div>
