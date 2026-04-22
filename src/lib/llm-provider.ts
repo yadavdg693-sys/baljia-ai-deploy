@@ -64,6 +64,73 @@ export function isGeminiAvailable(): boolean {
   return !!key && key !== 'placeholder';
 }
 
+// ── Moonshot AI (direct Kimi API — OpenAI-compatible) ──
+
+export function isMoonshotAvailable(): boolean {
+  const key = process.env.MOONSHOT_API_KEY;
+  return !!key && key !== 'placeholder' && key.startsWith('sk-');
+}
+
+export const MOONSHOT_API_BASE = process.env.MOONSHOT_API_BASE ?? 'https://api.moonshot.ai/v1';
+
+export const MOONSHOT_MODELS = {
+  /** Kimi K2.6 — latest (1T-param MoE, 128K context, agentic reasoning) */
+  KIMI_K2_6: 'kimi-k2.6',
+  /** Kimi K2.5 — prior stable */
+  KIMI_K2_5: 'kimi-k2.5',
+  /** 128K-context general model */
+  MOONSHOT_V1_128K: 'moonshot-v1-128k',
+  /** 32K-context general model (cheaper) */
+  MOONSHOT_V1_32K: 'moonshot-v1-32k',
+  /** Auto-select variant by context length */
+  MOONSHOT_V1_AUTO: 'moonshot-v1-auto',
+} as const;
+
+/**
+ * Call Moonshot AI's Kimi via their OpenAI-compatible REST API.
+ * Drop-in replacement for callOpenAI when PRIMARY_LLM_PROVIDER=moonshot.
+ */
+export async function callMoonshot(params: {
+  userPrompt: string;
+  systemPrompt?: string;
+  maxTokens?: number;
+  model?: string;
+  temperature?: number;
+}): Promise<string> {
+  const key = process.env.MOONSHOT_API_KEY;
+  if (!key) throw new Error('MOONSHOT_API_KEY not set');
+
+  const messages: Array<{ role: 'system' | 'user'; content: string }> = [];
+  if (params.systemPrompt) messages.push({ role: 'system', content: params.systemPrompt });
+  messages.push({ role: 'user', content: params.userPrompt });
+
+  const res = await fetch(`${MOONSHOT_API_BASE}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${key}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: params.model ?? MOONSHOT_MODELS.KIMI_K2_6,
+      messages,
+      max_tokens: params.maxTokens ?? 512,
+      temperature: params.temperature ?? 0.7,
+    }),
+  });
+
+  const body = await res.json() as {
+    choices?: Array<{ message?: { content?: string } }>;
+    error?: { message?: string; code?: string | number };
+  };
+
+  if (!res.ok || body.error) {
+    const msg = body.error?.message ?? `HTTP ${res.status}`;
+    throw new Error(`Moonshot API error: ${msg}`);
+  }
+
+  return body.choices?.[0]?.message?.content ?? '';
+}
+
 // ── OpenRouter model IDs ────────────────────────
 
 export const OPENROUTER_MODELS = {
@@ -102,17 +169,18 @@ export function isReasoningModel(model: string): boolean {
 
 // ── Provider selection ──────────────────────────
 
-type Provider = 'anthropic' | 'openai' | 'openrouter' | 'gemini';
+type Provider = 'anthropic' | 'openai' | 'openrouter' | 'moonshot' | 'gemini';
 
 const PROVIDER_CHECK: Record<Provider, () => boolean> = {
   openai: isOpenAIAvailable,
   anthropic: isAnthropicAvailable,
   openrouter: isOpenRouterAvailable,
+  moonshot: isMoonshotAvailable,
   gemini: isGeminiAvailable,
 };
 
 /** Default fallback order — OpenAI first since Codex OAuth is primary */
-const DEFAULT_ORDER: Provider[] = ['openai', 'anthropic', 'openrouter', 'gemini'];
+const DEFAULT_ORDER: Provider[] = ['openai', 'anthropic', 'openrouter', 'moonshot', 'gemini'];
 
 function getProviderOrder(): Provider[] {
   const primary = (process.env.PRIMARY_LLM_PROVIDER ?? '').toLowerCase() as Provider;
