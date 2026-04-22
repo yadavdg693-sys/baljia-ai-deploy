@@ -75,6 +75,30 @@ ${marketContext.slice(0, 3000)}
 ${priorityHints}
 
 ═══════════════════════════════════════════════════════
+ALREADY PROVISIONED DURING ONBOARDING (do NOT build again):
+═══════════════════════════════════════════════════════
+
+The following artifacts ALREADY exist. The engineering task must NOT recreate them.
+
+- **Landing page** — a marketing / waitlist landing page has ALREADY been generated and is
+  live at \`${ctx.slug || '{slug}'}.baljia.app\`. It's stored in the platform DB and served
+  via wildcard routing. The engineering task must NOT build "a landing page", "a marketing
+  site", or "a waitlist capture page" — those already work. If an SEO-focused landing page
+  refresh is genuinely needed, that's a SECOND-cycle task, not a first one.
+- **Company email** — \`${ctx.slug || '{slug}'}@baljia.app\` is active and forwards to the founder.
+- **Neon database** — an empty per-company Postgres DB is provisioned; engineering should
+  CREATE SCHEMA + write to it, not spin up a separate DB.
+- **GitHub repo** — \`BALAJIapps/${ctx.slug || '{slug}'}\` exists as an empty repo with
+  initial README. Engineering should PUSH product code to it.
+- **Mission document** — written and saved.
+- **Market research report** — written and saved (you're consuming it above).
+- **Launch tweet** — already posted or queued (do NOT make the engineering task create tweets).
+
+The ENGINEERING task's job is to build **the actual product** — the thing the founder's
+customers will use to receive value. Not the marketing landing page. Not the waitlist.
+Not the tweet. The PRODUCT itself (the tool / platform / app described in the idea + mission).
+
+═══════════════════════════════════════════════════════
 PLATFORM CAPABILITIES (single source of truth — same as CEO uses):
 ═══════════════════════════════════════════════════════
 
@@ -143,10 +167,18 @@ HARD RULES:
 1. Each task description is SELF-CONTAINED — embed competitor names, audience details, infra assumptions inline. Never say "see other task" or "see report".
 2. Each task respects its agent's CAN/CANNOT capability boundaries declared above.
 3. Engineering DESCRIPTION must contain all 5 sections and be >= 6 sentences.
-4. Research TITLE must name 3+ actual competitors from market research.
-5. Outreach DESCRIPTION must use "${geoLine}" from GeoIP when available OR match channels to AUDIENCE when unknown. NEVER hardcode a country in fallback.
-6. REASONING fields are WORKER-VOICED (queue justification), not founder-facing strategic narrative.
-7. No filler verbs anywhere: ${FILLER_VERBS.map((v) => `"${v}"`).join(', ')}.
+4. Engineering task must build the PRODUCT (the thing the founder's customers use), NOT:
+   - a landing page / marketing site / SEO page / waitlist capture  ← already provisioned
+   - a homepage / hero page / "coming soon" page                     ← already provisioned
+   - the company email setup / DNS / infrastructure                  ← already provisioned
+   - a GitHub repo or Neon DB                                        ← already provisioned
+   If the market-research engineering seed mentions any of the above, OVERRIDE it: pick
+   the real product feature (the core user-facing thing that delivers the mission's value
+   proposition) instead. Treat the seed as a suggestion, not a mandate.
+5. Research TITLE must name 3+ actual competitors from market research.
+6. Outreach DESCRIPTION must use "${geoLine}" from GeoIP when available OR match channels to AUDIENCE when unknown. NEVER hardcode a country in fallback.
+7. REASONING fields are WORKER-VOICED (queue justification), not founder-facing strategic narrative.
+8. No filler verbs anywhere: ${FILLER_VERBS.map((v) => `"${v}"`).join(', ')}.
 
 Return a JSON object with this exact shape:
 {

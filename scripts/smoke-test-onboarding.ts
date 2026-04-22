@@ -205,6 +205,26 @@ async function assertArtifacts(companyId: string): Promise<void> {
     `one_liner missing`,
   );
 
+  // Phase 6: founder app provisioning assertions (best-effort, may fail on API errors)
+  if (company?.neon_database_id) {
+    pass(`Neon DB provisioned: ${company.neon_database_id}`);
+    passCount++;
+  } else {
+    warn(`Neon DB not provisioned (best-effort — may be deferred to engineering agent)`);
+  }
+  if (company?.neon_connection_string) {
+    pass(`Neon connection string stored (${(company.neon_connection_string as string).length} chars)`);
+    passCount++;
+  } else {
+    warn(`Neon connection string missing (best-effort)`);
+  }
+  if (company?.github_repo) {
+    pass(`GitHub repo provisioned: ${company.github_repo}`);
+    passCount++;
+  } else {
+    warn(`GitHub repo not provisioned (best-effort)`);
+  }
+
   // Documents: mission, market_research, landing_page
   const docs = await db.select().from(documents).where(eq(documents.company_id, companyId));
   const docTypes = new Set(docs.map((d) => d.doc_type));

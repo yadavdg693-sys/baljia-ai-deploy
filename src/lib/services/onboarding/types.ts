@@ -15,6 +15,8 @@ export type OnboardingStage =
   | 'invent_idea'
   | 'name_company'
   | 'provision_infrastructure'
+  | 'provision_founder_app_kickoff'
+  | 'await_founder_app'
   | 'send_startup_email'
   | 'generate_market_research'
   | 'save_mission'

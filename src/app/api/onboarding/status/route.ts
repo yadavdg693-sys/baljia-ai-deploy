@@ -23,6 +23,8 @@ const STAGE_LABELS: Record<string, string> = {
   invent_idea: 'Inventing an idea from your background...',
   name_company: 'Naming your company...',
   provision_infrastructure: 'Provisioning infrastructure...',
+  provision_founder_app_kickoff: 'Starting your app infrastructure...',
+  await_founder_app: 'Finalizing your app infrastructure...',
   send_startup_email: 'Sending your first company email...',
   generate_market_research: 'Researching market opportunity...',
   save_mission: 'Writing mission statement...',

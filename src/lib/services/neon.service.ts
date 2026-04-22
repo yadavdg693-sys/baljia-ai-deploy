@@ -21,7 +21,7 @@ interface NeonProject {
   connection_uris?: Array<{ connection_uri: string; role_name: string }>;
 }
 
-interface NeonDatabase {
+export interface NeonDatabase {
   projectId: string;
   connectionUri: string;
   host: string;
@@ -32,6 +32,26 @@ interface NeonDatabase {
 // PROVISION — create a new Neon project for a company
 // ══════════════════════════════════════════════
 
+async function resolveNeonOrgId(apiKey: string): Promise<string | undefined> {
+  // Prefer explicit env override
+  if (process.env.NEON_ORG_ID) return process.env.NEON_ORG_ID;
+
+  // Otherwise auto-fetch the first org the API key has access to
+  try {
+    const res = await fetch(`${NEON_API}/users/me/organizations`, {
+      headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!res.ok) return undefined;
+    const data = (await res.json()) as { organizations?: Array<{ id: string; name: string }> };
+    const orgId = data.organizations?.[0]?.id;
+    if (orgId) log.info('Neon org auto-resolved', { orgId, name: data.organizations?.[0]?.name });
+    return orgId;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function provisionCompanyDatabase(
   companyId: string,
   companySlug: string
@@ -41,7 +61,9 @@ export async function provisionCompanyDatabase(
     throw new Error('NEON_API_KEY not configured — per-company databases cannot be provisioned');
   }
 
-  log.info('Provisioning Neon database', { companyId, companySlug });
+  const orgId = await resolveNeonOrgId(apiKey);
+
+  log.info('Provisioning Neon database', { companyId, companySlug, orgId: orgId ?? '(default)' });
 
   // Create project (1 project = 1 company database in Neon)
   const response = await fetch(`${NEON_API}/projects`, {
@@ -58,6 +80,9 @@ export async function provisionCompanyDatabase(
         pg_version: 16,
         autoscaling_limit_min_cu: 0.25,   // Scale to zero when inactive
         autoscaling_limit_max_cu: 1,
+        // Neon multi-org accounts require org_id. Auto-resolved from the API if
+        // not explicitly set via NEON_ORG_ID env var.
+        ...(orgId ? { org_id: orgId } : {}),
       },
     }),
   });
