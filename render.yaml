@@ -56,6 +56,12 @@ services:
         sync: false
       - key: BROWSERBASE_PROJECT_ID
         sync: false
+      - key: IPINFO_TOKEN
+        sync: false
+      - key: LATEDEV_API_KEY
+        sync: false
+      - key: BALJIA_AUTH_FROM_EMAIL
+        value: system@baljia.ai
 
   # ── Cron: Night Shift ──
   # Runs for ALL active companies every night at 2am UTC.
