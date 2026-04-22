@@ -1,0 +1,182 @@
+services:
+  - type: web
+    name: baljia-ai
+    runtime: node
+    plan: starter
+    region: oregon
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: AUTH_SECRET
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: POSTMARK_SERVER_TOKEN
+        sync: false
+      - key: NEXT_PUBLIC_APP_URL
+        sync: false
+      - key: NEXT_PUBLIC_APP_DOMAIN
+        value: baljia.app
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY
+        sync: false
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: CRON_SECRET
+        sync: false
+      - key: ADMIN_EMAILS
+        sync: false
+      - key: NEON_API_KEY
+        sync: false
+      - key: RENDER_API_KEY
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: GITHUB_ORG
+        value: BALAJIapps
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: BROWSERBASE_API_KEY
+        sync: false
+      - key: BROWSERBASE_PROJECT_ID
+        sync: false
+      - key: IPINFO_TOKEN
+        sync: false
+      - key: LATEDEV_API_KEY
+        sync: false
+      - key: BALJIA_AUTH_FROM_EMAIL
+        value: system@baljia.ai
+
+  # ── Cron: Night Shift ──
+  # Runs for ALL active companies every night at 2am UTC.
+  # Executes todo tasks, retries failures, probes deployed URLs for health.
+  - type: cron
+    name: baljia-night-shift
+    runtime: node
+    region: oregon
+    schedule: "0 2 * * *"
+    buildCommand: ""
+    startCommand: >
+      curl -s -o /dev/null -w "%{http_code}" -X POST
+      "$NEXT_PUBLIC_APP_URL/api/cron/night-shift"
+      -H "x-cron-secret: $CRON_SECRET"
+      -H "Content-Type: application/json"
+    envVars:
+      - key: NEXT_PUBLIC_APP_URL
+        sync: false
+      - key: CRON_SECRET
+        sync: false
+
+  # ── Cron: Recurring Tasks ──
+  # Materialises daily/weekly/monthly recurring task instances every 6 hours.
+  - type: cron
+    name: baljia-recurring
+    runtime: node
+    region: oregon
+    schedule: "0 */6 * * *"
+    buildCommand: ""
+    startCommand: >
+      curl -s -o /dev/null -w "%{http_code}" -X POST
+      "$NEXT_PUBLIC_APP_URL/api/cron/recurring"
+      -H "x-cron-secret: $CRON_SECRET"
+      -H "Content-Type: application/json"
+    envVars:
+      - key: NEXT_PUBLIC_APP_URL
+        sync: false
+      - key: CRON_SECRET
+        sync: false
+
+  # ── Cron: Trial Expiry ──
+  # Suspends expired trials and past-due subscriptions every day at 3am UTC.
+  - type: cron
+    name: baljia-trial-expiry
+    runtime: node
+    region: oregon
+    schedule: "0 3 * * *"
+    buildCommand: ""
+    startCommand: >
+      curl -s -o /dev/null -w "%{http_code}"
+      "$NEXT_PUBLIC_APP_URL/api/cron/trial-expiry"
+      -H "x-cron-secret: $CRON_SECRET"
+    envVars:
+      - key: NEXT_PUBLIC_APP_URL
+        sync: false
+      - key: CRON_SECRET
+        sync: false
+
+  # ── Cron: Platform Ops ──
+  # Runs infra health checks every 15 min. Billing audit runs daily at 05:00 UTC.
+  # SPEC-OPS-001: regression guard, known issue registry, infra watchdog, billing auditor.
+  - type: cron
+    name: baljia-platform-ops
+    runtime: node
+    region: oregon
+    schedule: "*/15 * * * *"
+    buildCommand: ""
+    startCommand: >
+      curl -s -o /dev/null -w "%{http_code}"
+      "$NEXT_PUBLIC_APP_URL/api/cron/platform-ops"
+      -H "x-cron-secret: $CRON_SECRET"
+    envVars:
+      - key: NEXT_PUBLIC_APP_URL
+        sync: false
+      - key: CRON_SECRET
+        sync: false
+
+  # ── Cron: Credit Renewal Safety Net ──
+  # Catches any companies that should have had credits renewed but didn't
+  # (e.g. missed Stripe webhook). Runs daily at 4am UTC.
+  - type: cron
+    name: baljia-credit-renewal
+    runtime: node
+    region: oregon
+    schedule: "0 4 * * *"
+    buildCommand: ""
+    startCommand: >
+      curl -s -o /dev/null -w "%{http_code}" -X POST
+      "$NEXT_PUBLIC_APP_URL/api/cron/credit-renewal"
+      -H "x-cron-secret: $CRON_SECRET"
+      -H "Content-Type: application/json"
+    envVars:
+      - key: NEXT_PUBLIC_APP_URL
+        sync: false
+      - key: CRON_SECRET
+        sync: false
+
+  # ── Cron: Onboarding Cleanup ──
+  # Sweeps stuck onboarding_status='running' rows older than 10min, marks them
+  # 'failed'. Complements the in-process watchdog (covers the case where a
+  # process was killed before watchdog.stop() could reset state). Runs every 5 min.
+  - type: cron
+    name: baljia-onboarding-cleanup
+    runtime: node
+    region: oregon
+    schedule: "*/5 * * * *"
+    buildCommand: ""
+    startCommand: >
+      curl -s -o /dev/null -w "%{http_code}" -X POST
+      "$NEXT_PUBLIC_APP_URL/api/cron/onboarding-cleanup"
+      -H "x-cron-secret: $CRON_SECRET"
+      -H "Content-Type: application/json"
+    envVars:
+      - key: NEXT_PUBLIC_APP_URL
+        sync: false
+      - key: CRON_SECRET
+        sync: false
+
