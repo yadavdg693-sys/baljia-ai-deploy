@@ -1,0 +1,13 @@
+# Standalone Workflow POC — separate from main OpenNext worker.
+# Proves that Cloudflare Workflows v2 can run Baljia-shaped multi-step tasks.
+# Runs independently via `wrangler dev` in this subdirectory.
+
+name = "baljia-workflow-poc"
+compatibility_date = "2025-03-01"
+compatibility_flags = ["nodejs_compat"]
+main = "worker.ts"
+
+[[workflows]]
+name = "agent-execution"
+binding = "AGENT_EXECUTION_WORKFLOW"
+class_name = "AgentExecutionWorkflow"

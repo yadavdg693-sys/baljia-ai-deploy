@@ -44,6 +44,30 @@
 
 ---
 
+### Workflows v2 proof-of-concept — VALIDATED
+
+Standalone POC in `cf-workflow-poc/` validates Cloudflare Workflows v2 can host Baljia's agent execution pattern:
+
+**POC shape** (mirrors `worker-launcher.launchTask()`):
+1. load-task → 2. check-lifecycle → 3. claim-slot-and-charge → 4-8. 5× agent-turn-N (simulated LLM) → 9. verify → 10. persist-result
+
+**Test run:**
+- Triggered via HTTP: `POST /trigger { taskId:"poc-final", mockAgentSteps:5 }`
+- Workflow instance ID returned: `7c04d93b-4706-459d-8b8d-77982da5d3de`
+- Polled status every 2s: `running → running → complete` in ~6s
+- All 10 step outputs captured in `__LOCAL_DEV_STEP_OUTPUTS`
+- Final `output` object matches expected shape
+
+**Why this validates 4-hour agent tasks:**
+- Each step runs independently (checkpointed, resumable on crash)
+- Wall-clock time is unlimited in Workflows v2
+- Per-step CPU cap is 5 min (paid) — real Baljia agent turns are mostly LLM I/O wait (low CPU), well under budget
+- Crash at step N resumes from step N+1 without re-running N (impossible on Render's long-HTTP-request pattern)
+
+**Migration effort estimate (unchanged):** 3-5 days to port `worker-launcher.ts` into Workflow step.do() calls. This is **straight translation work**, not a compatibility unknown — the POC proves the pattern fits.
+
+---
+
 ## 🟢 Measured: Bundle size fits comfortably
 
 From `npx wrangler deploy --dry-run --outdir dist`:

@@ -1,6 +1,6 @@
-# SPIKE wrangler.toml for Baljia Cloudflare bundle size test
-# NOT production config — just enough to make opennextjs-cloudflare build run
-# so we can measure the worker bundle size vs CF's 10 MiB gzipped cap.
+# Cloudflare Workers config for Baljia platform (spike)
+# Ported from render.yaml equivalent. Covers Workers + Cron Triggers.
+# Workflows v2 binding added separately when worker-launcher is ported.
 
 name = "baljia-cf-spike"
 compatibility_date = "2025-03-01"
@@ -10,3 +10,31 @@ main = ".open-next/worker.js"
 [assets]
 directory = ".open-next/assets"
 binding = "ASSETS"
+
+# ─────────────────────────────────────────────────────────────
+# Cron Triggers — direct port of 6 Render cron jobs.
+# Cloudflare invokes the Worker's scheduled() handler at each time.
+# The handler dispatches to the matching /api/cron/* route via internal fetch.
+# ─────────────────────────────────────────────────────────────
+[triggers]
+crons = [
+  "0 2 * * *",       # baljia-night-shift      — daily 2am UTC
+  "0 */6 * * *",     # baljia-recurring        — every 6 hours
+  "0 3 * * *",       # baljia-trial-expiry     — daily 3am UTC
+  "*/15 * * * *",    # baljia-platform-ops     — every 15 min
+  "0 4 * * *",       # baljia-credit-renewal   — daily 4am UTC
+  "*/5 * * * *",     # baljia-onboarding-cleanup — every 5 min
+]
+
+# ─────────────────────────────────────────────────────────────
+# Future: Workflows binding for agent execution (worker-launcher port)
+# ─────────────────────────────────────────────────────────────
+# [[workflows]]
+# name = "agent-execution"
+# binding = "AGENT_EXECUTION_WORKFLOW"
+# class_name = "AgentExecutionWorkflow"
+# script_name = "baljia-cf-spike"
+
+# ─────────────────────────────────────────────────────────────
+# Future: Durable Objects, R2, KV bindings as migration progresses
+# ─────────────────────────────────────────────────────────────
