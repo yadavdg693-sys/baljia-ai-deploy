@@ -24,6 +24,19 @@ import { createLogger } from '@/lib/logger';
 const log = createLogger('CFDeploy');
 const CF_API = 'https://api.cloudflare.com/client/v4';
 
+// All outbound fetches get a timeout so a hanging CF API call can't stall the
+// Engineering worker up to the 4hr watchdog. 30s is generous for CF's APIs
+// which typically respond in <1s.
+const CF_FETCH_TIMEOUT_MS = 30_000;
+// Live-verify fetches an attacker-influenceable URL (LLM-generated HTML) so use
+// a stricter timeout + bounded body to prevent SSRF-ish stalls and memory blowup.
+const VERIFY_FETCH_TIMEOUT_MS = 15_000;
+const VERIFY_MAX_BODY_BYTES = 64 * 1024; // 64 KB is plenty for a landing-page verify snippet
+
+function cfFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  return fetch(url, { ...init, signal: init.signal ?? AbortSignal.timeout(CF_FETCH_TIMEOUT_MS) });
+}
+
 // ══════════════════════════════════════════════
 // CONFIGURATION
 // ══════════════════════════════════════════════
@@ -259,7 +272,7 @@ export async function deployWorkerScript(params: DeployWorkerParams): Promise<De
     form.append('worker.mjs', new Blob([scriptContent], { type: 'application/javascript+module' }), 'worker.mjs');
 
     const url = `${CF_API}/accounts/${cfAccountId()}/workers/scripts/${encodeURIComponent(scriptName)}`;
-    const response = await fetch(url, {
+    const response = await cfFetch(url, {
       method: 'PUT',
       headers: cfApiHeaders(), // Do NOT set Content-Type; fetch sets the multipart boundary
       body: form,
@@ -293,7 +306,7 @@ export async function deleteWorkerScript(scriptName: string): Promise<boolean> {
   if (!isCloudflareDeployConfigured()) return false;
   try {
     const url = `${CF_API}/accounts/${cfAccountId()}/workers/scripts/${encodeURIComponent(scriptName)}`;
-    const response = await fetch(url, { method: 'DELETE', headers: cfApiHeaders() });
+    const response = await cfFetch(url, { method: 'DELETE', headers: cfApiHeaders() });
     if (!response.ok) {
       const text = await response.text().catch(() => '');
       log.error('CF worker delete failed', { scriptName, status: response.status, body: text.slice(0, 300) });
@@ -334,7 +347,7 @@ export async function addWorkerRoute(params: WorkerRouteParams): Promise<WorkerR
   try {
     // First, check if a route already exists with this pattern — idempotent.
     const listUrl = `${CF_API}/zones/${cfZoneIdApp()}/workers/routes`;
-    const listRes = await fetch(listUrl, { headers: cfApiHeaders() });
+    const listRes = await cfFetch(listUrl, { headers: cfApiHeaders() });
     if (listRes.ok) {
       const listData = (await listRes.json()) as {
         success: boolean;
@@ -348,7 +361,7 @@ export async function addWorkerRoute(params: WorkerRouteParams): Promise<WorkerR
         }
         // Pattern exists but points at different script — update it
         const updateUrl = `${CF_API}/zones/${cfZoneIdApp()}/workers/routes/${existing.id}`;
-        const updateRes = await fetch(updateUrl, {
+        const updateRes = await cfFetch(updateUrl, {
           method: 'PUT',
           headers: { ...cfApiHeaders(), 'Content-Type': 'application/json' },
           body: JSON.stringify({ pattern, script: scriptName }),
@@ -364,7 +377,7 @@ export async function addWorkerRoute(params: WorkerRouteParams): Promise<WorkerR
     }
 
     // Route does not exist — create it
-    const createRes = await fetch(listUrl, {
+    const createRes = await cfFetch(listUrl, {
       method: 'POST',
       headers: { ...cfApiHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify({ pattern, script: scriptName }),
@@ -392,7 +405,7 @@ export async function deleteWorkerRoute(routeId: string): Promise<boolean> {
   if (!isCloudflareDeployConfigured()) return false;
   try {
     const url = `${CF_API}/zones/${cfZoneIdApp()}/workers/routes/${routeId}`;
-    const response = await fetch(url, { method: 'DELETE', headers: cfApiHeaders() });
+    const response = await cfFetch(url, { method: 'DELETE', headers: cfApiHeaders() });
     if (!response.ok) {
       log.error('CF route delete failed', { routeId, status: response.status });
       return false;
@@ -422,7 +435,7 @@ export async function putWorkerSecret(params: PutSecretParams): Promise<boolean>
   if (!isCloudflareDeployConfigured()) return false;
   try {
     const url = `${CF_API}/accounts/${cfAccountId()}/workers/scripts/${encodeURIComponent(scriptName)}/secrets`;
-    const response = await fetch(url, {
+    const response = await cfFetch(url, {
       method: 'PUT',
       headers: { ...cfApiHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: key, text: value, type: 'secret_text' }),
@@ -444,7 +457,7 @@ export async function deleteWorkerSecret(scriptName: string, key: string): Promi
   if (!isCloudflareDeployConfigured()) return false;
   try {
     const url = `${CF_API}/accounts/${cfAccountId()}/workers/scripts/${encodeURIComponent(scriptName)}/secrets/${encodeURIComponent(key)}`;
-    const response = await fetch(url, { method: 'DELETE', headers: cfApiHeaders() });
+    const response = await cfFetch(url, { method: 'DELETE', headers: cfApiHeaders() });
     if (!response.ok) {
       log.error('CF secret delete failed', { scriptName, key, status: response.status });
       return false;
@@ -473,7 +486,7 @@ export async function getWorkerScriptInfo(scriptName: string): Promise<WorkerScr
   if (!isCloudflareDeployConfigured()) return null;
   try {
     const url = `${CF_API}/accounts/${cfAccountId()}/workers/scripts/${encodeURIComponent(scriptName)}`;
-    const response = await fetch(url, { headers: cfApiHeaders() });
+    const response = await cfFetch(url, { headers: cfApiHeaders() });
     if (!response.ok) return null;
     const etag = response.headers.get('etag') ?? 'unknown';
     // CF returns the script body here, not metadata. Use /subdomain endpoint for meta.
@@ -493,17 +506,61 @@ export async function getWorkerScriptInfo(scriptName: string): Promise<WorkerScr
 /**
  * Reach the live URL and return the HTTP status + body snippet for verification.
  * Useful in the Engineering agent's verifier step post-deploy.
+ *
+ * Hardening (post-audit):
+ *   - 15s timeout (tighter than CF API calls, since we're hitting an
+ *     attacker-influenceable URL — the R2 HTML is LLM-generated)
+ *   - Bounded body read (64 KB cap) — no `.text()` on unbounded bodies
+ *   - `redirect: 'manual'` — never follow redirects, no SSRF to internal hosts
+ *   - Subdomain regex re-validation (defense in depth; handlers already validate)
  */
 export async function verifyFounderAppLive(subdomain: string): Promise<{ status: number; bodySnippet: string; elapsedMs: number } | null> {
+  if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(subdomain)) {
+    log.warn('verifyFounderAppLive rejected invalid subdomain', { subdomain });
+    return null;
+  }
   const url = `https://${subdomain}.baljia.app`;
   const start = Date.now();
   try {
-    const response = await fetch(url, { method: 'GET', headers: { 'User-Agent': 'BaljiaDeployVerifier/1.0' } });
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: { 'User-Agent': 'BaljiaDeployVerifier/1.0' },
+      redirect: 'manual',
+      signal: AbortSignal.timeout(VERIFY_FETCH_TIMEOUT_MS),
+    });
     const elapsedMs = Date.now() - start;
-    const body = await response.text().catch(() => '');
+
+    // Bounded body read — never more than VERIFY_MAX_BODY_BYTES. Prevents
+    // memory blowup on a huge uploaded HTML and limits slow-drip transfers.
+    let bodySnippet = '';
+    const reader = response.body?.getReader();
+    if (reader) {
+      const chunks: Uint8Array[] = [];
+      let total = 0;
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          if (value) {
+            total += value.byteLength;
+            chunks.push(value);
+            if (total >= VERIFY_MAX_BODY_BYTES) {
+              await reader.cancel().catch(() => undefined);
+              break;
+            }
+          }
+        }
+      } finally {
+        try { reader.releaseLock(); } catch { /* already released */ }
+      }
+      bodySnippet = new TextDecoder('utf-8', { fatal: false })
+        .decode(Buffer.concat(chunks.map((c) => Buffer.from(c))))
+        .slice(0, 500);
+    }
+
     return {
       status: response.status,
-      bodySnippet: body.slice(0, 500),
+      bodySnippet,
       elapsedMs,
     };
   } catch (error) {

@@ -104,37 +104,34 @@ export function getEngineeringTools() {
     },
     // ──────────────────────────────────────────────
     // CLOUDFLARE WORKERS + R2 — Primary deploy target for founder apps (ADR-002)
+    // Subdomain is ALWAYS resolved from the calling task's company.subdomain.
+    // There is NO override parameter — this is intentional tenant isolation.
     // ──────────────────────────────────────────────
     {
       name: 'cf_deploy_landing',
-      description: 'PRIMARY: Deploy a founder landing page to Cloudflare at {subdomain}.baljia.app. Uploads HTML to R2; the wildcard Worker serves it. Fast (≤3s), idempotent, no GitHub needed. Use this instead of render_create_service for any new founder-app landing deploy.',
+      description: 'PRIMARY: Deploy a founder landing page to Cloudflare at {subdomain}.baljia.app. Uploads HTML to R2; the wildcard Worker serves it. Fast (≤3s), idempotent, no GitHub needed. Subdomain is derived from your company record — you cannot deploy to another company. Use this instead of render_create_service for any new founder-app landing deploy.',
       input_schema: {
         type: 'object' as const,
         properties: {
-          html: { type: 'string' as const, description: 'Full HTML content of the landing page (UTF-8). Include <html>, <head>, <body>.' },
-          subdomain_override: { type: 'string' as const, description: 'Optional: override the company\'s configured subdomain. Usually omit — company.subdomain is used.' },
+          html: { type: 'string' as const, description: 'Full HTML content of the landing page (UTF-8). Include <html>, <head>, <body>. Max 5 MB.' },
         },
         required: ['html'],
       },
     },
     {
       name: 'cf_verify_founder_app',
-      description: 'Verify a founder app is live by HTTP GET against https://{subdomain}.baljia.app. Returns status, elapsed ms, body snippet. Use after cf_deploy_landing to confirm live, or during diagnostics.',
+      description: 'Verify this company\'s founder app is live by HTTP GET against its configured subdomain. Returns status, elapsed ms, body snippet. Use after cf_deploy_landing to confirm live, or during diagnostics.',
       input_schema: {
         type: 'object' as const,
-        properties: {
-          subdomain_override: { type: 'string' as const, description: 'Optional: override the company\'s configured subdomain.' },
-        },
+        properties: {},
       },
     },
     {
       name: 'cf_delete_founder_app',
-      description: 'Remove the founder app from Cloudflare (deletes R2 asset). Use for teardown. Idempotent — succeeds even if asset is already gone.',
+      description: 'Remove THIS company\'s founder app from Cloudflare (deletes R2 asset). Use for teardown. Idempotent — succeeds even if asset is already gone.',
       input_schema: {
         type: 'object' as const,
-        properties: {
-          subdomain_override: { type: 'string' as const, description: 'Optional: override the company\'s configured subdomain.' },
-        },
+        properties: {},
       },
     },
     // ──────────────────────────────────────────────
@@ -1793,28 +1790,25 @@ async function renderListDatabases(input: Record<string, unknown>): Promise<stri
 // ══════════════════════════════════════════════
 
 /**
- * Resolve the subdomain for a company from the DB, falling back to an override
- * if the agent explicitly passed one. Errors loudly if neither exists — we
- * never want to silently deploy to a wrong subdomain.
+ * Resolve the subdomain for a company from the DB. There is deliberately NO
+ * override parameter — agents must only deploy to their own company's
+ * subdomain. This is the tenant-isolation boundary for the CF deploy path,
+ * mirroring how `assertServiceOwnership` works for Render tools.
  */
-async function resolveCompanySubdomain(companyId: string, override?: string): Promise<string> {
-  if (override && override.trim().length > 0) {
-    // Light validation — CF subdomain chars only
-    const clean = override.trim().toLowerCase();
-    if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(clean)) {
-      throw new Error(`Invalid subdomain override "${override}" — must be lowercase alphanumeric + hyphens`);
-    }
-    return clean;
-  }
+async function resolveCompanySubdomain(companyId: string): Promise<string> {
   const [company] = await db
     .select({ subdomain: companies.subdomain })
     .from(companies)
     .where(eq(companies.id, companyId))
     .limit(1);
   if (!company?.subdomain) {
-    throw new Error(`Company ${companyId} has no subdomain configured. Set company.subdomain before deploying, or pass subdomain_override.`);
+    throw new Error(`Company ${companyId} has no subdomain configured. Onboarding must set company.subdomain before deploy (via provisionWildcardSubdomain).`);
   }
-  return company.subdomain;
+  const clean = company.subdomain.trim().toLowerCase();
+  if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(clean)) {
+    throw new Error(`Company ${companyId} has an invalid stored subdomain "${company.subdomain}" — refusing to deploy.`);
+  }
+  return clean;
 }
 
 async function cfDeployLanding(input: Record<string, unknown>, companyId: string): Promise<string> {
@@ -1830,7 +1824,7 @@ async function cfDeployLanding(input: Record<string, unknown>, companyId: string
   }
 
   try {
-    const subdomain = await resolveCompanySubdomain(companyId, input.subdomain_override as string | undefined);
+    const subdomain = await resolveCompanySubdomain(companyId);
     const alreadyLive = await landingHtmlExists(subdomain);
 
     const result = await uploadLandingHtml({ subdomain, html });
@@ -1846,12 +1840,12 @@ async function cfDeployLanding(input: Record<string, unknown>, companyId: string
   }
 }
 
-async function cfVerifyFounderApp(input: Record<string, unknown>, companyId: string): Promise<string> {
+async function cfVerifyFounderApp(_input: Record<string, unknown>, companyId: string): Promise<string> {
   if (!isCloudflareDeployConfigured()) {
     return 'Cloudflare deploy not configured — cannot verify.';
   }
   try {
-    const subdomain = await resolveCompanySubdomain(companyId, input.subdomain_override as string | undefined);
+    const subdomain = await resolveCompanySubdomain(companyId);
     const result = await verifyFounderAppLive(subdomain);
     if (!result) return `Verify failed: no response for ${subdomain}.baljia.app`;
 
@@ -1863,20 +1857,26 @@ async function cfVerifyFounderApp(input: Record<string, unknown>, companyId: str
   }
 }
 
-async function cfDeleteFounderApp(input: Record<string, unknown>, companyId: string): Promise<string> {
+async function cfDeleteFounderApp(_input: Record<string, unknown>, companyId: string): Promise<string> {
   if (!isCloudflareDeployConfigured()) {
     return 'Cloudflare deploy not configured — nothing to delete.';
   }
   try {
-    const subdomain = await resolveCompanySubdomain(companyId, input.subdomain_override as string | undefined);
+    const subdomain = await resolveCompanySubdomain(companyId);
     const existed = await landingHtmlExists(subdomain);
     if (!existed) return `No founder app found at ${subdomain} — nothing to delete.`;
 
     const ok = await deleteLandingHtml(subdomain);
     if (!ok) return `Delete failed for ${subdomain} — check logs.`;
 
+    // Clear DB state so the next onboarding run / dashboard read is consistent
+    await db
+      .update(companies)
+      .set({ custom_domain: null })
+      .where(eq(companies.id, companyId));
+
     log.info('cf_delete_founder_app succeeded', { companyId, subdomain });
-    return `Deleted founder app at ${subdomain}.baljia.app (R2 landing asset removed).`;
+    return `Deleted founder app at ${subdomain}.baljia.app (R2 landing asset removed; company.custom_domain cleared).`;
   } catch (err) {
     return `Cloudflare delete error: ${err instanceof Error ? err.message : 'Unknown error'}`;
   }

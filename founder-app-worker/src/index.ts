@@ -123,6 +123,24 @@ async function serveTier1Landing(request: Request, env: Env, subdomain: string):
       'x-content-type-options': 'nosniff',
       'x-frame-options': 'SAMEORIGIN',
       'referrer-policy': 'strict-origin-when-cross-origin',
+      // HSTS — force HTTPS on baljia.app and all its subdomains
+      'strict-transport-security': 'max-age=31536000; includeSubDomains',
+      // CSP — founder landing pages are LLM-generated; the upload path is not
+      // sanitized (intentional, to preserve creative freedom). Any JS or stolen
+      // session cookie scoped to .baljia.app would be a cross-founder hazard.
+      // Policy: allow inline styles (common in landing pages), disallow scripts
+      // entirely, and allow images/fonts from self + data: + https:.
+      // Founders who need JS on their landing must pass a Tier 2/3 review.
+      'content-security-policy': [
+        "default-src 'none'",
+        "style-src 'self' 'unsafe-inline' https:",
+        "img-src 'self' data: https:",
+        "font-src 'self' data: https:",
+        "connect-src 'self'",
+        "base-uri 'self'",
+        "form-action 'self'",
+        "frame-ancestors 'self'",
+      ].join('; '),
       'x-baljia-tier': '1',
       'x-baljia-subdomain': subdomain,
     },
