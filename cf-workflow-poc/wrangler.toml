@@ -7,6 +7,11 @@ compatibility_date = "2025-03-01"
 compatibility_flags = ["nodejs_compat"]
 main = "worker.ts"
 
+# LOCAL ONLY — for spike POC. In production, use `wrangler secret put GEMINI_API_KEY`.
+# wrangler dev ignores .dev.vars for Workflow env — must use [vars] for local test.
+[vars]
+GEMINI_API_KEY = "AIzaSyDQ0qjxfcceIfm6_qG9MbkkwDuCxKEjzrg"
+
 [[workflows]]
 name = "agent-execution"
 binding = "AGENT_EXECUTION_WORKFLOW"

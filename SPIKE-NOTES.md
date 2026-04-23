@@ -66,6 +66,44 @@ Standalone POC in `cf-workflow-poc/` validates Cloudflare Workflows v2 can host 
 
 **Migration effort estimate (unchanged):** 3-5 days to port `worker-launcher.ts` into Workflow step.do() calls. This is **straight translation work**, not a compatibility unknown — the POC proves the pattern fits.
 
+### Workflow POC — REAL Gemini LLM validation (upgraded)
+
+After initial fake-LLM version, POC was rewritten to make 3 REAL Gemini 2.5 API calls inside Workflow steps. Confirmed:
+
+**Test run (real-v2 instance):**
+
+| Step | Action | Result | Latency | Tokens |
+|---|---|---|---|---|
+| 1 | load-task-context | task context loaded | <1ms | — |
+| 2 | agent-plan (Gemini) | "Here's how I'd..." | 2,546ms | 59→7 |
+| 3 | agent-execute (Gemini) | "Founder's clarity, daily. Track mood, master stress, build resilience, lead with purpose." | 1,535ms | 54→20 |
+| 4 | agent-verify (Gemini) | "FAIL. The output is..." | 1,996ms | 74→5 |
+| 5 | persist-result | persisted with verdict | <1ms | — |
+
+Total wall-clock: **6.077s** for 3 LLM calls + overhead. Final status: `"complete"`.
+
+**What this validates beyond the shape-only POC:**
+- Workflows can make real `fetch()` calls to external LLM providers from inside `step.do()` blocks
+- Token counts and latency captured per-step
+- Aggregate performance metrics collected across steps
+- LLM response parsing and chaining works correctly
+- The 6s for 3 LLM calls extrapolates comfortably: Baljia's typical agent run has 10-50 LLM calls ≈ 20-100s wall-clock, well within Workflow budget
+
+**Bonus: auto-retry behavior observed.** An earlier test run used `gemini-2.0-flash` (deprecated). Gemini returned 404. Workflows v2 automatically retried the failed step ~4 times before marking errored. This is exactly the crash-recovery semantics needed for 4-hour agent tasks — if any step fails due to transient issue, it retries automatically.
+
+### Workflow POC file layout
+
+`baljia-ai-cf/cf-workflow-poc/`
+- `worker.ts` — WorkflowEntrypoint + HTTP trigger, 3 real Gemini calls, latency/token tracking
+- `wrangler.toml` — standalone Worker config, Workflow binding, [vars] for local test key
+- `.dev.vars` — local env (ignored by wrangler dev for Workflows; see limitation below)
+
+### Limitation found: wrangler dev + Workflow env bindings
+
+`.dev.vars` is NOT automatically passed to Workflow `this.env` in wrangler dev (only to fetch handler's `env`). Workaround for the POC: pass API key via workflow params from the fetch handler. For production deploy, use `wrangler secret put GEMINI_API_KEY` — that binds correctly to Workflow.
+
+This is a minor dev-ergonomic gotcha, not a blocker. Documented for future reference.
+
 ---
 
 ## 🟢 Measured: Bundle size fits comfortably
