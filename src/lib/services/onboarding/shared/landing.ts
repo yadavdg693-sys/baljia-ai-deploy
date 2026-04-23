@@ -1,8 +1,16 @@
 // Landing page generator — narrative-first HTML stored as document
+// AND (per ADR-002 split hosting) deployed to Cloudflare so the founder's
+// subdomain ({slug}.baljia.app) goes live during onboarding.
 
 import { db, documents } from '@/lib/db';
 import { createLogger } from '@/lib/logger';
 import * as documentService from '@/lib/services/document.service';
+import {
+  deployLandingPage,
+  isLandingDeployConfigured,
+  getLandingDeployTarget,
+} from '@/lib/services/landing-deploy.service';
+import { provisionWildcardSubdomain } from '@/lib/services/domain.service';
 import { callSmallLLM } from '../llm/small-llm';
 import type { PipelineContext } from '../types';
 
@@ -51,9 +59,86 @@ Keep it under 300 lines.`;
       });
     }
     log.info('Landing page generated', { companyId: ctx.companyId });
+
+    // Publish to {slug}.baljia.app (ADR-002: Cloudflare primary, Render legacy)
+    // Non-blocking: onboarding continues even if deploy fails; the agent's
+    // cf_verify_founder_app tool or a later remediation task can retry.
+    await publishLandingToSubdomain(ctx, html);
   } catch (err) {
     log.warn('Landing page generation failed — non-blocking', {
       companyId: ctx.companyId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+// ──────────────────────────────────────────────────────────────
+// Publish — ADR-002 split-hosting path
+// ──────────────────────────────────────────────────────────────
+//
+// Flow:
+//  1. Ensure company.subdomain is set (provisionWildcardSubdomain is a
+//     cheap DB-only update — no CF API call, since *.baljia.app is a single
+//     wildcard CNAME on the zone).
+//  2. Call deployLandingPage which dispatches to CF (R2 upload) when
+//     CLOUDFLARE_API_TOKEN etc. are configured, else falls through to the
+//     Render legacy path so dev/CI without CF creds still works.
+//  3. Log the outcome. Failures are non-fatal — onboarding proceeds and the
+//     verifier/remediation loop can fix it later.
+async function publishLandingToSubdomain(ctx: PipelineContext, html: string): Promise<void> {
+  if (!ctx.slug) {
+    log.warn('No slug on pipeline context — skipping subdomain publish', { companyId: ctx.companyId });
+    return;
+  }
+  if (!isLandingDeployConfigured()) {
+    log.info('Landing deploy not configured (neither CF nor Render) — skipping publish', {
+      companyId: ctx.companyId,
+      slug: ctx.slug,
+    });
+    return;
+  }
+
+  const target = getLandingDeployTarget();
+  log.info('Publishing landing', { companyId: ctx.companyId, slug: ctx.slug, target });
+
+  // Always write the subdomain + placeholder custom_domain first. On CF this
+  // is effectively the "deploy manifest" — no DNS call needed (wildcard).
+  // On Render the explicit provisionSubdomain call inside deployLandingPage
+  // handles per-founder DNS separately.
+  try {
+    await provisionWildcardSubdomain(ctx.companyId, ctx.slug);
+  } catch (err) {
+    log.warn('provisionWildcardSubdomain failed — continuing with deploy', {
+      companyId: ctx.companyId,
+      slug: ctx.slug,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  try {
+    const result = await deployLandingPage({
+      companyId: ctx.companyId,
+      slug: ctx.slug,
+      companyName: ctx.companyName || ctx.slug,
+      landingHtml: html,
+    });
+    if (!result) {
+      log.warn('Landing deploy returned null — published-state unknown', {
+        companyId: ctx.companyId,
+        slug: ctx.slug,
+      });
+      return;
+    }
+    log.info('Landing published', {
+      companyId: ctx.companyId,
+      slug: ctx.slug,
+      target: result.target,
+      url: result.url,
+    });
+  } catch (err) {
+    log.warn('Landing deploy threw — non-blocking', {
+      companyId: ctx.companyId,
+      slug: ctx.slug,
       error: err instanceof Error ? err.message : String(err),
     });
   }
