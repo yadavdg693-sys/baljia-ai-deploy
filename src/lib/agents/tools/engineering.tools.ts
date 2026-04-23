@@ -1,13 +1,26 @@
-// Engineering Agent Tools — GitHub + Render deployment (Agent #30)
-// Enables the Engineering agent to push code, create repos, and deploy apps
-// GitHub: platform-owned org, one repo per founder company
-// Render: deploy as web service or static site
+// Engineering Agent Tools — GitHub + Cloudflare (primary) + Render (legacy) deployment (Agent #30)
+// Enables the Engineering agent to push code, create repos, and deploy apps.
+//
+// Deploy targets (per ADR-002 split-hosting strategy):
+//   • Cloudflare Workers + R2   — primary target for founder apps at *.baljia.app
+//                                  (tools prefixed `cf_`)
+//   • Render                    — LEGACY; kept for platform-internal services only.
+//                                  Do NOT use render_* tools for new founder-app deploys.
+//                                  These remain callable for backwards compat / rollback.
+//   • GitHub                    — shared for both (platform-owned org, one repo per company)
 
 import type { Task } from '@/types';
 import { db, companies } from '@/lib/db';
 import { eq } from 'drizzle-orm';
 import { provisionSubdomain, attachCustomDomain, verifyCustomDomain } from '@/lib/services/domain.service';
 import { provisionCompanyDatabase, getCompanyDatabase, createBranch, deleteBranch } from '@/lib/services/neon.service';
+import {
+  uploadLandingHtml,
+  landingHtmlExists,
+  deleteLandingHtml,
+  verifyFounderAppLive,
+  isCloudflareDeployConfigured,
+} from '@/lib/services/cf-deploy.service';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('EngineeringTools');
@@ -89,9 +102,47 @@ export function getEngineeringTools() {
         required: ['repo', 'path', 'message'],
       },
     },
+    // ──────────────────────────────────────────────
+    // CLOUDFLARE WORKERS + R2 — Primary deploy target for founder apps (ADR-002)
+    // ──────────────────────────────────────────────
+    {
+      name: 'cf_deploy_landing',
+      description: 'PRIMARY: Deploy a founder landing page to Cloudflare at {subdomain}.baljia.app. Uploads HTML to R2; the wildcard Worker serves it. Fast (≤3s), idempotent, no GitHub needed. Use this instead of render_create_service for any new founder-app landing deploy.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          html: { type: 'string' as const, description: 'Full HTML content of the landing page (UTF-8). Include <html>, <head>, <body>.' },
+          subdomain_override: { type: 'string' as const, description: 'Optional: override the company\'s configured subdomain. Usually omit — company.subdomain is used.' },
+        },
+        required: ['html'],
+      },
+    },
+    {
+      name: 'cf_verify_founder_app',
+      description: 'Verify a founder app is live by HTTP GET against https://{subdomain}.baljia.app. Returns status, elapsed ms, body snippet. Use after cf_deploy_landing to confirm live, or during diagnostics.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          subdomain_override: { type: 'string' as const, description: 'Optional: override the company\'s configured subdomain.' },
+        },
+      },
+    },
+    {
+      name: 'cf_delete_founder_app',
+      description: 'Remove the founder app from Cloudflare (deletes R2 asset). Use for teardown. Idempotent — succeeds even if asset is already gone.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          subdomain_override: { type: 'string' as const, description: 'Optional: override the company\'s configured subdomain.' },
+        },
+      },
+    },
+    // ──────────────────────────────────────────────
+    // RENDER — LEGACY (platform-internal services only; do NOT use for new founder-app deploys)
+    // ──────────────────────────────────────────────
     {
       name: 'render_create_service',
-      description: 'Create a new Render web service or static site from a GitHub repo.',
+      description: '[LEGACY — prefer cf_deploy_landing for founder-app deploys] Create a new Render web service or static site from a GitHub repo.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -464,6 +515,17 @@ export async function handleEngineeringTool(
     case 'github_delete_file':
       return githubDeleteFile(input, task.company_id);
 
+    // ── Cloudflare deploys (primary — ADR-002) ──
+    case 'cf_deploy_landing':
+      return cfDeployLanding(input, task.company_id);
+
+    case 'cf_verify_founder_app':
+      return cfVerifyFounderApp(input, task.company_id);
+
+    case 'cf_delete_founder_app':
+      return cfDeleteFounderApp(input, task.company_id);
+
+    // ── Render deploys (legacy — platform-internal only) ──
     case 'render_create_service':
       return renderCreateService(input, task.company_id);
 
@@ -1723,5 +1785,99 @@ async function renderListDatabases(input: Record<string, unknown>): Promise<stri
     return `## Render Databases (${data.length})\n${lines.join('\n')}`;
   } catch (err) {
     return `Render list databases error: ${err instanceof Error ? err.message : 'Unknown error'}`;
+  }
+}
+
+// ══════════════════════════════════════════════
+// CLOUDFLARE DEPLOY HANDLERS (ADR-002 primary path)
+// ══════════════════════════════════════════════
+
+/**
+ * Resolve the subdomain for a company from the DB, falling back to an override
+ * if the agent explicitly passed one. Errors loudly if neither exists — we
+ * never want to silently deploy to a wrong subdomain.
+ */
+async function resolveCompanySubdomain(companyId: string, override?: string): Promise<string> {
+  if (override && override.trim().length > 0) {
+    // Light validation — CF subdomain chars only
+    const clean = override.trim().toLowerCase();
+    if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(clean)) {
+      throw new Error(`Invalid subdomain override "${override}" — must be lowercase alphanumeric + hyphens`);
+    }
+    return clean;
+  }
+  const [company] = await db
+    .select({ subdomain: companies.subdomain })
+    .from(companies)
+    .where(eq(companies.id, companyId))
+    .limit(1);
+  if (!company?.subdomain) {
+    throw new Error(`Company ${companyId} has no subdomain configured. Set company.subdomain before deploying, or pass subdomain_override.`);
+  }
+  return company.subdomain;
+}
+
+async function cfDeployLanding(input: Record<string, unknown>, companyId: string): Promise<string> {
+  if (!isCloudflareDeployConfigured()) {
+    return 'Cloudflare deploy not configured. Set CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_ZONE_ID_APP, and R2_* env vars.';
+  }
+  const html = input.html as string;
+  if (typeof html !== 'string' || html.length === 0) {
+    return 'Missing required input: html (full HTML content).';
+  }
+  if (html.length > 5 * 1024 * 1024) {
+    return `HTML too large (${html.length} bytes). Max 5 MB per landing page.`;
+  }
+
+  try {
+    const subdomain = await resolveCompanySubdomain(companyId, input.subdomain_override as string | undefined);
+    const alreadyLive = await landingHtmlExists(subdomain);
+
+    const result = await uploadLandingHtml({ subdomain, html });
+    if (!result) return `Cloudflare landing deploy failed for ${subdomain} — check logs.`;
+
+    const note = alreadyLive ? ' (overwrote existing landing)' : '';
+    log.info('cf_deploy_landing succeeded', { companyId, subdomain, bytes: html.length, alreadyLive });
+    return `Landing deployed to Cloudflare!${note}\nURL: ${result.url}\nR2 key: ${result.key}\nBytes: ${html.length}\n\nVerify with cf_verify_founder_app.`;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Unknown error';
+    log.error('cf_deploy_landing failed', { companyId }, err);
+    return `Cloudflare landing deploy error: ${msg}`;
+  }
+}
+
+async function cfVerifyFounderApp(input: Record<string, unknown>, companyId: string): Promise<string> {
+  if (!isCloudflareDeployConfigured()) {
+    return 'Cloudflare deploy not configured — cannot verify.';
+  }
+  try {
+    const subdomain = await resolveCompanySubdomain(companyId, input.subdomain_override as string | undefined);
+    const result = await verifyFounderAppLive(subdomain);
+    if (!result) return `Verify failed: no response for ${subdomain}.baljia.app`;
+
+    const emoji = result.status === 200 ? '✅' : result.status === 0 ? '❌' : '⚠️';
+    const snippet = result.bodySnippet.replace(/\n/g, ' ').slice(0, 200);
+    return `${emoji} https://${subdomain}.baljia.app returned HTTP ${result.status} in ${result.elapsedMs}ms\nBody snippet: ${snippet}`;
+  } catch (err) {
+    return `Cloudflare verify error: ${err instanceof Error ? err.message : 'Unknown error'}`;
+  }
+}
+
+async function cfDeleteFounderApp(input: Record<string, unknown>, companyId: string): Promise<string> {
+  if (!isCloudflareDeployConfigured()) {
+    return 'Cloudflare deploy not configured — nothing to delete.';
+  }
+  try {
+    const subdomain = await resolveCompanySubdomain(companyId, input.subdomain_override as string | undefined);
+    const existed = await landingHtmlExists(subdomain);
+    if (!existed) return `No founder app found at ${subdomain} — nothing to delete.`;
+
+    const ok = await deleteLandingHtml(subdomain);
+    if (!ok) return `Delete failed for ${subdomain} — check logs.`;
+
+    log.info('cf_delete_founder_app succeeded', { companyId, subdomain });
+    return `Deleted founder app at ${subdomain}.baljia.app (R2 landing asset removed).`;
+  } catch (err) {
+    return `Cloudflare delete error: ${err instanceof Error ? err.message : 'Unknown error'}`;
   }
 }

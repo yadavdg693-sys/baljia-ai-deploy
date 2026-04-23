@@ -35,6 +35,11 @@
     ".next/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    "founder-app-worker",
+    "cf-workflow-poc",
+    "waitlist-site",
+    "dist",
+    ".open-next"
   ]
 }

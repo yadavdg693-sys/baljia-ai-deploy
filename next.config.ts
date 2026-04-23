@@ -15,14 +15,6 @@ const nextConfig: NextConfig = {
       },
     ],
   },
-  // SPIKE-ONLY: skip type-check during build to surface CF-specific issues
-  // without being blocked by pre-existing TS errors in scripts/
-  typescript: {
-    ignoreBuildErrors: true,
-  },
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
 };
 
 // Wrap with Sentry only when auth token is available (avoids build errors in dev)

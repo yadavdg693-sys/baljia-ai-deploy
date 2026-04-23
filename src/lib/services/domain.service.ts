@@ -90,6 +90,43 @@ async function cloudflareReplaceDNS(subdomain: string, target: string, type: 'CN
   return cloudflareCreateDNS(subdomain, target, type);
 }
 
+/**
+ * Wildcard-aware subdomain provisioner for Cloudflare Workers deploys (ADR-002).
+ *
+ * Unlike `provisionSubdomain` (which creates per-company DNS records pointing
+ * at a specific Render service), this function assumes a single wildcard
+ * `*.baljia.app` CNAME is already configured on the baljia.app zone and
+ * pointed at the founder-app Worker. Per-founder routing happens inside the
+ * Worker by reading the Host header.
+ *
+ * This function therefore just writes the subdomain to the company record.
+ * No CF API calls are required per-founder.
+ *
+ * Prerequisites (one-time, done out-of-band):
+ *   1. CNAME `*.baljia.app` → founder-app Worker (e.g. baljia-founder-apps.workers.dev)
+ *   2. Worker route `*.baljia.app/*` → founder-app-worker script
+ *   3. R2 bucket exists with founder-apps/ prefix
+ *
+ * Idempotent: safe to call twice with the same slug.
+ */
+export async function provisionWildcardSubdomain(
+  companyId: string,
+  slug: string,
+): Promise<{ domain: string; status: 'wildcard' } | null> {
+  const domain = `${slug}.baljia.app`;
+  try {
+    await db
+      .update(companies)
+      .set({ subdomain: slug, custom_domain: domain })
+      .where(eq(companies.id, companyId));
+    log.info('Wildcard subdomain provisioned', { companyId, domain });
+    return { domain, status: 'wildcard' };
+  } catch (error) {
+    log.error('Wildcard subdomain provisioning failed', { companyId, slug }, error);
+    return null;
+  }
+}
+
 export async function provisionSubdomain(companyId: string, slug: string, renderServiceId: string): Promise<{ domain: string; status: string } | null> {
   if (!isDomainServiceConfigured()) { log.warn('Domain service not configured', { slug }); return null; }
   const domain = `${slug}.baljia.app`;

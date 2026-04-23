@@ -1,0 +1,29 @@
+name = "baljia-founder-apps"
+main = "src/index.ts"
+compatibility_date = "2025-03-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Wildcard route — one Worker serves all founder subdomains. Shape 1 per ADR-002.
+# The route pattern is enabled at deploy time via `wrangler deploy`.
+routes = [
+  { pattern = "*.baljia.app/*", zone_name = "baljia.app" },
+]
+
+# R2 binding — Worker reads landing HTML from founder-apps/{subdomain}/index.html.
+# Matches the bucket created in Baljia's CF account.
+[[r2_buckets]]
+binding = "ASSETS"
+bucket_name = "baljia-assets"
+
+# Observability — stream logs to CF dashboard; Tail API can consume these.
+[observability]
+enabled = true
+
+# Platform lookup — short-lived JWT stamped at deploy time so the Worker can
+# call platform APIs (e.g. to log a view event). Populated via `wrangler secret put`.
+# PLATFORM_API_BASE: default = https://baljia.ai (platform base URL)
+# PLATFORM_API_TOKEN: deploy-time short-lived JWT (not required for v1.0 Tier 1)
+
+[vars]
+PLATFORM_API_BASE = "https://baljia.ai"
+LOG_LEVEL = "info"

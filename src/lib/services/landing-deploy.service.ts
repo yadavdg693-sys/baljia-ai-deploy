@@ -1,17 +1,29 @@
-// Landing Deploy Service — pushes the generated landing page to GitHub
-// and deploys it as a Render static site at {slug}.baljia.app.
+// Landing Deploy Service — pushes the generated landing page to the configured
+// deploy target and makes it live at {slug}.baljia.app.
+//
+// Per ADR-002 (split hosting): Cloudflare Workers + R2 is the PRIMARY target.
+// Render static sites remain as a LEGACY fallback for environments where CF is
+// not yet configured (dev, CI without CF creds). The primary `deployLandingPage`
+// function is tier-dispatching: it calls the CF path when configured, else falls
+// through to the legacy Render flow.
 //
 // Called from the onboarding pipeline AFTER generate_landing_page and BEFORE
 // send_welcome_email, so the welcome email's "Company website" link is live.
 //
-// Required env: GITHUB_TOKEN, GITHUB_ORG, RENDER_API_KEY, RENDER_OWNER_ID
-// Optional env: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ZONE_ID_APP (for subdomain swap)
+// Required env (CF primary):     CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID,
+//                                CLOUDFLARE_ZONE_ID_APP, R2_* (see cf-deploy.service)
+// Required env (Render legacy):  GITHUB_TOKEN, GITHUB_ORG, RENDER_API_KEY, RENDER_OWNER_ID
 //
-// Idempotent: if the company already has a render_service_id, this is a no-op.
+// Idempotent on both paths.
 
 import { db, companies } from '@/lib/db';
 import { eq } from 'drizzle-orm';
 import { provisionSubdomain } from '@/lib/services/domain.service';
+import {
+  uploadLandingHtml,
+  landingHtmlExists,
+  isCloudflareDeployConfigured,
+} from '@/lib/services/cf-deploy.service';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('LandingDeploy');
@@ -43,12 +55,27 @@ function githubOrg(): string {
   return process.env.GITHUB_ORG ?? 'baljia-ai';
 }
 
-export function isLandingDeployConfigured(): boolean {
+function isRenderLandingConfigured(): boolean {
   return !!(
     process.env.GITHUB_TOKEN &&
     process.env.RENDER_API_KEY &&
     process.env.RENDER_OWNER_ID
   );
+}
+
+/**
+ * Returns true if at least one deploy path (CF primary or Render legacy) is
+ * configured. Callers should check this before calling deployLandingPage.
+ */
+export function isLandingDeployConfigured(): boolean {
+  return isCloudflareDeployConfigured() || isRenderLandingConfigured();
+}
+
+/** Returns which deploy target will be used given current env. */
+export function getLandingDeployTarget(): 'cloudflare' | 'render' | 'none' {
+  if (isCloudflareDeployConfigured()) return 'cloudflare';
+  if (isRenderLandingConfigured()) return 'render';
+  return 'none';
 }
 
 interface DeployParams {
@@ -58,32 +85,124 @@ interface DeployParams {
   landingHtml: string;
 }
 
-interface DeployResult {
-  repo: string;
-  serviceId: string;
+export interface DeployResult {
+  /** Deploy target used */
+  target: 'cloudflare' | 'render';
+  /** Public URL of the live landing page */
   url: string;
+  /** CF R2 key (when target=cloudflare) */
+  r2Key?: string;
+  /** GitHub repo full name (when target=render; empty for cloudflare) */
+  repo?: string;
+  /** Render service ID (when target=render; empty for cloudflare) */
+  serviceId?: string;
 }
 
-export async function deployLandingPage(params: DeployParams): Promise<DeployResult | null> {
-  const { companyId, slug, companyName, landingHtml } = params;
+// ══════════════════════════════════════════════
+// PUBLIC ENTRY POINT
+// ══════════════════════════════════════════════
 
-  if (!isLandingDeployConfigured()) {
-    log.warn('Landing deploy not configured (missing GITHUB_TOKEN / RENDER_API_KEY / RENDER_OWNER_ID) — skipping', { slug });
+export async function deployLandingPage(params: DeployParams): Promise<DeployResult | null> {
+  const target = getLandingDeployTarget();
+
+  if (target === 'cloudflare') {
+    return deployLandingPageCF(params);
+  }
+  if (target === 'render') {
+    log.info('CF not configured — using Render legacy landing deploy', { slug: params.slug });
+    return deployLandingPageRender(params);
+  }
+
+  log.warn('Landing deploy not configured (neither CF nor Render) — skipping', { slug: params.slug });
+  return null;
+}
+
+// ══════════════════════════════════════════════
+// CLOUDFLARE PATH (primary, ADR-002)
+// ══════════════════════════════════════════════
+
+async function deployLandingPageCF(params: DeployParams): Promise<DeployResult | null> {
+  const { companyId, slug, landingHtml } = params;
+
+  // Idempotency: if the R2 asset already exists for this subdomain AND the company
+  // record already has this subdomain, treat as a no-op (return existing URL).
+  const [existing] = await db
+    .select({ subdomain: companies.subdomain })
+    .from(companies)
+    .where(eq(companies.id, companyId))
+    .limit(1);
+
+  const alreadyInDb = existing?.subdomain === slug;
+  const alreadyOnR2 = await landingHtmlExists(slug);
+
+  if (alreadyInDb && alreadyOnR2) {
+    log.info('CF landing already deployed — skipping', { companyId, slug });
+    return {
+      target: 'cloudflare',
+      url: `https://${slug}.baljia.app`,
+      r2Key: `founder-apps/${slug}/index.html`,
+    };
+  }
+
+  // 1. Upload HTML to R2
+  const upload = await uploadLandingHtml({ subdomain: slug, html: landingHtml });
+  if (!upload) {
+    log.error('CF landing upload failed', { companyId, slug });
     return null;
   }
 
+  // 2. Persist subdomain on company record (also flags "deployed" via presence)
+  await db
+    .update(companies)
+    .set({
+      subdomain: slug,
+      custom_domain: `${slug}.baljia.app`,
+    })
+    .where(eq(companies.id, companyId));
+
+  log.info('CF landing deployed', {
+    companyId,
+    slug,
+    url: upload.url,
+    r2Key: upload.key,
+    bytes: landingHtml.length,
+  });
+
+  return {
+    target: 'cloudflare',
+    url: upload.url,
+    r2Key: upload.key,
+  };
+}
+
+// ══════════════════════════════════════════════
+// RENDER PATH (legacy fallback — behavior preserved from previous implementation)
+// ══════════════════════════════════════════════
+
+async function deployLandingPageRender(params: DeployParams): Promise<DeployResult | null> {
+  const { companyId, slug, companyName, landingHtml } = params;
+
   // Idempotency: if company already has a Render service, don't redeploy
-  const [existing] = await db.select({
-    render_service_id: companies.render_service_id,
-    github_repo: companies.github_repo,
-  }).from(companies).where(eq(companies.id, companyId)).limit(1);
+  const [existing] = await db
+    .select({
+      render_service_id: companies.render_service_id,
+      github_repo: companies.github_repo,
+    })
+    .from(companies)
+    .where(eq(companies.id, companyId))
+    .limit(1);
 
   if (existing?.render_service_id) {
-    log.info('Landing already deployed — skipping', { companyId, slug, serviceId: existing.render_service_id });
+    log.info('Render landing already deployed — skipping', {
+      companyId,
+      slug,
+      serviceId: existing.render_service_id,
+    });
     return {
+      target: 'render',
+      url: `https://${slug}.baljia.app`,
       repo: existing.github_repo ?? `${githubOrg()}/${slug}-site`,
       serviceId: existing.render_service_id,
-      url: `https://${slug}.baljia.app`,
     };
   }
 
@@ -111,12 +230,11 @@ export async function deployLandingPage(params: DeployParams): Promise<DeployRes
   }
   log.info('GitHub repo ready', { repoFullName, status: createRes.status });
 
-  // 2. Push index.html (PUT contents — handles create + update via SHA)
+  // 2. Push index.html
   const pushOk = await pushFile(repoFullName, 'index.html', landingHtml, 'Initial landing page from onboarding');
   if (!pushOk) return null;
 
-  // 3. Push a minimal render.yaml so Render knows this is a static site with no build
-  // (also makes the repo self-describing for future engineering-agent edits)
+  // 3. Push minimal render.yaml
   const renderYaml = [
     'services:',
     `  - type: web`,
@@ -128,7 +246,7 @@ export async function deployLandingPage(params: DeployParams): Promise<DeployRes
   ].join('\n');
   await pushFile(repoFullName, 'render.yaml', renderYaml, 'Add render.yaml for static deploy');
 
-  // 4. Create Render static site service pointing at the repo
+  // 4. Create Render static site service
   const serviceRes = await fetch(`${RENDER_API}/services`, {
     method: 'POST',
     headers: renderHeaders(),
@@ -139,8 +257,8 @@ export async function deployLandingPage(params: DeployParams): Promise<DeployRes
       repo: `https://github.com/${repoFullName}`,
       branch: 'main',
       autoDeploy: 'yes',
-      buildCommand: ':',          // POSIX no-op — pure static HTML, no build step
-      staticPublishPath: './',    // serve index.html from repo root
+      buildCommand: ':',
+      staticPublishPath: './',
     }),
   });
 
@@ -150,10 +268,7 @@ export async function deployLandingPage(params: DeployParams): Promise<DeployRes
     return null;
   }
 
-  const serviceData = (await serviceRes.json()) as {
-    service?: { id?: string };
-    id?: string;
-  };
+  const serviceData = (await serviceRes.json()) as { service?: { id?: string }; id?: string };
   const serviceId = serviceData.service?.id ?? serviceData.id;
   if (!serviceId) {
     log.error('Render returned no service ID', { repoName });
@@ -161,12 +276,12 @@ export async function deployLandingPage(params: DeployParams): Promise<DeployRes
   }
 
   // 5. Save IDs to company record
-  await db.update(companies)
+  await db
+    .update(companies)
     .set({ github_repo: repoFullName, render_service_id: serviceId })
     .where(eq(companies.id, companyId));
 
-  // 6. Re-attach subdomain: swap parking CNAME → real Render service
-  // provisionSubdomain handles the DNS replace + Render custom-domain add
+  // 6. Re-attach subdomain
   let url = `https://${slug}.baljia.app`;
   try {
     const result = await provisionSubdomain(companyId, slug, serviceId);
@@ -179,18 +294,22 @@ export async function deployLandingPage(params: DeployParams): Promise<DeployRes
     });
   }
 
-  log.info('Landing page deployed', { companyId, slug, repo: repoFullName, serviceId, url });
-  return { repo: repoFullName, serviceId, url };
+  log.info('Render landing page deployed', { companyId, slug, repo: repoFullName, serviceId, url });
+  return {
+    target: 'render',
+    url,
+    repo: repoFullName,
+    serviceId,
+  };
 }
 
-// ──────────────────────────────────────────────
+// ══════════════════════════════════════════════
 // Internal: push a file to GitHub (create or update via SHA)
-// ──────────────────────────────────────────────
+// ══════════════════════════════════════════════
 
 async function pushFile(repoFullName: string, path: string, content: string, message: string): Promise<boolean> {
   const headers = githubHeaders();
 
-  // Get SHA if file exists (needed for update)
   let sha: string | undefined;
   const existingRes = await fetch(
     `${GITHUB_API}/repos/${repoFullName}/contents/${encodeURIComponent(path)}?ref=main`,

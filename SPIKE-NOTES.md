@@ -7,7 +7,79 @@
 
 ---
 
-## TL;DR (updated end of Day 1)
+## 🚦 Final decision (2026-04-24): ADR-002 Split Hosting
+
+After Day-1 validation confirmed CF is technically viable, a Phase-0 audit surfaced real platform-side rewrites (ioredis TCP, `pg_try_advisory_lock`, `@sentry/nextjs` ALS, `worker-launcher` → Workflows port) that would cost 6-10 days of work in the highest-risk code paths 1-2 months from launch.
+
+**Decision:** [ADR-002 Split Hosting](docs/adr-002-split-hosting-strategy.md) — platform stays on Render, founder apps (`*.baljia.app`) ship on CF Workers. Captures ~96% of the cost win with ~30% of the migration risk.
+
+**What gets built on this branch going forward:**
+- `cf-deploy.service.ts` — Engineering agent's CF API client (Workers Scripts + DNS + R2 + Secrets)
+- Wildcard Worker template for founder apps (`*.baljia.app`, Host-header routed)
+- Rewrites of `engineering.tools.ts` deploy tools and `landing-deploy.service.ts` to target CF
+- `domain.service.ts` wildcard refactor
+
+**What gets parked (deferred to v1.5):**
+- Full platform migration (everything under Phases 0-3 of `baljia-ai/docs/cf-migration-plan.md`)
+- ioredis → Upstash HTTP swap in `src/lib/redis.ts`
+- `pg_try_advisory_lock` → Redis SETNX in `night-shift.service.ts`
+- `@sentry/nextjs` → `@sentry/cloudflare` on the platform
+- `worker-launcher.ts` → Workflows v2 port (POC validated, implementation parked)
+
+**What's preserved as prepaid R&D for v1.5:**
+- `cf-workflow-poc/` — validated Workflows v2 crash-recovery with real Gemini calls
+- Neon HTTP refactors in `data.tools.ts` + `engineering.tools.ts`
+- `wrangler.toml` + `open-next.config.ts` + `next.config.ts` hardening
+- Bundle-size discipline (3.2 MiB gzipped, 68% headroom proven)
+
+---
+
+## ✅ Split-hosting build complete (2026-04-24)
+
+All 18 items on the execution todo list closed. Work stayed 100% inside `baljia-ai-cf/` worktree — confirmed zero commits to main during this session (last main commit `787357a` is 2 days old, pre-session).
+
+### What shipped on `cloudflare-spike`
+
+**New files:**
+- `docs/adr-002-split-hosting-strategy.md` — 430-line decision doc
+- `docs/cf-founder-app-runbook.md` — operational runbook
+- `src/lib/services/cf-deploy.service.ts` — 355-line CF API client (R2 + Workers Scripts + Routes + Secrets)
+- `founder-app-worker/` — standalone wildcard Worker project
+  - `src/index.ts` — 248-line Worker: Host routing, Tier 1 R2 serve, static assets, branded 404/error pages
+  - `wrangler.toml` — R2 binding, wildcard route, observability
+  - `package.json` + `tsconfig.json` + `test-parser.mjs` (25/25 unit tests pass)
+
+**Modified files (in-place, additive where possible):**
+- `src/lib/services/landing-deploy.service.ts` — rewrote as CF-first dispatcher with Render legacy fallback; retains full idempotency on both paths
+- `src/lib/services/domain.service.ts` — added `provisionWildcardSubdomain()` (no per-founder DNS needed for wildcard design)
+- `src/lib/agents/tools/engineering.tools.ts` — added 3 CF tools (`cf_deploy_landing`, `cf_verify_founder_app`, `cf_delete_founder_app`) with handlers; existing Render tools marked `[LEGACY]` in descriptions but kept for rollback
+- `tsconfig.json` — excluded `founder-app-worker`, `cf-workflow-poc`, `waitlist-site`, `dist`, `.open-next` from root type-check (each has its own tsconfig)
+
+### Verification results
+
+| Check | Result |
+|---|---|
+| `tsc --noEmit` on platform tree | **0 errors** introduced by this work (1 pre-existing error in `storage.service.ts` from initial commit — not touched) |
+| `wrangler deploy --dry-run` on founder-app-worker | **Pass** — 27.73 KiB / 7.14 KiB gzipped, bindings resolved (R2 ASSETS, PLATFORM_API_BASE, LOG_LEVEL) |
+| `parseSubdomain()` unit tests | **25 / 25 passed** (normal subdomains, uppercase, port-stripping, multi-level rejection, invalid chars, reserved subdomains) |
+| Main folder audit (`git status`, `git log`) | **Untouched** — zero commits since start of session |
+| Idempotency review of `cf-deploy.service.ts` | Every mutating function is safe to call twice (R2 overwrites, routes dedupe by pattern, secrets replace) |
+
+### Known limitation flagged
+
+**Miniflare local-dev Host rewrite:** `wrangler dev --local` rewrites the `Host` header when wildcard routes are declared. This prevents straightforward `curl -H "Host: acme.baljia.app"` smoke tests from localhost. Production behavior (CF edge → Worker) passes Host through correctly — confirmed by Day-1 spike deploying 8 endpoints to real Workers. Workaround: use the unit tests (`test-parser.mjs`) for local logic validation, `wrangler dev --remote` for integration against real CF preview.
+
+### Not done in this session (intentional — gated on Workers Paid upgrade)
+
+- `npx wrangler deploy` on `founder-app-worker` to push to CF edge — requires Workers Paid ($5/mo)
+- Real `*.baljia.app` wildcard CNAME creation in CF dashboard
+- End-to-end live test with real DNS
+
+These are captured in `docs/cf-founder-app-runbook.md` §2 as one-time setup, to run immediately after $5/mo upgrade.
+
+---
+
+## TL;DR (Day 1 findings — historical, superseded by above)
 
 **✅ Bundle fits. ✅ Runtime works. CF is viable.** All four Day 1 checks passed. Confidence CF works for Baljia jumped from ~40% to ~90% in one session. Only remaining risks are structural (worker-launcher refactor to Workflows) not compatibility. Estimated migration work remaining: 6-8 days.
 
