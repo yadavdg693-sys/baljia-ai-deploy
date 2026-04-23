@@ -302,14 +302,12 @@ ${Object.entries(eventCounts).map(([t, c]) => `- ${t}: ${c}`).join('\n') || 'No 
       if (!dbInfo.connectionUri) return 'Product database exists but connection URI not available.';
 
       try {
-        const { Pool } = await import('pg');
-        const pool = new Pool({ connectionString: dbInfo.connectionUri, ssl: { rejectUnauthorized: false }, statement_timeout: 10000 });
-        try {
-          const result = await pool.query(querySql);
-          const rows = result.rows ?? [];
-          if (rows.length === 0) return 'Query returned 0 rows.';
-          return `Query returned ${rows.length} rows:\n${JSON.stringify(rows.slice(0, 50), null, 2)}${rows.length > 50 ? '\n... (first 50 shown)' : ''}`;
-        } finally { await pool.end(); }
+        // CF-compat: use Neon HTTP driver (edge-compatible via fetch, no TCP pg)
+        const { neon } = await import('@neondatabase/serverless');
+        const sql = neon(dbInfo.connectionUri);
+        const rows = (await sql.query(querySql)) as Record<string, unknown>[];
+        if (rows.length === 0) return 'Query returned 0 rows.';
+        return `Query returned ${rows.length} rows:\n${JSON.stringify(rows.slice(0, 50), null, 2)}${rows.length > 50 ? '\n... (first 50 shown)' : ''}`;
       } catch (err) {
         return `Product DB query failed: ${err instanceof Error ? err.message : 'Unknown error'}`;
       }

@@ -1292,30 +1292,21 @@ async function handleRunMigration(input: Record<string, unknown>, companyId: str
 
     // Connect directly to the main branch and run migration
     // In production, we'd branch-test-merge, but for v1 direct execution is acceptable
-    const { Pool } = await import('pg');
-    const pool = new Pool({
-      connectionString: dbInfo.connectionUri,
-      ssl: { rejectUnauthorized: false },
-      connectionTimeoutMillis: 10000,
-      statement_timeout: 30000, // 30s max per statement
-    });
+    // CF-compat: use Neon HTTP driver (edge-compatible via fetch, no TCP pg)
+    const { neon } = await import('@neondatabase/serverless');
+    const neonSql = neon(dbInfo.connectionUri);
+    const result = await neonSql.query(sql);
+    const rowCount = Array.isArray(result) ? result.length : 0;
 
-    try {
-      const result = await pool.query(sql);
-      const rowCount = result.rowCount ?? 0;
+    log.info('Migration completed', { companyId, description, rowCount });
 
-      log.info('Migration completed', { companyId, description, rowCount });
-
-      return [
-        `✅ Migration successful: "${description}"`,
-        `Rows affected: ${rowCount}`,
-        `SQL executed: ${sql.substring(0, 200)}${sql.length > 200 ? '...' : ''}`,
-        '',
-        'Use query_company_db to verify the schema.',
-      ].join('\n');
-    } finally {
-      await pool.end();
-    }
+    return [
+      `✅ Migration successful: "${description}"`,
+      `Rows affected: ${rowCount}`,
+      `SQL executed: ${sql.substring(0, 200)}${sql.length > 200 ? '...' : ''}`,
+      '',
+      'Use query_company_db to verify the schema.',
+    ].join('\n');
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
     log.error('Migration failed', { companyId, description, error: msg });
@@ -1342,25 +1333,15 @@ async function handleQueryCompanyDb(input: Record<string, unknown>, companyId: s
   if (!dbInfo.connectionUri) return 'Database connection URI not available.';
 
   try {
-    const { Pool } = await import('pg');
-    const pool = new Pool({
-      connectionString: dbInfo.connectionUri,
-      ssl: { rejectUnauthorized: false },
-      connectionTimeoutMillis: 10000,
-      statement_timeout: 10000, // 10s max for reads
-    });
+    // CF-compat: use Neon HTTP driver (edge-compatible via fetch, no TCP pg)
+    const { neon } = await import('@neondatabase/serverless');
+    const neonSql = neon(dbInfo.connectionUri);
+    const rows = (await neonSql.query(sql)) as Record<string, unknown>[];
 
-    try {
-      const result = await pool.query(sql);
-      const rows = result.rows ?? [];
+    if (rows.length === 0) return 'Query returned 0 rows.';
 
-      if (rows.length === 0) return 'Query returned 0 rows.';
-
-      const truncated = rows.slice(0, 50);
-      return `Query returned ${rows.length} rows:\n${JSON.stringify(truncated, null, 2)}${rows.length > 50 ? '\n... (showing first 50)' : ''}`;
-    } finally {
-      await pool.end();
-    }
+    const truncated = rows.slice(0, 50);
+    return `Query returned ${rows.length} rows:\n${JSON.stringify(truncated, null, 2)}${rows.length > 50 ? '\n... (showing first 50)' : ''}`;
   } catch (err) {
     return `Query failed: ${err instanceof Error ? err.message : 'Unknown error'}`;
   }

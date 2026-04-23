@@ -22,7 +22,7 @@ async function main() {
 
   // Credits (sum the ledger)
   const ledger = await db.select().from(creditLedger).where(eq(creditLedger.company_id, company.id));
-  const balance = ledger.reduce((sum, e) => sum + (e.delta ?? 0), 0);
+  const balance = ledger.reduce((sum, e) => sum + (e.amount ?? 0), 0);
   console.log('  credit balance:', balance);
 
   const companyTasks = await db.select().from(tasks)

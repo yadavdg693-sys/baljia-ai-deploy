@@ -54,3 +54,7 @@ implementation_plan_gap*
 
 # archived non-core material (mockups, old specs, parked code)
 /excluded/
+.dev.vars
+.open-next/
+.wrangler/
+dist/

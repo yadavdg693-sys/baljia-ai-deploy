@@ -1,0 +1,12 @@
+# SPIKE wrangler.toml for Baljia Cloudflare bundle size test
+# NOT production config — just enough to make opennextjs-cloudflare build run
+# so we can measure the worker bundle size vs CF's 10 MiB gzipped cap.
+
+name = "baljia-cf-spike"
+compatibility_date = "2025-03-01"
+compatibility_flags = ["nodejs_compat"]
+main = ".open-next/worker.js"
+
+[assets]
+directory = ".open-next/assets"
+binding = "ASSETS"
