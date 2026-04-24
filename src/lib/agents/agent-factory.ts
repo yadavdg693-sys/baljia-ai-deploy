@@ -1346,7 +1346,22 @@ async function runWithClaude(
   if (isBedrockAvailable() && !isDirectAnthropicAvailable()) {
     const AnthropicBedrock = require('@anthropic-ai/bedrock-sdk').default;
     const region = process.env.AWS_BEDROCK_REGION || process.env.AWS_REGION || 'us-east-1';
-    anthropic = new AnthropicBedrock({ awsRegion: region }) as unknown as Anthropic;
+    const apiKey = process.env.AWS_BEDROCK_API_KEY;
+    // Use Bearer-auth long-term API key (ABSK... format) instead of AWS SigV4.
+    // The previous `new AnthropicBedrock({ awsRegion })` call fell through to the
+    // default AWS credential chain and failed with CredentialsProviderError
+    // when no AWS_* env vars were set. Bedrock long-term keys bypass that
+    // entirely — see scripts/test-bedrock.ts for the reference client shape.
+    if (apiKey && apiKey.startsWith('ABSK')) {
+      anthropic = new AnthropicBedrock({
+        awsRegion: region,
+        baseURL: `https://bedrock-runtime.${region}.amazonaws.com`,
+        defaultHeaders: { Authorization: `Bearer ${apiKey}` },
+        skipAuth: true,
+      }) as unknown as Anthropic;
+    } else {
+      anthropic = new AnthropicBedrock({ awsRegion: region }) as unknown as Anthropic;
+    }
     if (modelId === CLAUDE_MODEL_SONNET) modelId = process.env.AWS_BEDROCK_MODEL_ID || 'us.anthropic.claude-sonnet-4-20250514-v1:0';
     if (modelId === CLAUDE_MODEL_HAIKU) modelId = process.env.AWS_BEDROCK_HAIKU_MODEL_ID || 'us.anthropic.claude-haiku-4-5-20251001-v1:0';
   } else {
