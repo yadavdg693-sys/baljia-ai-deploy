@@ -32,29 +32,27 @@ export interface ActivityLine {
   timestamp: number;
 }
 
-// Stage order — rendered as a checklist during onboarding. Note that different
-// journeys hit slightly different stages (Build/Grow skip the full personal
-// enrichment; Surprise Me hits all of them). Stages not reached are simply shown
-// as pending.
+// Stage order — rendered as a checklist during onboarding. Different journeys
+// hit different idea-processing stages: Build → refine_idea, Grow →
+// fetch_business_url, Surprise → extract_founder_angle + invent_idea. Stages
+// not reached by a specific journey simply stay pending in the UI.
+// Kept in sync with OnboardingStage in src/lib/services/onboarding/types.ts
+// (generate_roadmap + derive_active_milestone + enrich_twitter + select_strategy
+// removed from the pipeline 2026-04-24).
 const STAGE_ORDER = [
   'heartbeat',
   'enrich_geo',
-  'enrich_linkedin',
-  'enrich_twitter',
-  'extract_founder_angle',
+  'extract_founder_angle',     // Surprise Me only
   'persist_context',
-  'select_strategy',
-  'refine_idea',
-  'fetch_business_url',
-  'invent_idea',
+  'refine_idea',                // Build only
+  'fetch_business_url',         // Grow only
+  'invent_idea',                // Surprise Me only
   'name_company',
   'provision_infrastructure',
   'provision_founder_app_kickoff',
   'send_startup_email',
   'generate_market_research',
   'save_mission',
-  'generate_roadmap',
-  'derive_active_milestone',
   'create_starter_tasks',
   'generate_landing_page',
   'post_launch_tweet',

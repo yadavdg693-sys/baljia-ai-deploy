@@ -9,15 +9,13 @@ import { db, companies, platformEvents } from '@/lib/db';
 import { eq, and, inArray, gt, asc } from 'drizzle-orm';
 
 // Stage labels shown in the UI — kept in sync with OnboardingStage in
-// src/lib/services/onboarding/types.ts
+// src/lib/services/onboarding/types.ts. generate_roadmap, derive_active_milestone,
+// enrich_twitter, select_strategy removed from pipeline 2026-04-24.
 const STAGE_LABELS: Record<string, string> = {
   heartbeat: 'Starting up...',
   enrich_geo: 'Detecting your location...',
-  enrich_linkedin: 'Reading your professional background...',
-  enrich_twitter: 'Reading your public profile...',
   extract_founder_angle: 'Analyzing your positioning...',
   persist_context: 'Saving context...',
-  select_strategy: 'Choosing strategy...',
   refine_idea: 'Refining your idea...',
   fetch_business_url: 'Reading your business site...',
   invent_idea: 'Inventing an idea from your background...',
@@ -32,6 +30,8 @@ const STAGE_LABELS: Record<string, string> = {
   generate_landing_page: 'Generating your landing page...',
   post_launch_tweet: 'Posting launch announcement...',
   generate_ceo_summary: 'Preparing CEO briefing...',
+  generate_magic_link: 'Generating dashboard link...',
+  send_inbox_message: 'Sending welcome note...',
   send_completion_email: 'Sending your summary email...',
   flush_diagnostics: 'Finalizing setup...',
   celebrate: 'Ready!',
