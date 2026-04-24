@@ -89,12 +89,16 @@ export async function enrichGeoIP(ip: string | null): Promise<FounderGeoData | n
 export async function enrichLinkedIn(founderName: string): Promise<string | null> {
   if (!isTavilyAvailable()) return null;
   try {
-    const [linkedinResult, professionalResult] = await Promise.all([
-      tavilySearchText(`site:linkedin.com/in "${founderName}"`, 3, 'advanced'),
-      tavilySearchText(`"${founderName}" founder CEO startup experience background`, 3, 'advanced'),
-    ]);
+    // Single richer query — merges what used to be two separate calls
+    // (LinkedIn-site-restricted + open founder/CEO background). Tavily's OR
+    // syntax returns a merged result set so we lose nothing; we save 1 Tavily
+    // call and the wall-clock for the slower of the two.
+    const raw = await tavilySearchText(
+      `site:linkedin.com/in "${founderName}" OR "${founderName}" founder CEO startup experience background`,
+      5,
+      'advanced',
+    );
 
-    const raw = [linkedinResult, professionalResult].filter(Boolean).join('\n\n');
     if (!raw || raw.length < 50) return null;
 
     const profile = await callSmallLLM(

@@ -1,10 +1,47 @@
 // Tavily API client with round-robin key rotation
 // Keys are loaded from TAVILY_API_KEYS (comma-separated) with TAVILY_API_KEY as fallback.
 // Each request picks the next key in the pool, distributing load across all keys.
+//
+// Redis-backed result cache (24h TTL) on `tavilySearchText` dedupes repeat
+// queries across founders and retests. Cache misses fall through transparently;
+// Redis unavailability is never fatal.
 
+import { createHash } from 'crypto';
 import { createLogger } from '@/lib/logger';
+import { getRedis } from '@/lib/redis';
 
 const log = createLogger('Tavily');
+
+const CACHE_PREFIX = 'tavily:v1:';
+const CACHE_TTL_SECONDS = 24 * 60 * 60; // 24h
+
+function cacheKeyFor(query: string, maxResults: number, searchDepth: 'basic' | 'advanced'): string {
+  // Include search parameters so different depth/max_results get separate cache entries
+  const payload = JSON.stringify({ q: query.trim().toLowerCase(), n: maxResults, d: searchDepth });
+  const hash = createHash('sha256').update(payload).digest('hex').slice(0, 24);
+  return `${CACHE_PREFIX}${hash}`;
+}
+
+async function cacheGet(key: string): Promise<string | null> {
+  const redis = getRedis();
+  if (!redis) return null;
+  try {
+    return await redis.get(key);
+  } catch (err) {
+    log.warn('Tavily cache GET failed', { key, error: err instanceof Error ? err.message : 'unknown' });
+    return null;
+  }
+}
+
+async function cacheSet(key: string, value: string): Promise<void> {
+  const redis = getRedis();
+  if (!redis) return;
+  try {
+    await redis.set(key, value, 'EX', CACHE_TTL_SECONDS);
+  } catch (err) {
+    log.warn('Tavily cache SET failed', { key, error: err instanceof Error ? err.message : 'unknown' });
+  }
+}
 
 let keys: string[] = [];
 let keyIndex = 0;
@@ -134,12 +171,25 @@ export async function tavilySearch(opts: TavilySearchOptions): Promise<TavilyRes
 /**
  * Convenience: search and return a formatted text summary.
  * Used by onboarding and CEO tool handlers.
+ *
+ * Redis cache: key = sha256(query + params), TTL 24h. Cache is checked before
+ * hitting Tavily; cache misses fall through and populate on success. Null
+ * results are NOT cached (treated as transient failures).
  */
 export async function tavilySearchText(
   query: string,
   maxResults = 5,
   searchDepth: 'basic' | 'advanced' = 'advanced',
 ): Promise<string | null> {
+  const cacheKey = cacheKeyFor(query, maxResults, searchDepth);
+
+  // Cache check
+  const cached = await cacheGet(cacheKey);
+  if (cached !== null) {
+    log.info('Tavily cache HIT', { query: query.slice(0, 80), bytes: cached.length });
+    return cached || null;  // empty string in cache = "confirmed no results"
+  }
+
   try {
     const data = await tavilySearch({ query, maxResults, searchDepth });
 
@@ -153,7 +203,15 @@ export async function tavilySearchText(
           .join('\n')
       );
     }
-    return parts.join('\n\n').slice(0, 2500) || null;
+    const text = parts.join('\n\n').slice(0, 2500) || null;
+
+    // Cache the result (only non-null — null may be transient). Empty strings
+    // are fine to cache as "confirmed no results".
+    if (text !== null) {
+      await cacheSet(cacheKey, text);
+      log.info('Tavily cache SET', { query: query.slice(0, 80), bytes: text.length });
+    }
+    return text;
   } catch (err) {
     log.warn('Tavily search error', {
       query: query.slice(0, 80),
