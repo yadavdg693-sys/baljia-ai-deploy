@@ -78,8 +78,6 @@ export async function runOnboardingPipeline(
     oneLiner: '',
     mission: '',
     marketResearch: null,
-    activeMilestoneTitle: null,
-    activeMilestoneTags: [],
     startedAt: Date.now(),
   };
 

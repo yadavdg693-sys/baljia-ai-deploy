@@ -14,8 +14,6 @@ import { proofGroup } from '../shared/proof-group';
 import type { OnboardingStrategy } from './base.strategy';
 import type { PipelineContext } from '../types';
 
-// Note: roadmapGroup disconnected 2026-04-24 — see build-idea.strategy.ts for context.
-
 export class SurpriseMeStrategy implements OnboardingStrategy {
   async run(ctx: PipelineContext): Promise<void> {
     await fullHeader(ctx);

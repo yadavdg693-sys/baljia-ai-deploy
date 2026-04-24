@@ -20,8 +20,6 @@ export type OnboardingStage =
   | 'send_startup_email'
   | 'generate_market_research'
   | 'save_mission'
-  | 'generate_roadmap'
-  | 'derive_active_milestone'
   | 'create_starter_tasks'
   | 'generate_landing_page'
   | 'post_launch_tweet'
@@ -198,10 +196,6 @@ export interface PipelineContext {
   missionDoc?: MissionDoc;
   marketResearch: string | null;       // rendered markdown (legacy shape, for pre-Phase-3a stages)
   marketResearchJson?: MarketResearchResult; // structured per-journey JSON (Phase 3a)
-
-  // Roadmap derivatives
-  activeMilestoneTitle: string | null;
-  activeMilestoneTags: string[];
 
   // Diagnostics
   startedAt: number;

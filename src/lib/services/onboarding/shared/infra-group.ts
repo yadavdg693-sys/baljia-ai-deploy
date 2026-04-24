@@ -3,9 +3,9 @@
 // Phase 6 adds provision_founder_app_kickoff as a near-instant stage that fires
 // Neon DB + GitHub repo creation promises and returns in ~100ms. Those promises
 // continue resolving in the background while the rest of the pipeline (market
-// research, mission, roadmap, tasks, landing) runs — their ~90s combined wall
-// time hides the ~20s Neon creation. The await_founder_app stage in proof-group
-// collects the results before celebrate.
+// research, mission, tasks, landing) runs — their combined wall time hides
+// the ~20s Neon creation. The await_founder_app stage in proof-group collects
+// the results before celebrate.
 
 import { stage } from '../stage-runner';
 import { nameCompany } from './naming';

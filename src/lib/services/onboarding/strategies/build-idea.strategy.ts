@@ -11,12 +11,6 @@ import { proofGroup } from '../shared/proof-group';
 import type { OnboardingStrategy } from './base.strategy';
 import type { PipelineContext } from '../types';
 
-// Note: roadmapGroup (generate_roadmap + derive_active_milestone) disconnected
-// 2026-04-24 — roadmap code remains at src/lib/services/roadmap.service.ts and
-// src/lib/services/onboarding/shared/roadmap-group.ts for future decision. No
-// call sites remain from onboarding. The dashboard RoadmapRail will show empty
-// for new companies until a separate roadmap-generation surface is defined.
-
 export class BuildIdeaStrategy implements OnboardingStrategy {
   async run(ctx: PipelineContext): Promise<void> {
     await leanHeader(ctx);
