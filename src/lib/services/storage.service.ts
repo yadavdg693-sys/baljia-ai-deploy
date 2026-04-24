@@ -139,8 +139,12 @@ export async function downloadFile(key: string): Promise<{ content: Buffer; cont
     if (!response.Body) return null;
 
     const chunks: Uint8Array[] = [];
-    // @ts-expect-error — Body is a Readable stream
-    for await (const chunk of response.Body) {
+    // AWS SDK v3 Body is a ReadableStream on Node18+ and is async-iterable.
+    // We cast to the iterable shape; SDK types mark Body as a union that
+    // includes non-iterable types (Blob on browsers), but at runtime on
+    // Node it's always iterable.
+    const body = response.Body as AsyncIterable<Uint8Array>;
+    for await (const chunk of body) {
       chunks.push(chunk);
     }
 

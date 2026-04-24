@@ -1,0 +1,4 @@
+# Copy this file to .dev.vars (same dir) and fill in the key.
+# .dev.vars is in .gitignore — never commit real keys.
+# Get a Gemini key: https://aistudio.google.com/app/apikey
+GEMINI_API_KEY=your_gemini_key_here

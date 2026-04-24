@@ -7,10 +7,20 @@ compatibility_date = "2025-03-01"
 compatibility_flags = ["nodejs_compat"]
 main = "worker.ts"
 
-# LOCAL ONLY — for spike POC. In production, use `wrangler secret put GEMINI_API_KEY`.
-# wrangler dev ignores .dev.vars for Workflow env — must use [vars] for local test.
-[vars]
-GEMINI_API_KEY = "AIzaSyDQ0qjxfcceIfm6_qG9MbkkwDuCxKEjzrg"
+# GEMINI_API_KEY is provided at runtime via wrangler secret (production) or
+# a local .dev.vars file (ignored by git). Do NOT commit the key here.
+#
+# Local dev setup:
+#   1. Copy cf-workflow-poc/.dev.vars.example → cf-workflow-poc/.dev.vars
+#   2. Paste your Gemini key into .dev.vars (not tracked — see ../.gitignore)
+#   3. Run `wrangler dev` from this folder
+#
+# Production deploy:
+#   wrangler secret put GEMINI_API_KEY
+#
+# The historical [vars] GEMINI_API_KEY committed to earlier spike commits was
+# rotated on 2026-04-24 per AUDIT_FINDINGS.md #F1. If you are reviewing git
+# history, that key is no longer valid.
 
 [[workflows]]
 name = "agent-execution"
