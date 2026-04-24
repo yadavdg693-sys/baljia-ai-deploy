@@ -9,9 +9,17 @@ import { BaljiaMascot } from '@/components/mascot/BaljiaMascot';
 
 interface ChatPanelProps {
   companyId: string;
+  warnings?: string[];
 }
 
-export function ChatPanel({ companyId }: ChatPanelProps) {
+const HOW_IT_WORKS_STEPS = [
+  'Tell the CEO what you want done — in plain English.',
+  'The CEO scopes it, quotes credits, and proposes a task.',
+  'You approve — workers execute, verify, and report back.',
+  'Chat is always free. Only task execution costs credits.',
+];
+
+export function ChatPanel({ companyId, warnings = [] }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessageType[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingText, setStreamingText] = useState('');
@@ -151,20 +159,42 @@ export function ChatPanel({ companyId }: ChatPanelProps) {
 
       {/* Messages area */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+        {/* Warnings — always visible at the top of the rail when present */}
+        {warnings.length > 0 && (
+          <div className="space-y-1.5">
+            {warnings.map((w) => (
+              <div
+                key={w}
+                className="flex items-start gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-xs text-amber-200"
+              >
+                <span aria-hidden="true" className="mt-0.5 text-amber-400">⚠</span>
+                <span className="leading-snug">{w}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
         {isEmpty && (
-          <div className="flex-1 flex items-center justify-center h-full">
-            <div className="text-center px-4">
+          <div className="flex flex-col gap-4">
+            <div className="text-center pt-2">
               <BaljiaMascot
                 status={{ state: 'listening', label: 'Ready', detail: '' }}
                 size="chat"
                 showLabel={false}
                 showDetail={false}
               />
-              <p className="text-text-muted text-xs mt-3">
-                Chat with your AI CEO to plan tasks, check progress, and get strategic guidance.
-              </p>
-              <p className="text-text-muted text-xs mt-1 opacity-60">
-                Chatting is always free. Only task execution costs credits.
+            </div>
+            <div className="rounded-lg border border-border-default bg-surface-secondary/40 p-3">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">
+                How it works
+              </h3>
+              <ol className="list-decimal list-inside space-y-1.5 text-xs text-text-secondary leading-relaxed marker:text-baljia-gold marker:font-semibold">
+                {HOW_IT_WORKS_STEPS.map((step) => (
+                  <li key={step}>{step}</li>
+                ))}
+              </ol>
+              <p className="text-[11px] text-text-muted mt-2 pt-2 border-t border-border-subtle">
+                Each task = 1 credit &middot; up to 4 hours of work per run.
               </p>
             </div>
           </div>

@@ -79,6 +79,20 @@ export function DashboardShell({
     (company as unknown as { company_email?: string | null; email_identity?: string | null }).company_email
     ?? (company as unknown as { company_email?: string | null; email_identity?: string | null }).email_identity
     ?? null;
+
+  // Warnings surfaced in the CEO rail — derived from current company state
+  const chatWarnings: string[] = [];
+  if (creditBalance <= 0 && company.plan_tier !== 'trial') {
+    chatWarnings.push('You\'re out of task credits. Add more before queueing new work.');
+  } else if (creditBalance > 0 && creditBalance <= 3) {
+    chatWarnings.push(`Only ${creditBalance} task ${creditBalance === 1 ? 'credit' : 'credits'} left — top up soon.`);
+  }
+  if (company.onboarding_status === 'initializing' || company.onboarding_status === 'running') {
+    chatWarnings.push('Baljia is still setting things up — research, landing, and inbox are in flight.');
+  }
+  if (company.hosting_state === 'suspended') {
+    chatWarnings.push('Your app is suspended — resolve billing to bring it back online.');
+  }
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [selectedDoc, setSelectedDoc] = useState<Document | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
@@ -276,7 +290,7 @@ export function DashboardShell({
           />
 
           {/* Chat panel */}
-          <ChatPanel companyId={company.id} />
+          <ChatPanel companyId={company.id} warnings={chatWarnings} />
         </aside>
       </div>
 
@@ -326,7 +340,7 @@ export function DashboardShell({
             </div>
             {/* Chat */}
             <div className="h-[calc(85vh-40px)]">
-              <ChatPanel companyId={company.id} />
+              <ChatPanel companyId={company.id} warnings={chatWarnings} />
             </div>
           </div>
         </div>
