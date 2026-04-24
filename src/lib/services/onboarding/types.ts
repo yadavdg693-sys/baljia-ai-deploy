@@ -84,34 +84,62 @@ export interface InventedIdea {
 // See memory/project_market_research_format_locked.md
 // ══════════════════════════════════════════════
 
+// Confidence tagging — used for any stat/claim the LLM synthesizes from Tavily
+// or infers. Never inlined in the founder-visible text; kept as metadata so we
+// can flag low-confidence items in the rendered markdown and audit at the DB
+// level (via sweep-contamination or later founder-facing UI).
+export type ConfidenceLevel = 'high' | 'medium' | 'low';
+
+export interface TaggedStat {
+  stat: string;              // the actual claim — "Self-publishing market: $3.2B globally"
+  confidence: ConfidenceLevel;
+}
+
 export interface MarketCompetitor {
   name: string;
   what_they_do: string;
-  pricing: string;
+  pricing: string;           // "not found — verify manually" if Tavily didn't surface it
   gap: string;
 }
 
+// Slot can be one of the flexible task-3 variants — task creation maps all
+// non-core slots to the 'outreach' DB tag, preserving journey-specific framing
+// in the title/description rather than adding new agent tags.
 export interface FirstPriority {
-  slot: 'engineering' | 'research' | 'outreach';
+  slot: 'engineering' | 'research' | 'outreach' | 'discovery' | 'validation';
   title: string;
   rationale: string;
 }
 
-// Build My Idea — lean 5-section report
+// Build My Idea — lean report
 export interface BuildMarketResearch {
   overview: string;
   competitors: MarketCompetitor[];
   opportunity: string;
   why_this_fits_you: string;
+  market_size?: TaggedStat[];          // NEW: confidence-tagged market stats
+  demand_signals?: string[];           // NEW: evidence people want this (Reddit complaints, forum posts, app store reviews). Empty string in slot 0 if none found.
+  data_gaps?: string[];                // NEW: what Tavily didn't cover — transparency vs hallucinated completeness
   first_priorities: FirstPriority[];
 }
 
-// Grow My Company — denser 10-section report with existing business specifics
+// Grow My Company — denser report with existing business specifics
 export interface GrowMarketCompetitor {
   name: string;
   focus_area: string;
   positioning_or_size: string;
   gap: string;
+}
+
+export interface RetentionCheck {
+  signal: 'healthy' | 'warning' | 'unknown';
+  rationale: string;
+  priority: 'scale_acquisition' | 'fix_retention_first' | 'measure_first';
+}
+
+export interface FunnelDiagnosis {
+  likely_bottleneck: 'awareness' | 'acquisition' | 'activation' | 'retention' | 'monetization' | 'referral';
+  rationale: string;
 }
 
 export interface GrowMarketResearch {
@@ -128,6 +156,10 @@ export interface GrowMarketResearch {
   gaps_to_exploit: string[];
   why_this_fits_you: string;
   ai_leverage_points: string[];
+  market_size?: TaggedStat[];          // NEW
+  retention_check?: RetentionCheck;    // NEW: gates acquisition advice
+  funnel_diagnosis?: FunnelDiagnosis;  // NEW: where to focus
+  data_gaps?: string[];                // NEW
   first_priorities: FirstPriority[];
 }
 
@@ -140,12 +172,14 @@ export interface IdeaRefinement {
 export interface SurpriseMarketResearch {
   idea_overview: string;
   market_validation: {
-    size_and_growth: string[];
+    size_and_growth: TaggedStat[];     // CHANGED: now confidence-tagged
     why_now: string[];
+    demand_signals?: string[];         // NEW
   };
   competitors: MarketCompetitor[];
   why_this_fits_you: string;
   idea_refinements: IdeaRefinement[];
+  data_gaps?: string[];                // NEW
   first_priorities: FirstPriority[];
 }
 

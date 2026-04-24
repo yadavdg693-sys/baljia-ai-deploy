@@ -9,7 +9,30 @@ import type {
   SurpriseMarketResearch,
   MarketResearchResult,
   PipelineContext,
+  TaggedStat,
 } from '../types';
+
+/** Render a confidence-tagged stat. High-confidence items render clean;
+ *  medium/low tag visibly so founders know when to take things with a grain
+ *  of salt. Keeps the tag OUT of sanitizer-scanned prose — it's a narrow
+ *  rendering concern, not founder-facing copywriting. */
+function renderTaggedStat(t: TaggedStat): string {
+  if (t.confidence === 'low') return `${t.stat} *(estimated — verify manually)*`;
+  if (t.confidence === 'medium') return `${t.stat} *(inferred from related data)*`;
+  return t.stat;
+}
+
+function renderDataGapsSection(gaps: string[] | undefined): string[] {
+  if (!gaps || gaps.length === 0) return [];
+  const out: string[] = [];
+  out.push('');
+  out.push('## Data Gaps');
+  out.push('');
+  out.push('*Items the search data did not cover — flag these for manual follow-up.*');
+  out.push('');
+  for (const g of gaps) out.push(`- ${g}`);
+  return out;
+}
 
 export async function persistMarketResearch(
   ctx: PipelineContext,
@@ -51,6 +74,12 @@ export function renderBuildMarkdown(data: BuildMarketResearch, companyName: stri
   lines.push('');
   lines.push(data.overview);
   lines.push('');
+  if (data.market_size && data.market_size.length > 0) {
+    lines.push('### Key Market Stats');
+    lines.push('');
+    for (const s of data.market_size) lines.push(`- ${renderTaggedStat(s)}`);
+    lines.push('');
+  }
   lines.push('## Competitive Landscape');
   lines.push('');
   lines.push('| Competitor | What They Do | Pricing | Gap |');
@@ -59,6 +88,12 @@ export function renderBuildMarkdown(data: BuildMarketResearch, companyName: stri
     lines.push(`| ${escapeCell(c.name)} | ${escapeCell(c.what_they_do)} | ${escapeCell(c.pricing)} | ${escapeCell(c.gap)} |`);
   }
   lines.push('');
+  if (data.demand_signals && data.demand_signals.length > 0) {
+    lines.push('## Demand Signals');
+    lines.push('');
+    for (const d of data.demand_signals) lines.push(`- ${d}`);
+    lines.push('');
+  }
   lines.push('## The Opportunity');
   lines.push('');
   lines.push(data.opportunity);
@@ -72,6 +107,7 @@ export function renderBuildMarkdown(data: BuildMarketResearch, companyName: stri
   data.first_priorities.forEach((p, i) => {
     lines.push(`${i + 1}. **${p.title}** — ${p.rationale}`);
   });
+  lines.push(...renderDataGapsSection(data.data_gaps));
   return lines.join('\n');
 }
 
@@ -98,6 +134,29 @@ export function renderGrowMarkdown(data: GrowMarketResearch, companyName: string
   lines.push('');
   lines.push(`*Market Timing:* ${data.market_analysis.market_timing}`);
   lines.push('');
+  if (data.market_size && data.market_size.length > 0) {
+    lines.push('### Key Market Stats');
+    lines.push('');
+    for (const s of data.market_size) lines.push(`- ${renderTaggedStat(s)}`);
+    lines.push('');
+  }
+  if (data.retention_check && data.retention_check.signal !== 'unknown') {
+    const label = data.retention_check.signal === 'warning' ? '⚠ Warning' : '✓ Healthy';
+    lines.push(`## Retention Check — ${label}`);
+    lines.push('');
+    lines.push(data.retention_check.rationale);
+    lines.push('');
+    lines.push(`**Recommendation:** ${data.retention_check.priority.replace(/_/g, ' ')}`);
+    lines.push('');
+  }
+  if (data.funnel_diagnosis) {
+    lines.push('## Funnel Diagnosis');
+    lines.push('');
+    lines.push(`**Likely bottleneck:** ${data.funnel_diagnosis.likely_bottleneck}`);
+    lines.push('');
+    lines.push(data.funnel_diagnosis.rationale);
+    lines.push('');
+  }
   lines.push('## Competitive Landscape');
   lines.push('');
   lines.push('| Competitor | Focus | Positioning / Size | Gap |');
@@ -127,6 +186,7 @@ export function renderGrowMarkdown(data: GrowMarketResearch, companyName: string
   data.first_priorities.forEach((p, i) => {
     lines.push(`${i + 1}. **${p.title}** — ${p.rationale}`);
   });
+  lines.push(...renderDataGapsSection(data.data_gaps));
   return lines.join('\n');
 }
 
@@ -140,12 +200,21 @@ export function renderSurpriseMarkdown(data: SurpriseMarketResearch, companyName
   lines.push('');
   lines.push('## Market Validation');
   lines.push('');
-  lines.push('*Size and growth:*');
-  for (const s of data.market_validation.size_and_growth) lines.push(`- ${s}`);
-  lines.push('');
-  lines.push('*Why now:*');
-  for (const w of data.market_validation.why_now) lines.push(`- ${w}`);
-  lines.push('');
+  if (data.market_validation.size_and_growth.length > 0) {
+    lines.push('*Size and growth:*');
+    for (const s of data.market_validation.size_and_growth) lines.push(`- ${renderTaggedStat(s)}`);
+    lines.push('');
+  }
+  if (data.market_validation.why_now.length > 0) {
+    lines.push('*Why now:*');
+    for (const w of data.market_validation.why_now) lines.push(`- ${w}`);
+    lines.push('');
+  }
+  if (data.market_validation.demand_signals && data.market_validation.demand_signals.length > 0) {
+    lines.push('*Demand signals:*');
+    for (const d of data.market_validation.demand_signals) lines.push(`- ${d}`);
+    lines.push('');
+  }
   lines.push('## Competitive Landscape');
   lines.push('');
   lines.push('| Competitor | What They Do | Pricing | Gap |');
@@ -169,6 +238,7 @@ export function renderSurpriseMarkdown(data: SurpriseMarketResearch, companyName
   data.first_priorities.forEach((p, i) => {
     lines.push(`${i + 1}. **${p.title}** — ${p.rationale}`);
   });
+  lines.push(...renderDataGapsSection(data.data_gaps));
   return lines.join('\n');
 }
 
