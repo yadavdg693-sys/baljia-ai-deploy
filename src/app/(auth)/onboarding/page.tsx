@@ -32,36 +32,27 @@ export interface ActivityLine {
   timestamp: number;
 }
 
-// Stage order — rendered as a checklist during onboarding. Different journeys
-// hit different idea-processing stages: Build → refine_idea, Grow →
-// fetch_business_url, Surprise → extract_founder_angle + invent_idea. Stages
-// not reached by a specific journey simply stay pending in the UI.
-// Kept in sync with OnboardingStage in src/lib/services/onboarding/types.ts
-// (generate_roadmap + derive_active_milestone + enrich_twitter + select_strategy
-// removed from the pipeline 2026-04-24).
+// Stage order — USER-FACING checklist only. Shows the 10 milestones a founder
+// actually cares about seeing progress on. Internal plumbing stages
+// (enrich_geo, persist_context, send_startup_email, provision_founder_app_kickoff,
+// post_launch_tweet, generate_ceo_summary, await_founder_app, generate_magic_link,
+// send_inbox_message, send_completion_email, flush_diagnostics) still fire on
+// the backend and still emit onboarding_activity lines for the scrolling
+// activity feed below — they just don't clutter the main checklist.
+//
+// Journey-specific idea-processing stages (refine_idea / fetch_business_url /
+// invent_idea) stay pending in the UI for journeys that don't run them.
 const STAGE_ORDER = [
   'heartbeat',
-  'enrich_geo',
-  'extract_founder_angle',     // Surprise Me only
-  'persist_context',
   'refine_idea',                // Build only
   'fetch_business_url',         // Grow only
   'invent_idea',                // Surprise Me only
   'name_company',
   'provision_infrastructure',
-  'provision_founder_app_kickoff',
-  'send_startup_email',
   'generate_market_research',
   'save_mission',
   'create_starter_tasks',
   'generate_landing_page',
-  'post_launch_tweet',
-  'generate_ceo_summary',
-  'await_founder_app',
-  'generate_magic_link',
-  'send_inbox_message',
-  'send_completion_email',
-  'flush_diagnostics',
   'celebrate',
 ];
 
