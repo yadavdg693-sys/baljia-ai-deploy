@@ -4,14 +4,29 @@
 // Before the Phase 0 refactor this was plain UPDATE, which silently no-oped when
 // the memoryLayers row hadn't been created yet (e.g. onboarding runs before any
 // CEO chat). Smoke test surfaced this — now we always ensure the row exists.
+//
+// Founder-safety: memory_layers.content is read by the CEO every chat turn,
+// so any leak here contaminates every subsequent conversation. We sanitize
+// in SOFT mode on every write — infra/internal terms get replaced with
+// [redacted] and the violation is logged. Strict-mode would throw and break
+// onboarding for a single bad phrase, which is worse than a redaction.
 
 import { db, memoryLayers } from '@/lib/db';
 import { eq, and } from 'drizzle-orm';
+import { sanitizeForFounder } from '@/lib/founder-safety/sanitize';
 import type { PipelineContext } from '../types';
 
 const LAYER_1_MAX_TOKENS = 15_000;
 
 async function upsertLayer1(companyId: string, content: string): Promise<void> {
+  // Last-chance sanitize — catches any write that skipped appendMemorySection.
+  // Soft mode: redacts banned terms and logs so we find the leak without
+  // breaking onboarding. Idempotent with appendMemorySection's pre-sanitize.
+  const safe = sanitizeForFounder(content, {
+    mode: 'soft',
+    context: { callsite: 'upsertLayer1', companyId },
+  }).clean;
+
   const [existing] = await db.select({ id: memoryLayers.id })
     .from(memoryLayers)
     .where(and(eq(memoryLayers.company_id, companyId), eq(memoryLayers.layer, 1)))
@@ -19,15 +34,15 @@ async function upsertLayer1(companyId: string, content: string): Promise<void> {
 
   if (existing) {
     await db.update(memoryLayers)
-      .set({ content, updated_at: new Date() })
+      .set({ content: safe, updated_at: new Date() })
       .where(eq(memoryLayers.id, existing.id));
   } else {
     await db.insert(memoryLayers).values({
       company_id: companyId,
       layer: 1,
-      content,
+      content: safe,
       max_tokens: LAYER_1_MAX_TOKENS,
-      token_count: Math.ceil(content.length / 4), // rough estimate
+      token_count: Math.ceil(safe.length / 4), // rough estimate
     });
   }
 }
@@ -45,7 +60,19 @@ export async function appendMemorySection(
     .where(and(eq(memoryLayers.company_id, companyId), eq(memoryLayers.layer, 1)))
     .limit(1);
 
-  const newSection = `${sectionHeader}\n${lines.join('\n')}`;
+  // Founder-safety: sanitize header + each line before composing the section.
+  const safeHeader = sanitizeForFounder(sectionHeader, {
+    mode: 'soft',
+    context: { callsite: 'appendMemorySection.header', companyId },
+  }).clean;
+  const safeLines = lines.map((line) =>
+    sanitizeForFounder(line, {
+      mode: 'soft',
+      context: { callsite: 'appendMemorySection.line', companyId },
+    }).clean,
+  );
+
+  const newSection = `${safeHeader}\n${safeLines.join('\n')}`;
   let updated: string;
 
   if (data?.content) {

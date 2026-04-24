@@ -1,6 +1,7 @@
 // Task Service — migrated to Drizzle + Neon
 import { db, tasks } from '@/lib/db';
 import { eq, and, asc, desc, sql } from 'drizzle-orm';
+import { sanitizeForFounder } from '@/lib/founder-safety/sanitize';
 import type { Task, TaskSource, ExecutionMode, VerificationLevel } from '@/types';
 
 interface CreateTaskInput {
@@ -43,6 +44,26 @@ export async function createTask(input: CreateTaskInput): Promise<Task> {
     ? String(input.estimated_hours)
     : null;
 
+  // Founder-safety: task title / description / suggestion_reasoning all render
+  // on the dashboard as-is. Sanitize in SOFT mode — redact banned terms and
+  // log the violation so we catch regressions without breaking task creation.
+  const safeTitle = sanitizeForFounder(input.title, {
+    mode: 'soft',
+    context: { callsite: 'createTask.title', companyId: input.company_id, source: input.source ?? null },
+  }).clean;
+  const safeDescription = input.description
+    ? sanitizeForFounder(input.description, {
+        mode: 'soft',
+        context: { callsite: 'createTask.description', companyId: input.company_id, source: input.source ?? null },
+      }).clean
+    : null;
+  const safeReasoning = input.suggestion_reasoning
+    ? sanitizeForFounder(input.suggestion_reasoning, {
+        mode: 'soft',
+        context: { callsite: 'createTask.suggestion_reasoning', companyId: input.company_id, source: input.source ?? null },
+      }).clean
+    : null;
+
   const result = await db.execute(sql`
     INSERT INTO tasks (
       id, company_id, title, description, tag, priority, source, status,
@@ -54,8 +75,8 @@ export async function createTask(input: CreateTaskInput): Promise<Task> {
     SELECT
       gen_random_uuid(),
       ${input.company_id},
-      ${input.title},
-      ${input.description ?? null},
+      ${safeTitle},
+      ${safeDescription},
       ${input.tag},
       ${input.priority ?? 50},
       ${input.source ?? 'founder_requested'},
@@ -69,7 +90,7 @@ export async function createTask(input: CreateTaskInput): Promise<Task> {
       ${input.max_turns ?? 200},
       0,
       ${input.executability_type ?? 'can_run_now'},
-      ${input.suggestion_reasoning ?? null},
+      ${safeReasoning},
       ${input.execution_mode ?? null},
       ${input.verification_level ?? null},
       ${JSON.stringify(input.related_task_ids ?? [])}::jsonb,

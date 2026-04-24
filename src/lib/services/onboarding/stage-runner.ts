@@ -6,6 +6,7 @@
 import * as eventService from '@/lib/services/event.service';
 import { createLogger } from '@/lib/logger';
 import { onboardingContext } from './context';
+import { sanitizeForFounder } from '@/lib/founder-safety/sanitize';
 import type { OnboardingStage, PipelineContext, MoodState } from './types';
 
 const log = createLogger('OnboardingStage');
@@ -152,9 +153,22 @@ export async function stage(
 }
 
 // Activity channel — human-readable log line (Phase 1 richer usage; exposed here for strategies)
+//
+// Founder-safety: activity text streams live to the onboarding page, so we
+// sanitize in SOFT mode on every emit. Banned terms get replaced with
+// [redacted] and a Sentry breadcrumb is written so we can catch regressions
+// without breaking onboarding. Hardcoded strings should never trigger this
+// — the test suite catches them first — but LLM-generated text occasionally
+// does, and we'd rather show the founder a clean line with a redaction than
+// leak "Neon DB ready" to their screen.
 export async function emitActivity(ctx: PipelineContext, text: string, tool?: string): Promise<void> {
+  const currentStage = onboardingContext.getStore()?.stage ?? null;
+  const safe = sanitizeForFounder(text, {
+    mode: 'soft',
+    context: { callsite: 'emitActivity', companyId: ctx.companyId, stage: currentStage, tool: tool ?? null },
+  });
   await eventService.emit(ctx.companyId, 'onboarding_activity', {
-    text,
+    text: safe.clean,
     tool: tool ?? null,
     timestamp: Date.now(),
   });
