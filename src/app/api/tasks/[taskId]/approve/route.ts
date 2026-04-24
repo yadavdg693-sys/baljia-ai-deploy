@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import * as taskService from '@/lib/services/task.service';
 import * as eventService from '@/lib/services/event.service';
 import * as creditService from '@/lib/services/credit.service';
-import { launchTask } from '@/lib/agents/worker-launcher';
 import { requireAuth, requireCompanyOwnership, isApiError } from '@/lib/api-utils';
 import { isValidUUID } from '@/lib/uuid-validation';
 import { db, companies } from '@/lib/db';
@@ -10,6 +9,7 @@ import { eq } from 'drizzle-orm';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('TaskApprove');
+void log; // kept for potential future logging; launchTask is no longer called here
 
 export async function POST(
   _request: NextRequest,
@@ -56,7 +56,16 @@ export async function POST(
     return NextResponse.json({ error: 'Insufficient credits. Purchase more to run tasks.' }, { status: 409 });
   }
 
-  // ── Approve ──
+  // ── Approve (enqueue-only) ──
+  // Per ARCHITECTURE_AUDIT A2/B1 fix: this route is now ENQUEUE-ONLY. We mark
+  // the task as founder-authorized and leave it in status='todo'. The durable
+  // worker process (scripts/worker-boot.ts, runs on Render Background Worker)
+  // polls, atomically claims with a lease, executes, and heartbeats.
+  //
+  // If the web process dies between this response and the worker claim, the
+  // task stays in 'todo' until the worker picks it up. No credits are debited
+  // until the worker's claimSlotAndCharge runs inside launchTask, so there is
+  // no "credits spent but nothing happened" failure mode.
   await taskService.updateTask(taskId, {
     authorized_by: 'founder',
     authorization_reason: `Founder approved via dashboard (user: ${auth.user.id})`,
@@ -67,22 +76,12 @@ export async function POST(
     title: task.title,
   });
 
-  // ── Launch in background ──
-  // launchTask handles slot claim, credit deduction, agent dispatch, verification.
-  // It runs for minutes/hours — don't block the HTTP response.
-  // On Render (long-running Node process), the promise continues after response is sent.
-  launchTask(taskId).catch((err) => {
-    log.error('Background task launch failed', {
-      taskId,
-      title: task.title,
-      error: err instanceof Error ? err.message : 'Unknown',
-    });
-  });
-
   return NextResponse.json({
     id: task.id,
     title: task.title,
-    status: 'in_progress',
-    launched: true,
+    status: 'todo',                    // still todo — worker will claim
+    authorized: true,
+    queued_for_worker: true,
+    note: 'Task approved and queued. A background worker will pick it up within ~5 seconds.',
   });
 }

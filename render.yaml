@@ -63,6 +63,78 @@ services:
       - key: BALJIA_AUTH_FROM_EMAIL
         value: system@baljia.ai
 
+  # ── Durable Task Worker ──
+  # ARCHITECTURE_AUDIT A2/B1 fix: long-running agent tasks are no longer fired
+  # as fire-and-forget promises from the web service. This worker polls the
+  # tasks table, claims via atomic UPDATE with a 5-minute lease, heartbeats
+  # every 60s, and runs launchTask(). If this worker crashes, the lease
+  # expires and another worker (or this one after restart) reclaims the task.
+  # Credit debit is idempotent on execution_id so reclaim never double-charges.
+  - type: worker
+    name: baljia-ai-worker
+    runtime: node
+    plan: starter
+    region: oregon
+    buildCommand: npm install
+    startCommand: npx tsx scripts/worker-boot.ts
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: AWS_BEDROCK_API_KEY
+        sync: false
+      - key: AWS_BEDROCK_REGION
+        value: us-east-1
+      - key: MOONSHOT_API_KEY
+        sync: false
+      - key: MOONSHOT_API_BASE
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: BALJIA_OPENAI_OAUTH_STORE_PATH
+        sync: false
+      - key: POSTMARK_SERVER_TOKEN
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: TAVILY_API_KEYS
+        sync: false
+      - key: NEON_API_KEY
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: GITHUB_ORG
+        value: BALAJIapps
+      - key: CLOUDFLARE_API_TOKEN
+        sync: false
+      - key: CLOUDFLARE_ACCOUNT_ID
+        sync: false
+      - key: CLOUDFLARE_ZONE_ID_APP
+        sync: false
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET_NAME
+        sync: false
+      - key: BROWSERBASE_API_KEY
+        sync: false
+      - key: BROWSERBASE_PROJECT_ID
+        sync: false
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false
+      - key: ENCRYPTION_KEY
+        sync: false
+
   # ── Cron: Night Shift ──
   # Runs for ALL active companies every night at 2am UTC.
   # Executes todo tasks, retries failures, probes deployed URLs for health.
@@ -151,6 +223,28 @@ services:
     startCommand: >
       curl -s -o /dev/null -w "%{http_code}" -X POST
       "$NEXT_PUBLIC_APP_URL/api/cron/credit-renewal"
+      -H "x-cron-secret: $CRON_SECRET"
+      -H "Content-Type: application/json"
+    envVars:
+      - key: NEXT_PUBLIC_APP_URL
+        sync: false
+      - key: CRON_SECRET
+        sync: false
+
+  # ── Cron: Lease Reclaim ──
+  # Defensive cleanup for durable-execution leases. The worker's own claim query
+  # already reclaims expired leases when it polls; this cron catches the case
+  # where no workers are polling (worker service down) and also marks tasks
+  # failed_permanent when attempt_count exceeds the cap (prevents infinite reclaim).
+  - type: cron
+    name: baljia-lease-reclaim
+    runtime: node
+    region: oregon
+    schedule: "*/5 * * * *"
+    buildCommand: ""
+    startCommand: >
+      curl -s -o /dev/null -w "%{http_code}" -X POST
+      "$NEXT_PUBLIC_APP_URL/api/cron/lease-reclaim"
       -H "x-cron-secret: $CRON_SECRET"
       -H "Content-Type: application/json"
     envVars:

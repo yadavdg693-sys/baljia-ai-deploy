@@ -148,6 +148,15 @@ export const tasks = pgTable('tasks', {
   repair_attempt_count: integer('repair_attempt_count').default(0), // SPEC-CTRL-106: max 100 per scope
   started_at: timestamp('started_at', { withTimezone: true }),
   completed_at: timestamp('completed_at', { withTimezone: true }),
+  // ── Durable execution lease (2026-04-24) ──
+  // lease_holder: worker instance id (hostname + PID + random) that currently
+  //   owns the task. NULL if unclaimed.
+  // lease_expires_at: when the lease auto-expires. Worker extends via heartbeat.
+  //   If worker crashes, lease expires and reclaim cron/another worker can pick up.
+  // attempt_count: total number of claims (for retry bounds — stop after N crashes).
+  lease_holder: varchar('lease_holder', { length: 255 }),
+  lease_expires_at: timestamp('lease_expires_at', { withTimezone: true }),
+  attempt_count: integer('attempt_count').default(0),
   created_at: timestamp('created_at', { withTimezone: true }).defaultNow(),
   updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow(),
 }, (t) => [
@@ -155,6 +164,9 @@ export const tasks = pgTable('tasks', {
   index('idx_tasks_status').on(t.status),
   index('idx_tasks_company_status').on(t.company_id, t.status),
   index('idx_tasks_company_order').on(t.company_id, t.queue_order),
+  // Worker claim index: partial index on (status, lease_expires_at) filtered to
+  // todo + reclaimable. Dramatically speeds up worker polling at scale.
+  index('idx_tasks_claim').on(t.status, t.lease_expires_at),
 ]);
 
 // ══════════════════════════════════════════════
