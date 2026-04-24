@@ -1,5 +1,6 @@
-// Infrastructure provisioning — slug + company email routing
-// Light-touch: subdomain metadata + Cloudflare email rule. No GitHub/Render/Neon yet.
+// Infrastructure provisioning — slug + company email routing.
+// Memory section is founder-facing (CEO reads it each chat turn), so we keep
+// the language neutral: no vendor names, no hosting provider, no DB engine.
 
 import { db, companies } from '@/lib/db';
 import { eq, and, ne } from 'drizzle-orm';
@@ -26,12 +27,12 @@ export async function provisionInfrastructure(ctx: PipelineContext): Promise<voi
     .set({ name: ctx.companyName, slug })
     .where(eq(companies.id, ctx.companyId));
 
-  // {slug}.baljia.app served by platform via wildcard DNS + middleware
-  // (per-company Render service provisioned later by Engineering agent when building real product)
-  await appendMemorySection(ctx.companyId, '## Infrastructure', [
+  // Founder-facing memory section — CEO reads it each chat turn. Keep vendor-
+  // agnostic: only facts the founder themselves would say.
+  await appendMemorySection(ctx.companyId, '## Company setup', [
     `Slug: ${slug}`,
-    `Subdomain: ${slug}.baljia.app (served by platform — no Render service yet)`,
-    `Database: platform shared Postgres (per-company Neon DB will be provisioned by Engineering agent on first need)`,
+    `Subdomain: ${slug}.baljia.app`,
+    `Company inbox: ${slug}@baljia.app`,
   ]);
 
   // Provision {slug}@baljia.app email (non-blocking) — Cloudflare routing rule

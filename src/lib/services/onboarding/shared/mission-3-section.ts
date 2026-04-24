@@ -29,7 +29,7 @@ export async function saveMission3Section(ctx: PipelineContext): Promise<void> {
     : 'ARTICULATE a future that does not exist yet. The founder is building new — speak to what the world becomes once this ships.';
 
   const regionLine = (city && country)
-    ? `Founder location: ${city}, ${country}. MANDATORY: In "where_were_headed" use this specific city/country verbatim when naming places (e.g. "a two-person startup in ${city}" or "a ${country === 'India' ? 'founder' : 'founder'} in ${country}"). Do NOT guess other countries. Do NOT use placeholder phrases like "your city".`
+    ? `Founder location: ${city}, ${country}. MANDATORY: In "where_were_headed" use this specific city/country verbatim when naming places (e.g. "a two-person startup in ${city}" or "a founder in ${country}"). Do NOT guess other countries. Do NOT use placeholder phrases like "your city".`
     : country
       ? `Founder location country: ${country}. Use this country verbatim in "where_were_headed" when naming places.`
       : `Founder location is unknown. In "where_were_headed", skip place-specific naming — do NOT invent a city or country. Use generic phrases like "every founder", "every growing team" instead.`;

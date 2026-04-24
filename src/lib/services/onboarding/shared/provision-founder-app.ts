@@ -68,7 +68,7 @@ export async function kickoffFounderAppProvisioning(ctx: PipelineContext): Promi
       return null;
     });
 
-  await emitActivity(ctx, 'Kicking off Neon DB + GitHub repo provisioning (in background)', 'neon+github');
+  await emitActivity(ctx, 'Setting up your backend infrastructure (in background)', 'infra');
 }
 
 /**
@@ -94,16 +94,16 @@ export async function awaitFounderAppProvisioning(ctx: PipelineContext): Promise
   if (neonResult) {
     updates.neon_database_id = neonResult.projectId;
     updates.neon_connection_string = neonResult.connectionUri;
-    activityLines.push(`Neon DB ready: ${neonResult.name} (${neonResult.host})`);
+    activityLines.push(`Database ready: ${neonResult.name}`);
   } else {
-    activityLines.push('Neon DB provisioning deferred — engineering agent will retry');
+    activityLines.push('Database setup deferred — will be completed in your first build cycle');
   }
 
   if (githubResult) {
     updates.github_repo = githubResult.full_name;
-    activityLines.push(`GitHub repo ready: ${githubResult.html_url}`);
+    activityLines.push(`Code repository ready: ${githubResult.html_url}`);
   } else {
-    activityLines.push('GitHub repo provisioning deferred — engineering agent will retry');
+    activityLines.push('Code repository setup deferred — will be completed in your first build cycle');
   }
 
   if (Object.keys(updates).length > 0) {
@@ -111,6 +111,6 @@ export async function awaitFounderAppProvisioning(ctx: PipelineContext): Promise
   }
 
   for (const line of activityLines) {
-    await emitActivity(ctx, line, 'founder_app');
+    await emitActivity(ctx, line, 'infra');
   }
 }

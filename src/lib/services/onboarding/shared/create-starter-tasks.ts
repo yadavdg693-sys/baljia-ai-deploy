@@ -1,5 +1,7 @@
 // Phase 3b: per-journey task creation inheriting the CEO's CAPE framework.
-// - Injects getPlatformCapabilitiesPrompt() (same string the CEO sees)
+// - Injects getCapabilitiesBulletsOnly() — bullet lists only, no CEO "worker
+//   agent / dispatch" framing, because this prompt's output is saved to founder-
+//   visible DB fields (tasks.description + tasks.suggestion_reasoning).
 // - Inlines CEO's 10 Skills + Task Scoping rules
 // - Per-slot CAN/CANNOT declarations (capability boundaries)
 // - Per-journey engineering spec: Build/Surprise = 5-section product spec;
@@ -12,7 +14,7 @@
 // See memory/project_task_creation_inherits_ceo.md
 
 import * as taskService from '@/lib/services/task.service';
-import { getPlatformCapabilitiesPrompt } from '@/lib/platform-capabilities';
+import { getCapabilitiesBulletsOnly } from '@/lib/platform-capabilities';
 import { callSmallLLMJson } from './json-mode';
 import { emitActivity } from '../stage-runner';
 import type { PipelineContext, FirstPriority } from '../types';
@@ -47,7 +49,7 @@ export async function createStarterTasks(ctx: PipelineContext): Promise<void> {
 
   const marketContext = ctx.marketResearch ?? '';
 
-  const capabilities = getPlatformCapabilitiesPrompt();
+  const capabilities = getCapabilitiesBulletsOnly();
 
   const engineeringSpec = isGrow ? GROW_ENG_SPEC : BUILD_ENG_SPEC;
   const engineeringLabel = isGrow ? 'OPTIMIZATION task for the existing product' : 'NEW MVP slice to build';
@@ -79,18 +81,16 @@ ALREADY PROVISIONED DURING ONBOARDING (do NOT build again):
 
 The following artifacts ALREADY exist. The engineering task must NOT recreate them.
 
-- **Landing page** — a marketing / waitlist landing page has ALREADY been generated and is
-  live at \`${ctx.slug || '{slug}'}.baljia.app\`. It's stored in the platform DB and served
-  via wildcard routing. The engineering task must NOT build "a landing page", "a marketing
-  site", or "a waitlist capture page" — those already work. If an SEO-focused landing page
-  refresh is genuinely needed, that's a SECOND-cycle task, not a first one.
+- **Landing page** — a marketing / waitlist landing page is already live at
+  \`${ctx.slug || '{slug}'}.baljia.app\`. The engineering task must NOT build "a landing
+  page", "a marketing site", or "a waitlist capture page" — those already work. If an
+  SEO-focused landing page refresh is genuinely needed, that's a SECOND-cycle task.
 - **Company email** — \`${ctx.slug || '{slug}'}@baljia.app\` is active and forwards to the founder.
-- **Neon database** — an empty per-company Postgres DB is provisioned; engineering should
-  CREATE SCHEMA + write to it, not spin up a separate DB.
-- **GitHub repo** — \`BALAJIapps/${ctx.slug || '{slug}'}\` exists as an empty repo with
-  initial README. Engineering should PUSH product code to it.
+- **Backend infrastructure** — a per-company database and code repository are already
+  provisioned and empty. Engineering should push product code and create schema here —
+  do NOT include setup of a new database or repository in the task scope.
 - **Mission document** — written and saved.
-- **Market research report** — written and saved (you're consuming it above).
+- **Market research report** — saved (you're consuming it above).
 - **Launch tweet** — already posted or queued (do NOT make the engineering task create tweets).
 
 The ENGINEERING task's job is to build **the actual product** — the thing the founder's
@@ -98,7 +98,7 @@ customers will use to receive value. Not the marketing landing page. Not the wai
 Not the tweet. The PRODUCT itself (the tool / platform / app described in the idea + mission).
 
 ═══════════════════════════════════════════════════════
-PLATFORM CAPABILITIES (single source of truth — same as CEO uses):
+PLATFORM CAPABILITIES (what the platform can and cannot do):
 ═══════════════════════════════════════════════════════
 
 ${capabilities}
@@ -120,35 +120,35 @@ TASK FRAMEWORK (inherited from CEO scoping rules):
 TASK 1 — slot: engineering, priority: high, hours: 3, complexity: 7-9
 ═══════════════════════════════════════════════════════
 
-Engineering agent CAN: Express + Postgres backend, DB schemas, Render hosting, subdomain, Stripe, GitHub, API endpoints, webhooks, cron jobs.
-Engineering agent CANNOT: browse web, send emails, post tweets, run ads, do web research.
+Engineering work CAN: build full-stack web apps with a database, APIs, webhooks, dashboards, scheduled jobs, Stripe payments (subscriptions/one-time/Connect), deploy to the company subdomain.
+Engineering work CANNOT: browse web, send emails, post tweets, run ads, do web research.
 
 TITLE: action verb + specific ${engineeringLabel}. Max 12 words.
 
 DESCRIPTION: 5-section spec (self-contained):
 ${engineeringSpec}
 
-REASONING: 2 sentences, WORKER-VOICED (queue justification: "this task should run because..."). What's blocked without it. What revenue or validation signal it unlocks. NOT founder-facing strategic narrative.
+REASONING: 2 sentences, OPERATIONAL-VOICED (queue justification: "this task should run because..."). What's blocked without it. What revenue or validation signal it unlocks. NOT founder-facing strategic narrative.
 
 ═══════════════════════════════════════════════════════
 TASK 2 — slot: research, priority: medium, hours: 1, complexity: 3-4
 ═══════════════════════════════════════════════════════
 
-Research agent CAN: web research, competitive analysis, market intelligence, customer persona development.
-Research agent CANNOT: write code, deploy, post anywhere, send emails.
+Research work CAN: web research, competitive analysis, market intelligence, customer persona development.
+Research work CANNOT: write code, deploy, post anywhere, send emails.
 
 TITLE: format "Scout the <category>: <Competitor1>, <Competitor2>, <Competitor3>..." — name 3+ ACTUAL competitors from the market research competitors[] array.
 
 DESCRIPTION: 3-4 sentences, self-contained. Dimensions to compare (pricing tiers, feature parity, customer reviews, positioning gaps). Deliverable (comparison report saved as document). Decision this informs (positioning, pricing tier, feature priority).
 
-REASONING: 2 sentences, WORKER-VOICED. Why this competitive deep-dive now. How it sharpens the engineering task's scope or unlocks a positioning decision.
+REASONING: 2 sentences, OPERATIONAL-VOICED. Why this competitive deep-dive now. How it sharpens the engineering task's scope or unlocks a positioning decision.
 
 ═══════════════════════════════════════════════════════
 TASK 3 — slot: outreach, priority: medium, hours: 1, complexity: 4-5
 ═══════════════════════════════════════════════════════
 
-Outreach agent CAN: company email (${ctx.slug}@baljia.app), Hunter.io email lookup/verification, web search for prospects.
-Outreach agent CANNOT: write code, post on social platforms, run ads.
+Outreach work CAN: cold email from the company inbox (${ctx.slug}@baljia.app), find and verify professional emails, web search for prospects.
+Outreach work CANNOT: write code, post on social platforms, run ads.
 
 TITLE: format "Cold outreach: Find N <role> in <industry/situation>". Name the EXACT customer profile + count.
 
@@ -157,7 +157,7 @@ DESCRIPTION: 3-4 sentences, self-contained.
 - First message structure: 1-line value prop + 1 qualifying question
 - Response signals: name what response means real interest (e.g. "asks about pricing", not "shows interest")
 
-REASONING: 2 sentences, WORKER-VOICED. Why these specific people. Why outreach now, before the product is finished.
+REASONING: 2 sentences, OPERATIONAL-VOICED. Why these specific people. Why outreach now, before the product is finished.
 
 ═══════════════════════════════════════════════════════
 HARD RULES:
@@ -170,13 +170,13 @@ HARD RULES:
    - a landing page / marketing site / SEO page / waitlist capture  ← already provisioned
    - a homepage / hero page / "coming soon" page                     ← already provisioned
    - the company email setup / DNS / infrastructure                  ← already provisioned
-   - a GitHub repo or Neon DB                                        ← already provisioned
+   - a code repository or database                                   ← already provisioned
    If the market-research engineering seed mentions any of the above, OVERRIDE it: pick
    the real product feature (the core user-facing thing that delivers the mission's value
    proposition) instead. Treat the seed as a suggestion, not a mandate.
 5. Research TITLE must name 3+ actual competitors from market research.
 6. Outreach DESCRIPTION must use "${geoLine}" from GeoIP when available OR match channels to AUDIENCE when unknown. NEVER hardcode a country in fallback.
-7. REASONING fields are WORKER-VOICED (queue justification), not founder-facing strategic narrative.
+7. REASONING fields are OPERATIONAL-VOICED (queue justification), not founder-facing strategic narrative.
 8. No filler verbs anywhere: ${FILLER_VERBS.map((v) => `"${v}"`).join(', ')}.
 
 Return a JSON object with this exact shape:
@@ -186,7 +186,7 @@ Return a JSON object with this exact shape:
   "outreach":    { "title": "...", "description": "...", "reasoning": "..." }
 }`;
 
-  await emitActivity(ctx, 'Generating 3 starter tasks (CEO framework)', 'llm');
+  await emitActivity(ctx, 'Generating 3 starter tasks', 'llm');
 
   const result = await callSmallLLMJson<StarterTasksResult>(prompt, { maxTokens: 3000, retryOnce: true });
 
@@ -264,7 +264,7 @@ function validateTask(
 const BUILD_ENG_SPEC = `
 1. Core flow (3-6 numbered user-system steps)
 2. Key features (3-5 features, named specifically)
-3. Tech stack (Express + Postgres already provisioned; list 1-3 critical libraries if relevant)
+3. Critical libraries (list 1-3 libraries the feature genuinely needs — or "none" if vanilla)
 4. Success criteria (measurable definition of "done")
 5. Out of scope for v1 (what we're NOT building yet — manage scope explicitly)
 `;

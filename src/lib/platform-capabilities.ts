@@ -79,7 +79,10 @@ export const PLATFORM_LIMITATIONS = [
   'No long-running server processes — request handlers must complete within 30 seconds',
 ] as const;
 
-/** Founder-safe capabilities summary for CEO prompts + onboarding. Neutral language. */
+/** Capabilities summary for CEO prompts. Includes "you dispatch work to workers"
+ *  framing because CEO needs to know these are NOT its own tools. Do not use in
+ *  onboarding or founder-visible prompts — the "worker agent" framing leaks into
+ *  task `suggestion_reasoning` fields. Use `getCapabilitiesBulletsOnly()` instead. */
 export function getPlatformCapabilitiesPrompt(): string {
   const canDo = Object.entries(PLATFORM_CAPABILITIES)
     .map(([category, items]) => `**${category.replace(/_/g, ' ')}:** ${items.join('; ')}`)
@@ -93,6 +96,24 @@ These are NOT your direct tools. These are what worker agents can do when you CR
 ${canDo}
 
 ## Limitations (what we CANNOT build)
+${cantDo}`;
+}
+
+/** Capability bullets only — no CEO-oriented preamble. Safe to include in
+ *  prompts whose output is persisted to founder-visible DB fields (e.g.
+ *  onboarding's starter-task prompt, whose output ends up in tasks.description
+ *  and tasks.suggestion_reasoning on the dashboard). */
+export function getCapabilitiesBulletsOnly(): string {
+  const canDo = Object.entries(PLATFORM_CAPABILITIES)
+    .map(([category, items]) => `**${category.replace(/_/g, ' ')}:** ${items.join('; ')}`)
+    .join('\n');
+
+  const cantDo = PLATFORM_LIMITATIONS.join('; ');
+
+  return `## What the platform can do
+${canDo}
+
+## What the platform cannot do
 ${cantDo}`;
 }
 
