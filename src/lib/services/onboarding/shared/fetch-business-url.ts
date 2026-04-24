@@ -15,7 +15,7 @@ const log = createLogger('OnboardingFetchBusinessUrl');
 const FETCH_TIMEOUT_MS = 10_000;
 
 // SSRF defense — reject URLs pointing to internal/private ranges
-function isSafeUrl(rawUrl: string): { ok: boolean; normalized?: string; reason?: string } {
+export function isSafeUrl(rawUrl: string): { ok: boolean; normalized?: string; reason?: string } {
   let url: URL;
   try {
     const withProto = rawUrl.match(/^https?:\/\//) ? rawUrl : `https://${rawUrl}`;
@@ -52,7 +52,7 @@ function isSafeUrl(rawUrl: string): { ok: boolean; normalized?: string; reason?:
   return { ok: true, normalized: url.toString() };
 }
 
-function extractMetadata(html: string): { title: string | null; meta: string | null; body: string | null } {
+export function extractMetadata(html: string): { title: string | null; meta: string | null; body: string | null } {
   const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
   const metaDescMatch = html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i)
     ?? html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+name=["']description["']/i);
