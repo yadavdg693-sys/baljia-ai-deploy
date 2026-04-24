@@ -1139,6 +1139,9 @@ const ENGINEERING_TOOLS = new Set([
   // KG: create_branch, create_pr, search_code, create_commit
   'github_create_branch', 'github_create_pr',
   'github_search_code', 'github_create_commit',
+  // Cloudflare (primary per ADR-002 split-hosting)
+  'cf_deploy_landing', 'cf_verify_founder_app', 'cf_delete_founder_app',
+  // Render (legacy — platform-internal only)
   'render_create_service', 'render_get_service', 'render_deploy',
   'render_get_deploy_status', 'render_get_logs', 'render_delete_service',
   // KG: list_services, get_metrics, list_databases
