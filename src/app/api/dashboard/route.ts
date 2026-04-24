@@ -1,5 +1,7 @@
 // GET /api/dashboard?company_id=X — aggregated dashboard data for the founder shell
-// Returns tasks, documents, credits, emails, tweets, links, ads, roadmap in one call.
+// Returns tasks, documents, credits, emails, tweets, links, ads in one call.
+// (Roadmap UI was removed from the dashboard 2026-04-24 pending launch decision;
+// the /api/roadmap/[companyId] route is still callable directly if needed.)
 
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuthAndCompany, getRequiredCompanyId, isApiError } from '@/lib/api-utils';

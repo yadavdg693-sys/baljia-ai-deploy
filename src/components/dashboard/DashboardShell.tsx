@@ -19,7 +19,9 @@ import { EmailPreview } from './EmailPreview';
 import { AdsPreview } from './AdsPreview';
 import { LinksSection } from './LinksSection';
 import { UpgradeDialog } from './UpgradeDialog';
-import { RoadmapRail } from './RoadmapRail';
+// RoadmapRail removed from dashboard 2026-04-24 — decision on roadmap UX deferred to launch.
+// Component file kept at src/components/dashboard/RoadmapRail.tsx (dead-but-intact).
+// Roadmap onboarding stages also disconnected (see strategies/*.strategy.ts).
 import { OnboardingProgress } from './OnboardingProgress';
 import { DocumentSuggestionPanel } from './DocumentSuggestionPanel';
 
@@ -168,9 +170,6 @@ export function DashboardShell({
               status={company.onboarding_status}
             />
           )}
-
-          {/* Roadmap */}
-          <RoadmapRail companyId={company.id} />
         </aside>
 
         {/* ── Center Column: Tasks + Documents + Ledger ── */}
