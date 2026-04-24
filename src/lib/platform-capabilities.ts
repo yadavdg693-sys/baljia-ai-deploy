@@ -1,26 +1,36 @@
-// Platform Capabilities — single source of truth for what Baljia can build/do
-// Used by: onboarding (idea generation), CEO agent (transparency), governance (feasibility)
+// Platform Capabilities — single source of truth for what Baljia can build/do.
 //
-// Keep this in sync with actual agent capabilities. If a new integration is added
-// (e.g. Instagram posting, mobile app builds), update here.
+// TWO AUDIENCES, CAREFULLY SEPARATED:
 //
-// CF Workers facts verified 2026-04-24 against:
-//   https://developers.cloudflare.com/workers/platform/limits/
-//   https://developers.cloudflare.com/workers/runtime-apis/nodejs/
-//   https://developers.cloudflare.com/workers/frameworks/
+// 1. FOUNDER-FACING (PLATFORM_CAPABILITIES, getCapabilityConstraint,
+//    getPlatformCapabilitiesPrompt) — used in onboarding (refine_idea,
+//    invent_idea, market_research, mission, starter tasks) and CEO chat.
+//    MUST NOT mention implementation details (Cloudflare Workers, Hono, Neon,
+//    Postgres, specific drivers). Founders care about WHAT can be built, not
+//    HOW it's hosted. Leaking "Cloudflare Worker" into the refined idea
+//    contaminates market research, mission, and landing copy downstream.
+//
+// 2. ENGINEERING-INTERNAL (WORKERS_RUNTIME, getEngineeringStackPrompt) — used
+//    by the Engineering agent's system prompt only, when writing code.
+//    Contains the full technical stack (Hono, Neon HTTP, Workers limits,
+//    supported frameworks, nodejs_compat matrix). Never injected into
+//    founder-visible content.
+
+// ──────────────────────────────────────────────
+// FOUNDER-FACING CAPABILITIES (neutral language)
+// ──────────────────────────────────────────────
 
 export const PLATFORM_CAPABILITIES = {
   build: [
-    'Static landing pages (Cloudflare R2, wildcard Worker serves from 300+ edges)',
-    'Full-stack web apps on Cloudflare Workers + Neon Postgres (nodejs_compat)',
-    'APIs, webhooks, SSR pages, auth flows (JWT/magic-link/OAuth)',
+    'Landing pages with live subdomain ({company}.baljia.app) at the edge',
+    'Full-stack web apps with a dedicated database per company',
+    'APIs, webhooks, server-rendered pages, auth flows (magic link, OAuth, password)',
     'Dashboards, admin panels, internal tools',
-    'Scheduled jobs (Cloudflare Cron Triggers — up to 15 min CPU on hourly+ crons)',
-    'Stripe payments — subscriptions, one-time, Stripe Connect payouts',
-    'Database schemas, migrations, read-only queries (Neon HTTP driver)',
+    'Scheduled jobs (hourly, daily, weekly)',
+    'Stripe payments — subscriptions, one-time charges, Stripe Connect payouts',
+    'Database schemas, migrations, read-only queries',
     'SEO: meta tags, structured data, sitemaps',
-    'Subdomain hosting at {company}.baljia.app (per-founder Worker route)',
-    'Optional custom domain attach (founder brings their own)',
+    'Optional custom domain (founder brings their own)',
   ],
   browser: [
     'Navigate any website, click, fill forms, extract data',
@@ -34,15 +44,15 @@ export const PLATFORM_CAPABILITIES = {
   ],
   email: [
     'Company inbox ({company}@baljia.app)',
-    'Cold outreach with email finding/verification (Hunter.io)',
-    'Transactional and support emails (Postmark)',
+    'Cold outreach with email finding/verification',
+    'Transactional and support emails',
   ],
   twitter: [
     'Post tweets, schedule tweets',
     'Read company tweet history',
   ],
   meta_ads: [
-    'AI-generated video ads (Fal.ai / Sora 2)',
+    'AI-generated video ads',
     'Full campaign management on Facebook + Instagram',
     'Budget optimization, creative refresh',
   ],
@@ -52,55 +62,9 @@ export const PLATFORM_CAPABILITIES = {
     'Schema inspection and optimization',
   ],
   cold_outreach: [
-    'Find professional emails (Hunter.io)',
+    'Find professional emails',
     'Verify emails before sending',
     'Personalized outreach sequences',
-  ],
-} as const;
-
-// CF Workers runtime specifics — the agent must respect these when writing code.
-export const WORKERS_RUNTIME = {
-  // Hard limits (Paid plan)
-  cpu_http_request_ms: 30_000,          // 30 sec per HTTP request
-  cpu_cron_lte_1h_ms: 30_000,           // 30 sec for crons running <1h cadence
-  cpu_cron_gte_1h_ms: 15 * 60 * 1000,   // 15 min for crons running ≥1h cadence
-  memory_mb: 128,
-  bundle_gzip_mb: 10,                    // 3 MB on Free
-  subrequests_per_invocation: 10_000,
-  request_body_mb: 100,
-  env_vars_max: 128,
-  env_var_size_kb: 5,
-
-  // Frameworks verified supported on Workers
-  supported_frameworks: [
-    'Hono (RECOMMENDED default for APIs + web apps)',
-    'Next.js (via @opennextjs/cloudflare adapter)',
-    'SvelteKit (via adapter-cloudflare)',
-    'Astro (via @astrojs/cloudflare)',
-    'Nuxt (via Nitro Cloudflare preset)',
-    'React Router / ex-Remix (first-class support)',
-    'itty-router (lightweight alternative to Hono)',
-    'Vanilla fetch handlers (no framework)',
-  ],
-  unsupported_frameworks: [
-    'Express — needs http.createServer().listen(port), Workers have no port model',
-    'Koa, Fastify, Nest.js — same reason',
-  ],
-
-  // Node.js compat status per API (nodejs_compat flag set by default)
-  nodejs_fully_supported: ['fs', 'net', 'crypto', 'http', 'https', 'buffer', 'stream', 'url', 'path', 'process', 'events', 'async_hooks'],
-  nodejs_partial_or_broken: ['tls (partial)', 'child_process (stubbed, non-functional)'],
-
-  // Recommended database drivers
-  supported_db_drivers: [
-    '@neondatabase/serverless (HTTP — PRIMARY for founder apps, Neon is pre-provisioned)',
-    '@upstash/redis (HTTP)',
-    'drizzle-orm (works with Neon HTTP driver)',
-  ],
-  unsupported_db_drivers: [
-    'pg (TCP — use @neondatabase/serverless HTTP driver instead)',
-    'mongoose / MongoDB native driver (TCP)',
-    'ioredis (TCP — use @upstash/redis HTTP)',
   ],
 } as const;
 
@@ -111,13 +75,11 @@ export const PLATFORM_LIMITATIONS = [
   'No hardware or IoT integration',
   'No connecting to existing external codebases',
   'No generic third-party API connectors unless explicitly supported',
-  'No real-time video/audio streaming apps (no WebRTC infra)',
-  'No long-running server processes — HTTP requests hard-capped at 30 sec CPU',
-  'No Express/Koa/Fastify/Nest.js — use Hono instead (Workers have no port binding)',
-  'No TCP-based DB drivers — use HTTP drivers (@neondatabase/serverless, @upstash/redis)',
+  'No real-time video/audio streaming apps',
+  'No long-running server processes — request handlers must complete within 30 seconds',
 ] as const;
 
-// Compact text version for LLM prompts (token-efficient)
+/** Founder-safe capabilities summary for CEO prompts + onboarding. Neutral language. */
 export function getPlatformCapabilitiesPrompt(): string {
   const canDo = Object.entries(PLATFORM_CAPABILITIES)
     .map(([category, items]) => `**${category.replace(/_/g, ' ')}:** ${items.join('; ')}`)
@@ -134,8 +96,66 @@ ${canDo}
 ${cantDo}`;
 }
 
-// Technical stack guidance for the Engineering agent (full detail, used when
-// the agent is actually writing code vs when CEO is scoping a task)
+/** Ultra-compact founder-safe constraint for idea-shaping prompts (refine_idea, invent_idea).
+ *  NEVER mentions infrastructure (Cloudflare, Hono, Neon, specific drivers) because whatever
+ *  you put here ends up in the refined_idea string which seeds market research and downstream
+ *  outputs the founder reads. Keep it product-shaped. */
+export function getCapabilityConstraint(): string {
+  return `IMPORTANT: The idea MUST be buildable as a web app. Baljia can build: full-stack web apps with a database, APIs, webhooks, dashboards, scheduled jobs, Stripe payments (subscriptions/one-time/Connect), browser automation (scraping/form-filling), web research, email outreach, Twitter posting, Meta ads. Baljia CANNOT build: mobile apps, browser extensions, desktop apps, hardware/IoT, real-time video/audio streaming, apps requiring Instagram/LinkedIn/TikTok APIs, or long-running server processes (request handlers capped at 30 seconds). Frame the idea around the PRODUCT and its customers — do NOT name infrastructure (hosting provider, frameworks, databases).`;
+}
+
+// ──────────────────────────────────────────────
+// ENGINEERING-INTERNAL STACK (for Engineering agent code-writing prompts only)
+// ──────────────────────────────────────────────
+
+/** CF Workers runtime specifics — technical constraints the Engineering agent
+ *  must respect when writing code. This is NEVER surfaced to founders. */
+export const WORKERS_RUNTIME = {
+  // Hard limits (Paid plan)
+  cpu_http_request_ms: 30_000,          // 30 sec per HTTP request
+  cpu_cron_lte_1h_ms: 30_000,           // 30 sec for crons running <1h cadence
+  cpu_cron_gte_1h_ms: 15 * 60 * 1000,   // 15 min for crons running ≥1h cadence
+  memory_mb: 128,
+  bundle_gzip_mb: 10,                    // 3 MB on Free
+  subrequests_per_invocation: 10_000,
+  request_body_mb: 100,
+  env_vars_max: 128,
+  env_var_size_kb: 5,
+
+  supported_frameworks: [
+    'Hono (RECOMMENDED default for APIs + web apps)',
+    'Next.js (via @opennextjs/cloudflare adapter)',
+    'SvelteKit (via adapter-cloudflare)',
+    'Astro (via @astrojs/cloudflare)',
+    'Nuxt (via Nitro Cloudflare preset)',
+    'React Router / ex-Remix (first-class support)',
+    'itty-router (lightweight alternative to Hono)',
+    'Vanilla fetch handlers (no framework)',
+  ],
+  unsupported_frameworks: [
+    'Express — needs http.createServer().listen(port), Workers have no port model',
+    'Koa, Fastify, Nest.js — same reason',
+  ],
+
+  nodejs_fully_supported: ['fs', 'net', 'crypto', 'http', 'https', 'buffer', 'stream', 'url', 'path', 'process', 'events', 'async_hooks'],
+  nodejs_partial_or_broken: ['tls (partial)', 'child_process (stubbed, non-functional)'],
+
+  supported_db_drivers: [
+    '@neondatabase/serverless (HTTP — PRIMARY for founder apps, Neon is pre-provisioned)',
+    '@upstash/redis (HTTP)',
+    'drizzle-orm (works with Neon HTTP driver)',
+  ],
+  unsupported_db_drivers: [
+    'pg (TCP — use @neondatabase/serverless HTTP driver instead)',
+    'mongoose / MongoDB native driver (TCP)',
+    'ioredis (TCP — use @upstash/redis HTTP)',
+  ],
+} as const;
+
+/** Full technical stack guidance for the Engineering agent only.
+ *  Injected into the Engineering agent's system prompt via agent-factory.ts.
+ *  NEVER used in onboarding or CEO prompts — founder outputs stay
+ *  infrastructure-agnostic. */
 export function getEngineeringStackPrompt(): string {
   const r = WORKERS_RUNTIME;
   return `## Runtime constraints (Cloudflare Workers — read before writing code)
@@ -170,25 +190,17 @@ import { neon } from '@neondatabase/serverless';
 import { drizzle } from 'drizzle-orm/neon-http';
 
 const app = new Hono();
-
 app.get('/api/hello', (c) => c.json({ ok: true }));
-
 app.post('/api/things', async (c) => {
   const sql = neon(c.env.NEON_URL);
   const body = await c.req.json();
   const [row] = await sql\`INSERT INTO things (name) VALUES (\${body.name}) RETURNING *\`;
   return c.json(row);
 });
-
-export default app;  // Hono exports a fetch-compatible handler as default
+export default app;
 \`\`\`
 
 When bundling for cf_deploy_app: the script_content string should be the FULL bundled JS
-(all imports inlined via esbuild or equivalent). You cannot import from node_modules at
-runtime — everything must be in the single script.`;
-}
-
-// Ultra-compact version for strategy prompt (minimize tokens)
-export function getCapabilityConstraint(): string {
-  return `IMPORTANT: The idea MUST be buildable as a Cloudflare Worker web app with these tools: Hono + Neon Postgres (HTTP driver), Stripe payments, email outreach, Twitter posting, Meta ads, browser automation (scraping/form-filling), web research. We CANNOT build: mobile apps, browser extensions, desktop apps, hardware, Express/Koa apps (Workers have no port binding — use Hono), long-running server processes (>30s CPU per HTTP request), or apps requiring Instagram/LinkedIn/TikTok APIs.`;
+(all imports inlined). You cannot import from node_modules at runtime — everything must
+be in the single script.`;
 }
