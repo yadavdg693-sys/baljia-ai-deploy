@@ -213,7 +213,7 @@ export async function handleTwitterTool(
 
       let finalText = text;
       if (input.include_link !== false && company) {
-        const domain = company.custom_domain ?? `${company.subdomain ?? company.slug}.baljia.com`;
+        const domain = company.custom_domain ?? `${company.subdomain ?? company.slug}.baljia.app`;
         if (!finalText.includes(domain)) {
           finalText += `\n\n${domain}`;
         }

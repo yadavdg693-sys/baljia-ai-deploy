@@ -167,7 +167,11 @@ async function verifyBrowserFlow(task: Task): Promise<VerificationResult> {
   }).from(companies).where(eq(companies.id, task.company_id)).limit(1);
 
   if (company?.subdomain || company?.custom_domain) {
-    const domain = company.custom_domain ?? `${company.subdomain}.baljia.com`;
+    // Founder apps live on *.baljia.app per ADR-002. Fallback domain bug
+    // (previously .baljia.com) caused every engineering-agent deploy task to
+    // fail verification via HEAD request to a non-existent domain. Fixed
+    // 2026-04-24. See AUDIT_FINDINGS.md (A5) and test-pagegenie agent run.
+    const domain = company.custom_domain ?? `${company.subdomain}.baljia.app`;
     try {
       const response = await fetch(`https://${domain}`, {
         method: 'HEAD',

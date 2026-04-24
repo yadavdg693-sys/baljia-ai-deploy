@@ -1814,7 +1814,7 @@ async function runWithOpenRouter(
     baseURL: 'https://openrouter.ai/api/v1',
     apiKey,
     defaultHeaders: {
-      'HTTP-Referer': process.env.NEXT_PUBLIC_APP_URL ?? 'https://baljia.com',
+      'HTTP-Referer': process.env.NEXT_PUBLIC_APP_URL ?? 'https://baljia.ai',
       'X-Title': 'Baljia AI',
     },
   });
