@@ -11,7 +11,8 @@ import { DocumentList } from './DocumentList';
 import { MetricsPanel } from './MetricsPanel';
 import { CreditDisplay } from './CreditDisplay';
 import { PurchaseCreditsDialog } from './PurchaseCreditsDialog';
-import { ActivityFeed } from './ActivityFeed';
+// ActivityFeed removed from dashboard 2026-04-24. Component file still exists at
+// src/components/dashboard/ActivityFeed.tsx if we want to re-add it later.
 import { ChatPanel } from '@/components/chat/ChatPanel';
 import { DashboardHeader } from './DashboardHeader';
 import { TwitterPreview } from './TwitterPreview';
@@ -249,12 +250,6 @@ export function DashboardShell({
 
           {/* Chat panel */}
           <ChatPanel companyId={company.id} />
-
-          {/* Activity feed */}
-          <div className="rounded-xl bg-surface-card border border-border-default p-4">
-            <h3 className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-3">Activity</h3>
-            <ActivityFeed companyId={company.id} />
-          </div>
         </aside>
       </div>
 
