@@ -155,7 +155,7 @@ export async function refineIdea(ctx: PipelineContext): Promise<void> {
 
 Your job is to REFINE it into a buildable scope. This is an active transform:
 - Keep the refined idea ALIGNED with the founder's actual intent. If they pointed at a specific product (via URL or name), stay in THAT product's space.
-- If the idea is too ambitious for a 3-hour MVP, narrow to a VERTICAL SLICE of what they asked for — never pivot to an adjacent category. (Example: "full AI book generator" is too large for MVP → refine to "AI chapter generator for non-fiction, one chapter at a time" — SAME space, smaller scope. Do NOT pivot to "lead magnet creator" or "content marketing tool" — that's a different category.)
+- If the idea is too ambitious for a 3-hour MVP, narrow to a VERTICAL SLICE of what the founder asked for — a single feature of the reference product, not a different product category. The refined idea must stay in the same category as the founder's input. Never swap to an adjacent category just because it's smaller.
 - If the scout reveals the space is saturated, pick a differentiated angle (niche audience, specific use case, underserved geography). Still the same category.
 - If the idea is vague, pick the sharpest version the platform can build — prefer specificity over generality.
 - If the idea conflicts with platform limits, substitute with the closest buildable equivalent.

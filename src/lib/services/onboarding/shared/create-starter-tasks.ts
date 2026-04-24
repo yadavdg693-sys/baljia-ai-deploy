@@ -153,7 +153,7 @@ Outreach work CANNOT: write code, post on social platforms, run ads.
 TITLE: format "Cold outreach: Find N <role> in <industry/situation>". Name the EXACT customer profile + count.
 
 DESCRIPTION: 3-4 sentences, self-contained.
-- Channels: if founder location is "${geoLine}" and it's known, pick channels actually used by buyers IN THAT GEOGRAPHY (region-specific social platforms, local communities). If location is "(unknown)", match channels to the AUDIENCE itself (e.g. indie authors → KDP forums; dev communities → GitHub Discussions). NEVER hardcode a country if no GeoIP.
+- Channels: if founder location is "${geoLine}" and it's known, pick channels actually used by buyers IN THAT GEOGRAPHY (region-specific social platforms, local communities). If location is "(unknown)", match channels to the AUDIENCE itself — pick the specific forums, communities, or professional networks where THIS exact audience already gathers. NEVER hardcode a country if no GeoIP.
 - First message structure: 1-line value prop + 1 qualifying question
 - Response signals: name what response means real interest (e.g. "asks about pricing", not "shows interest")
 

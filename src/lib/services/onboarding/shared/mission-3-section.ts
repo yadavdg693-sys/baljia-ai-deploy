@@ -30,10 +30,10 @@ export async function saveMission3Section(ctx: PipelineContext): Promise<void> {
     : 'ARTICULATE a future that does not exist yet. The founder is building new — speak to what the world becomes once this ships.';
 
   const regionLine = (city && country)
-    ? `Founder location: ${city}, ${country}. MANDATORY: In "where_were_headed" use this specific city/country verbatim when naming places (e.g. "a two-person startup in ${city}" or "a founder in ${country}"). Do NOT guess other countries. Do NOT use placeholder phrases like "your city".`
+    ? `Founder location: ${city}, ${country}. MANDATORY: In "where_were_headed" use this specific city/country verbatim when naming places — pair the product's actual audience with "${city}" or "${country}". Do NOT guess other countries. Do NOT use placeholder phrases like "your city".`
     : country
       ? `Founder location country: ${country}. Use this country verbatim in "where_were_headed" when naming places.`
-      : `Founder location is unknown. In "where_were_headed", skip place-specific naming — do NOT invent a city or country. Use generic phrases like "every founder", "every growing team" instead.`;
+      : `Founder location is unknown. In "where_were_headed", skip place-specific naming — do NOT invent a city or country. Refer to the audience generically (derived from the idea) rather than any geography.`;
 
   const marketContext = ctx.marketResearch ?? '';
 
@@ -53,7 +53,7 @@ Write a JSON object with these three sections:
 {
   "mission": "<1 sentence. Aspirational. Two valid patterns: 'Make X [property] for [audience]' (positive) OR 'No [audience] should [bad thing]' (negative). No filler. No platitudes.>",
   "what_were_building": "<2-3 sentences. Concrete product description. What it does. Who it's for. No vision-language — pure product.>",
-  "where_were_headed": "<4-6 sentences. Vivid future-state narrative. Name specific people (teacher, two-person startup, growing team). ${city ? `Name "${city}" or "${country}" where place matters.` : 'Avoid place names since GeoIP is missing.'} End with a category-defining reframe (e.g. 'X becomes the default answer to <question>', 'Y becomes a solved problem', 'Z makes <industry> accessible to anyone').>"
+  "where_were_headed": "<4-6 sentences. Vivid future-state narrative. Name specific people from THIS product's actual audience — derive the roles and situations from the idea and market research, do not default to generic personas. ${city ? `Name "${city}" or "${country}" where place matters.` : 'Avoid place names since GeoIP is missing.'} End with a category-defining reframe: a single sentence that makes this founder's work feel inevitable — specific to this product, not a template.>"
 }
 
 Rules:

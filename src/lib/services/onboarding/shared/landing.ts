@@ -31,7 +31,7 @@ ${contextParts.join('\n')}
 
 The page must include:
 1. Brand name as wordmark at top
-2. Category tag (e.g. "AI-Powered Analytics")
+2. Category tag that accurately describes the product (2-4 word phrase, derived from the company's actual positioning — do NOT default to "AI-Powered X" unless that truthfully fits)
 3. Hard-hitting headline (one sentence)
 4. Short explanatory paragraph (2-3 sentences)
 5. Problem framing section
@@ -40,9 +40,7 @@ The page must include:
 8. Closing manifesto paragraph
 9. Footer with "Built and operated by Baljia" attribution
 
-Style: dark background (#0a0a0a), clean sans-serif, gold accent (#F5A623), mobile-responsive.
-Use inline CSS only. No external dependencies. Full valid HTML document.
-Keep it under 300 lines.`;
+Style: pick typography, color palette, and visual treatment that fit THIS company's positioning, industry, and audience. Do not default to a generic template — a wellness brand looks different from a dev tool which looks different from a consumer app. Clean, readable, mobile-responsive. Use inline CSS only. No external dependencies. Full valid HTML document. Keep it under 300 lines.`;
 
   try {
     const html = await callSmallLLM(prompt, 4000);
