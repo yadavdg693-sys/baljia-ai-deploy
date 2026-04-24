@@ -3,6 +3,7 @@
 import type { ChatMessage as ChatMessageType, ChatAction } from '@/types';
 import { TaskProposalCard } from './TaskProposalCard';
 import { CreditQuoteCard } from './CreditQuoteCard';
+import { MarkdownBody } from '@/components/ui/MarkdownBody';
 
 interface ChatMessageProps {
   message: ChatMessageType;
@@ -23,8 +24,8 @@ export function ChatMessage({ message }: ChatMessageProps) {
             : 'bg-surface-secondary text-text-primary border border-border-default'
         }`}
       >
-        {/* Message text */}
-        <div className="whitespace-pre-wrap break-words">{message.content}</div>
+        {/* Message text — rendered as markdown (headings, lists, bold, links, code) */}
+        <MarkdownBody size="sm">{message.content}</MarkdownBody>
 
         {/* Embedded actions */}
         {message.actions && message.actions.length > 0 && (

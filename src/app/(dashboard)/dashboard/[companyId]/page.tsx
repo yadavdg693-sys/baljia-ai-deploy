@@ -1,6 +1,6 @@
 import { getSessionFromCookies } from '@/lib/auth';
 import { redirect } from 'next/navigation';
-import { db, companies, tasks, documents, reports, creditLedger, documentSuggestions } from '@/lib/db';
+import { db, companies, tasks, documents, reports, creditLedger, documentSuggestions, emailThreads } from '@/lib/db';
 import { eq, desc, asc, sql, and, gte } from 'drizzle-orm';
 import { DashboardShell } from '@/components/dashboard/DashboardShell';
 
@@ -57,7 +57,7 @@ export default async function CompanyDashboard({ params }: Props) {
   const sevenDaysAgo = new Date();
   sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
 
-  const [taskList, docList, reportList, balanceResult, usageResult, pendingSuggestions] = await Promise.all([
+  const [taskList, docList, reportList, balanceResult, usageResult, pendingSuggestions, emailList] = await Promise.all([
     db.select()
       .from(tasks)
       .where(eq(tasks.company_id, companyId))
@@ -101,6 +101,20 @@ export default async function CompanyDashboard({ params }: Props) {
       ))
       .orderBy(desc(documentSuggestions.created_at))
       .limit(5),
+
+    // Email threads (inbox + sent) — latest 20 for the preview panel
+    db.select({
+      id: emailThreads.id,
+      subject: emailThreads.subject,
+      to_address: emailThreads.to_address,
+      from_address: emailThreads.from_address,
+      direction: emailThreads.direction,
+      created_at: emailThreads.created_at,
+    })
+      .from(emailThreads)
+      .where(eq(emailThreads.company_id, companyId))
+      .orderBy(desc(emailThreads.created_at))
+      .limit(20),
   ]);
 
   const creditBalance = Number(balanceResult[0]?.total ?? 0);
@@ -126,6 +140,7 @@ export default async function CompanyDashboard({ params }: Props) {
       creditBalance={creditBalance}
       recentUsage={recentUsage}
       pendingSuggestions={pendingSuggestions as unknown as Parameters<typeof DashboardShell>[0]['pendingSuggestions']}
+      emails={emailList as unknown as Parameters<typeof DashboardShell>[0]['emails']}
       user={user as unknown as Parameters<typeof DashboardShell>[0]['user']}
     />
   );

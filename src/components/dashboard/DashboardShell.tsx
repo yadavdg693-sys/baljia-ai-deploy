@@ -13,6 +13,7 @@ import { CreditDisplay } from './CreditDisplay';
 import { PurchaseCreditsDialog } from './PurchaseCreditsDialog';
 // ActivityFeed removed from dashboard 2026-04-24. Component file still exists at
 // src/components/dashboard/ActivityFeed.tsx if we want to re-add it later.
+import { DocumentDialog } from './DocumentDialog';
 import { ChatPanel } from '@/components/chat/ChatPanel';
 import { DashboardHeader } from './DashboardHeader';
 import { TwitterPreview } from './TwitterPreview';
@@ -35,6 +36,15 @@ interface DocumentSuggestion {
   created_at: string;
 }
 
+interface EmailRow {
+  id: string;
+  subject: string | null;
+  to_address: string;
+  from_address: string | null;
+  direction: string | null;
+  created_at: string;
+}
+
 interface DashboardShellProps {
   company: Company;
   tasks: Task[];
@@ -43,6 +53,7 @@ interface DashboardShellProps {
   creditBalance: number;
   recentUsage: number[];
   pendingSuggestions: DocumentSuggestion[];
+  emails: EmailRow[];
   user: User;
 }
 
@@ -54,9 +65,19 @@ export function DashboardShell({
   creditBalance,
   recentUsage,
   pendingSuggestions,
+  emails,
   user,
 }: DashboardShellProps) {
+  // Derive email stats for the preview panel
+  const latestEmail = emails[0] ?? null;
+  const sentCount = emails.filter((e) => e.direction === 'sent' || e.direction === 'outbound').length;
+  const receivedCount = emails.filter((e) => e.direction === 'received' || e.direction === 'inbound').length;
+  const companyEmailAddress =
+    (company as unknown as { company_email?: string | null; email_identity?: string | null }).company_email
+    ?? (company as unknown as { company_email?: string | null; email_identity?: string | null }).email_identity
+    ?? null;
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [selectedDoc, setSelectedDoc] = useState<Document | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
   const [purchaseOpen, setPurchaseOpen] = useState(false);
   const [upgradeOpen, setUpgradeOpen] = useState(false);
@@ -205,7 +226,7 @@ export function DashboardShell({
           <section>
             <h2 className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-3">Documents</h2>
             <div className="rounded-xl bg-surface-card border border-border-default p-4">
-              <DocumentList documents={documents} />
+              <DocumentList documents={documents} onDocumentClick={setSelectedDoc} />
             </div>
           </section>
 
@@ -232,10 +253,10 @@ export function DashboardShell({
 
           {/* Email */}
           <EmailPreview
-            companyEmail={company.email_identity}
-            latestEmail={null}
-            sentCount={0}
-            receivedCount={0}
+            companyEmail={companyEmailAddress}
+            latestEmail={latestEmail}
+            sentCount={sentCount}
+            receivedCount={receivedCount}
           />
 
           {/* Ads */}
@@ -260,6 +281,13 @@ export function DashboardShell({
         onOpenChange={(open) => { if (!open) setSelectedTask(null); }}
         onApprove={handleApprove}
         onReject={handleReject}
+      />
+
+      {/* ── Document viewer ── */}
+      <DocumentDialog
+        doc={selectedDoc}
+        onClose={() => setSelectedDoc(null)}
+        companySlug={company.slug ?? undefined}
       />
 
       {/* ── Purchase credits dialog ── */}

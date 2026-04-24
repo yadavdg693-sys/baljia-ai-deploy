@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import type { ChatMessage as ChatMessageType, ChatAction, CEOStreamEvent } from '@/types';
 import { ChatMessage, TypingIndicator } from './ChatMessage';
 import { ChatInput } from './ChatInput';
+import { MarkdownBody } from '@/components/ui/MarkdownBody';
 import { BaljiaMascot } from '@/components/mascot/BaljiaMascot';
 
 interface ChatPanelProps {
@@ -177,7 +178,7 @@ export function ChatPanel({ companyId }: ChatPanelProps) {
         {isStreaming && streamingText && (
           <div className="flex justify-start animate-fade-in">
             <div className="max-w-[85%] rounded-xl px-3.5 py-2.5 text-sm leading-relaxed bg-surface-secondary text-text-primary border border-border-default">
-              <div className="whitespace-pre-wrap break-words">{streamingText}</div>
+              <MarkdownBody size="sm">{streamingText}</MarkdownBody>
             </div>
           </div>
         )}
