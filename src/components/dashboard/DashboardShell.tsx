@@ -26,6 +26,7 @@ import { UpgradeDialog } from './UpgradeDialog';
 // Roadmap onboarding stages also disconnected (see strategies/*.strategy.ts).
 import { OnboardingProgress } from './OnboardingProgress';
 import { DocumentSuggestionPanel } from './DocumentSuggestionPanel';
+import { LiveBanner } from './LiveBanner';
 
 interface DocumentSuggestion {
   id: string;
@@ -55,6 +56,7 @@ interface DashboardShellProps {
   pendingSuggestions: DocumentSuggestion[];
   emails: EmailRow[];
   user: User;
+  liveCompanyCount: number;
 }
 
 export function DashboardShell({
@@ -67,6 +69,7 @@ export function DashboardShell({
   pendingSuggestions,
   emails,
   user,
+  liveCompanyCount,
 }: DashboardShellProps) {
   // Derive email stats for the preview panel
   const latestEmail = emails[0] ?? null;
@@ -110,6 +113,9 @@ export function DashboardShell({
 
   return (
     <div className="min-h-screen bg-surface-primary text-text-primary">
+      {/* Live banner — links to /live, shows active company count */}
+      <LiveBanner liveCount={liveCompanyCount} />
+
       {/* Top header bar — matches Polsia: company name + New + Menu */}
       <DashboardHeader company={company} user={user} creditBalance={creditBalance} />
 

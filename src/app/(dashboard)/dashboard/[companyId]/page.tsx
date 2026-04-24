@@ -1,7 +1,7 @@
 import { getSessionFromCookies } from '@/lib/auth';
 import { redirect } from 'next/navigation';
 import { db, companies, tasks, documents, reports, creditLedger, documentSuggestions, emailThreads } from '@/lib/db';
-import { eq, desc, asc, sql, and, gte } from 'drizzle-orm';
+import { eq, desc, asc, sql, and, gte, inArray } from 'drizzle-orm';
 import { DashboardShell } from '@/components/dashboard/DashboardShell';
 
 interface Props {
@@ -57,7 +57,7 @@ export default async function CompanyDashboard({ params }: Props) {
   const sevenDaysAgo = new Date();
   sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
 
-  const [taskList, docList, reportList, balanceResult, usageResult, pendingSuggestions, emailList] = await Promise.all([
+  const [taskList, docList, reportList, balanceResult, usageResult, pendingSuggestions, emailList, liveCountResult] = await Promise.all([
     db.select()
       .from(tasks)
       .where(eq(tasks.company_id, companyId))
@@ -115,9 +115,15 @@ export default async function CompanyDashboard({ params }: Props) {
       .where(eq(emailThreads.company_id, companyId))
       .orderBy(desc(emailThreads.created_at))
       .limit(20),
+
+    // Live companies count — drives the LiveBanner at top of shell
+    db.select({ count: sql<number>`count(*)::int` })
+      .from(companies)
+      .where(inArray(companies.lifecycle, ['trial_active', 'full_active'])),
   ]);
 
   const creditBalance = Number(balanceResult[0]?.total ?? 0);
+  const liveCompanyCount = Number(liveCountResult[0]?.count ?? 0);
 
   // Build 7-day usage array (fill gaps with 0)
   const usageMap = new Map(usageResult.map((r) => [r.day, Number(r.used)]));
@@ -142,6 +148,7 @@ export default async function CompanyDashboard({ params }: Props) {
       pendingSuggestions={pendingSuggestions as unknown as Parameters<typeof DashboardShell>[0]['pendingSuggestions']}
       emails={emailList as unknown as Parameters<typeof DashboardShell>[0]['emails']}
       user={user as unknown as Parameters<typeof DashboardShell>[0]['user']}
+      liveCompanyCount={liveCompanyCount}
     />
   );
 }

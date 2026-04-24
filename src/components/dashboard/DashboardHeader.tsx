@@ -59,7 +59,7 @@ export function DashboardHeader({ company, user, creditBalance }: DashboardHeade
 
           {menuOpen && (
             <div className="absolute right-0 top-full mt-2 w-56 rounded-xl bg-surface-card border border-border-default shadow-2xl py-2 animate-fade-in">
-              <MenuLink href={`/dashboard/${company.id}`}>My Portfolio</MenuLink>
+              <MenuLink href="/portfolio">My Portfolio</MenuLink>
               <MenuLink href="/onboarding">New Company</MenuLink>
 
               <div className="my-1 border-t border-border-subtle" />
