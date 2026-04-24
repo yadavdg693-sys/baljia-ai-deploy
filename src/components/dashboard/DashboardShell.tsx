@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import type { Company, Task, Document, Report } from '@/types';
 import type { User } from '@/types';
 import { BaljiaMascot } from '@/components/mascot/BaljiaMascot';
@@ -27,6 +27,7 @@ import { UpgradeDialog } from './UpgradeDialog';
 import { OnboardingProgress } from './OnboardingProgress';
 import { DocumentSuggestionPanel } from './DocumentSuggestionPanel';
 import { LiveBanner } from './LiveBanner';
+import { CelebrationOverlay } from './CelebrationOverlay';
 
 interface DocumentSuggestion {
   id: string;
@@ -100,6 +101,28 @@ export function DashboardShell({
   const [upgradeOpen, setUpgradeOpen] = useState(false);
   const [tasks, setTasks] = useState(initialTasks);
   const [suggestions, setSuggestions] = useState(pendingSuggestions);
+  const [celebrateTask, setCelebrateTask] = useState<{ id: string; title: string } | null>(null);
+
+  // Detect a newly-completed task between page loads. Stores the set of
+  // completed task IDs in sessionStorage; anything in `initialTasks` that
+  // reports `completed` but isn't in that set is "new" and worth celebrating.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const key = `baljia:seen-completed:${company.id}`;
+    let seen: string[];
+    try {
+      seen = JSON.parse(sessionStorage.getItem(key) ?? '[]');
+    } catch {
+      seen = [];
+    }
+    const completed = initialTasks.filter((t) => t.status === 'completed');
+    const seenSet = new Set(seen);
+    const fresh = completed.find((t) => !seenSet.has(t.id));
+    if (fresh) {
+      setCelebrateTask({ id: fresh.id, title: fresh.title ?? 'Task complete' });
+    }
+    sessionStorage.setItem(key, JSON.stringify(completed.map((t) => t.id)));
+  }, [initialTasks, company.id]);
 
   // State-only callbacks — TaskDetailDialog owns the API mutation.
   // These just sync local state after the dialog confirms success.
@@ -309,6 +332,14 @@ export function DashboardShell({
         onClose={() => setSelectedDoc(null)}
         companySlug={company.slug ?? undefined}
       />
+
+      {/* ── Celebration overlay — fires on newly-completed tasks ── */}
+      {celebrateTask && (
+        <CelebrationOverlay
+          taskTitle={celebrateTask.title}
+          onDismiss={() => setCelebrateTask(null)}
+        />
+      )}
 
       {/* ── Purchase credits dialog ── */}
       <PurchaseCreditsDialog
