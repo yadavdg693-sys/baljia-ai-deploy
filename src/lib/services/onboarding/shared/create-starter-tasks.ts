@@ -67,7 +67,6 @@ INPUTS:
 - Mission one-liner: ${ctx.oneLiner}
 - Founder angle: ${ctx.founderAngle ?? '(none)'}
 - Founder location: ${geoLine}
-- Active milestone: ${ctx.activeMilestoneTitle ?? '(none)'}${ctx.activeMilestoneTags.length ? ` (focus areas: ${ctx.activeMilestoneTags.join(', ')})` : ''}
 - Idea / business: ${ideaText}
 - Market research (full rendered report):
 ${marketContext.slice(0, 3000)}

@@ -1,5 +1,6 @@
 // Surprise Me — the "Baljia magic" path. Personal context creates substance.
-// fullHeader populates LinkedIn + Twitter + founder angle + geo.
+// fullHeader populates LinkedIn + founder angle + geo (Twitter enrichment
+// removed 2026-04-24 — low signal vs Tavily cost).
 // invent_idea generates the idea from background.
 
 import { stage } from '../stage-runner';
@@ -9,10 +10,11 @@ import { generateSurpriseMarketResearch } from '../shared/market-research-surpri
 import { saveMission3Section } from '../shared/mission-3-section';
 import { createStarterTasks } from '../shared/create-starter-tasks';
 import { infraGroup } from '../shared/infra-group';
-import { roadmapGroup } from '../shared/roadmap-group';
 import { proofGroup } from '../shared/proof-group';
 import type { OnboardingStrategy } from './base.strategy';
 import type { PipelineContext } from '../types';
+
+// Note: roadmapGroup disconnected 2026-04-24 — see build-idea.strategy.ts for context.
 
 export class SurpriseMeStrategy implements OnboardingStrategy {
   async run(ctx: PipelineContext): Promise<void> {
@@ -21,7 +23,6 @@ export class SurpriseMeStrategy implements OnboardingStrategy {
     await infraGroup(ctx);
     await stage(ctx, 'generate_market_research', () => generateSurpriseMarketResearch(ctx));
     await stage(ctx, 'save_mission', () => saveMission3Section(ctx));
-    await roadmapGroup(ctx);
     await stage(ctx, 'create_starter_tasks', () => createStarterTasks(ctx));
     await proofGroup(ctx);
   }

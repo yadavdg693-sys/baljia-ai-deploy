@@ -9,7 +9,6 @@ import {
   loadFounderIdentity,
   enrichGeoIP,
   enrichLinkedIn,
-  enrichTwitter,
   extractFounderAngle,
   composeFounderEnrichment,
 } from './enrichment';
@@ -43,13 +42,11 @@ export async function fullHeader(ctx: PipelineContext): Promise<void> {
     await loadFounderIdentity(ctx);
     const geo = await enrichGeoIP(ctx.requestIp);
 
-    // LinkedIn + Twitter in parallel (best-effort)
-    const [linkedinSummary, twitterBio] = await Promise.all([
-      ctx.founderName ? enrichLinkedIn(ctx.founderName) : Promise.resolve(null),
-      ctx.founderName ? enrichTwitter(ctx.founderName) : Promise.resolve(null),
-    ]);
+    // LinkedIn only (best-effort) — Twitter enrichment removed 2026-04-24
+    // (low-ROI: bio adds little signal once LinkedIn + idea invention are in play)
+    const linkedinSummary = ctx.founderName ? await enrichLinkedIn(ctx.founderName) : null;
 
-    composeFounderEnrichment(ctx, geo, linkedinSummary, twitterBio);
+    composeFounderEnrichment(ctx, geo, linkedinSummary, null);
   }, { optional: true });
 
   await stage(ctx, 'extract_founder_angle', () => extractFounderAngle(ctx), { optional: true });
