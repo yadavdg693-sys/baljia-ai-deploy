@@ -2,12 +2,14 @@
 // - Injects getCapabilitiesBulletsOnly() — bullet lists only, no CEO "worker
 //   agent / dispatch" framing, because this prompt's output is saved to founder-
 //   visible DB fields (tasks.description + tasks.suggestion_reasoning).
-// - Inlines CEO's 10 Skills + Task Scoping rules
+// - IMPORTS CEO's 10 Skills + Task Scoping rules from the shared
+//   ceo-framework module so onboarding and the runtime CEO stay in lockstep.
+//   When the framework evolves, both consumers update together.
 // - Per-slot CAN/CANNOT declarations (capability boundaries)
 // - Per-journey engineering spec: Build/Surprise = 5-section product spec;
 //   Grow = 5-section optimization spec
 // - Polsia field values: priority 100/70/70, complexity 8/3/4, hours 3/1/1
-// - Worker-voiced reasoning (different from market-research rationale)
+// - Operational-voiced reasoning (different from market-research rationale)
 // - Consumes market_research.first_priorities as strategic seed
 // - Parallel Promise.all for 3 task creates
 //
@@ -15,6 +17,7 @@
 
 import * as taskService from '@/lib/services/task.service';
 import { getCapabilitiesBulletsOnly } from '@/lib/platform-capabilities';
+import { CEO_TEN_SKILLS, TASK_SCOPING_RULES } from '@/lib/agents/ceo/ceo-framework';
 import { callSmallLLMJson } from './json-mode';
 import { emitActivity } from '../stage-runner';
 import type { PipelineContext, FirstPriority } from '../types';
@@ -104,17 +107,16 @@ PLATFORM CAPABILITIES (what the platform can and cannot do):
 ${capabilities}
 
 ═══════════════════════════════════════════════════════
-TASK FRAMEWORK (inherited from CEO scoping rules):
+TASK FRAMEWORK (shared with runtime CEO — same source, same rules):
 ═══════════════════════════════════════════════════════
 
-- Scope Sniffing: catch the iceberg — if "Build X" implies 10 sub-features, narrow to MVP slice
-- Pattern Matching: marketplace = auth + listings + search + payments + messaging; SaaS = auth + onboarding + core + billing + settings; AI tool = input form + API call + output display + history
-- MVP Filtering: which ONE feature would a customer pay for? That's v1
-- Failure Prediction: which step has highest fail risk? Flag fragile external APIs explicitly
-- Constraint Budgeting: max 4 hours per task; 6 shipped features beat 12 half-built
-- Translation: not "make it good" — say "create /api/search that accepts string X and returns Y"
-- Each task description is SELF-CONTAINED — embed all needed context inline (competitor names, audience details, infra assumptions). Tasks run in parallel; NEVER reference other tasks' output
-- One concern per task: Engineering builds. Research analyzes. Outreach sells
+${CEO_TEN_SKILLS}
+
+${TASK_SCOPING_RULES}
+
+Additional rules specific to Day-0 onboarding (3 parallel tasks, not a reactive queue):
+- Each task description is SELF-CONTAINED — embed all needed context inline (competitor names, audience details). Tasks run in parallel; NEVER reference other tasks' output.
+- One concern per task: Engineering builds. Research analyzes. Outreach sells. Do not mix.
 
 ═══════════════════════════════════════════════════════
 TASK 1 — slot: engineering, priority: high, hours: 3, complexity: 7-9
