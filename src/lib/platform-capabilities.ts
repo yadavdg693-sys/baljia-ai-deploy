@@ -6,13 +6,16 @@
 
 export const PLATFORM_CAPABILITIES = {
   build: [
-    'Full-stack web apps (Express + Postgres + Render hosting)',
-    'Landing pages, dashboards, admin panels, auth flows',
-    'API endpoints, webhooks, cron jobs',
-    'Stripe payments (subscriptions, one-time, connect payouts)',
-    'Database schemas, migrations, queries',
+    'Static landing pages (Cloudflare R2 + wildcard Worker, served from 300+ edges)',
+    'Full-stack web apps (Cloudflare Workers + Neon Postgres, nodejs_compat runtime)',
+    'Landing pages, dashboards, admin panels, auth flows (JWT, magic-link, OAuth)',
+    'API endpoints, webhooks (bounded CPU — Workers Paid 15-min budget per request)',
+    'Scheduled jobs (Cloudflare Cron Triggers)',
+    'Stripe payments (subscriptions, one-time, Connect payouts)',
+    'Database schemas, migrations, read-only queries',
     'SEO optimization, meta tags, structured data',
-    'Subdomain hosting ({company}.baljia.app)',
+    'Subdomain hosting ({company}.baljia.app) — wildcard DNS + per-founder route overrides',
+    'Optional custom domain attach (founder brings their own)',
   ],
   browser: [
     'Navigate any website, click, fill forms, extract data',
@@ -79,5 +82,5 @@ ${cantDo}`;
 
 // Ultra-compact version for strategy prompt (minimize tokens)
 export function getCapabilityConstraint(): string {
-  return `IMPORTANT: The idea MUST be buildable as a web app with these tools: Express+Postgres backend, Stripe payments, email outreach, Twitter posting, Meta ads, browser automation (scraping/form-filling), web research. We CANNOT build: mobile apps, browser extensions, desktop apps, hardware, or apps requiring Instagram/LinkedIn/TikTok APIs.`;
+  return `IMPORTANT: The idea MUST be buildable as a web app with these tools: Cloudflare Workers + Neon Postgres backend (nodejs_compat), Stripe payments, email outreach, Twitter posting, Meta ads, browser automation (scraping/form-filling), web research. We CANNOT build: mobile apps, browser extensions, desktop apps, hardware, long-running server processes (>15-min CPU per request), or apps requiring Instagram/LinkedIn/TikTok APIs.`;
 }

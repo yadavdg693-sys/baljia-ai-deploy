@@ -1134,22 +1134,20 @@ async function handleToolCall(
 // ══════════════════════════════════════════════
 
 const ENGINEERING_TOOLS = new Set([
+  // GitHub (source control)
   'github_create_repo', 'github_push_file', 'github_read_file',
   'github_list_files', 'github_delete_file',
-  // KG: create_branch, create_pr, search_code, create_commit
   'github_create_branch', 'github_create_pr',
   'github_search_code', 'github_create_commit',
-  // Cloudflare (primary per ADR-002 split-hosting)
+  // Cloudflare — Tier 1 static landing pages (R2)
   'cf_deploy_landing', 'cf_verify_founder_app', 'cf_delete_founder_app',
-  // Render (legacy — platform-internal only)
-  'render_create_service', 'render_get_service', 'render_deploy',
-  'render_get_deploy_status', 'render_get_logs', 'render_delete_service',
-  // KG: list_services, get_metrics, list_databases
-  'render_list_services', 'render_get_metrics', 'render_list_databases',
+  // Cloudflare — Tier 2/3 full-stack apps (Workers + R2 + Neon bindings)
+  'cf_deploy_app', 'cf_redeploy_app', 'cf_get_app_info', 'cf_delete_app',
+  // Company + domain
   'get_company_tech',
   'attach_custom_domain', 'verify_custom_domain',
   // Health & safety
-  'check_url_health', 'render_rollback',
+  'check_url_health',
   // Database infrastructure (Neon)
   'provision_database', 'get_database_info', 'run_migration', 'query_company_db',
   // Stripe payments (founder's product)

@@ -18,7 +18,7 @@ async function main() {
   }
   const credits = await db.select().from(creditLedger).where(eq(creditLedger.company_id, COMPANY_ID)).orderBy(desc(creditLedger.created_at)).limit(5);
   console.log('Credit ledger (latest 5):');
-  for (const c of credits) console.log(' ', c.type, c.amount, c.reason);
+  for (const c of credits) console.log(' ', c.entry_type, c.amount, c.description);
   process.exit(0);
 }
 

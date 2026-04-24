@@ -1,13 +1,14 @@
-// Engineering Agent Tools — GitHub + Cloudflare (primary) + Render (legacy) deployment (Agent #30)
-// Enables the Engineering agent to push code, create repos, and deploy apps.
+// Engineering Agent Tools — GitHub + Cloudflare deployment (Agent #30)
+// Enables the Engineering agent to push code and deploy founder apps.
 //
-// Deploy targets (per ADR-002 split-hosting strategy):
-//   • Cloudflare Workers + R2   — primary target for founder apps at *.baljia.app
-//                                  (tools prefixed `cf_`)
-//   • Render                    — LEGACY; kept for platform-internal services only.
-//                                  Do NOT use render_* tools for new founder-app deploys.
-//                                  These remain callable for backwards compat / rollback.
-//   • GitHub                    — shared for both (platform-owned org, one repo per company)
+// Deploy target (per ADR-002 split-hosting strategy):
+//   • Cloudflare Workers + R2   — founder apps at *.baljia.app
+//                                  Tier 1 (static landing)   → cf_deploy_landing
+//                                  Tier 2/3 (full-stack app) → cf_deploy_app
+//   • GitHub                    — platform-owned org, one repo per company
+//
+// Render deploy tools were removed from this agent in the CF-full migration.
+// Render is now ONLY used by the platform itself (baljia.ai), not by founder apps.
 
 import type { Task } from '@/types';
 import { db, companies } from '@/lib/db';
@@ -20,6 +21,12 @@ import {
   deleteLandingHtml,
   verifyFounderAppLive,
   isCloudflareDeployConfigured,
+  deployWorkerScript,
+  deleteWorkerScript,
+  addWorkerRoute,
+  putWorkerSecret,
+  getWorkerScriptInfo,
+  type WorkerBinding,
 } from '@/lib/services/cf-deploy.service';
 import { createLogger } from '@/lib/logger';
 
@@ -134,67 +141,61 @@ export function getEngineeringTools() {
         properties: {},
       },
     },
-    // ──────────────────────────────────────────────
-    // RENDER — LEGACY (platform-internal services only; do NOT use for new founder-app deploys)
-    // ──────────────────────────────────────────────
     {
-      name: 'render_create_service',
-      description: '[LEGACY — prefer cf_deploy_landing for founder-app deploys] Create a new Render web service or static site from a GitHub repo.',
+      name: 'cf_deploy_app',
+      description: 'TIER 2/3 APPS: Deploy a full-stack founder app (Express-style API, SSR pages, etc.) as a Cloudflare Worker at {subdomain}.baljia.app. Takes a complete ES-module JS source that exports default { fetch(request, env, ctx) }. Automatically: uploads the script, registers a per-subdomain route (overrides wildcard for this founder), injects the company Neon DB URL as NEON_URL secret if with_neon_db=true, binds the R2 ASSETS bucket if with_r2_assets=true. Use THIS instead of cf_deploy_landing when the app has dynamic logic, DB reads/writes, or API endpoints. Max script size 10 MB gzipped.',
       input_schema: {
         type: 'object' as const,
         properties: {
-          name: { type: 'string' as const, description: 'Service name on Render' },
-          repo: { type: 'string' as const, description: 'GitHub repo name (in platform org)' },
-          type: { type: 'string' as const, description: '"web_service" or "static_site"' },
-          build_command: { type: 'string' as const, description: 'Build command (e.g. "npm install && npm run build")' },
-          start_command: { type: 'string' as const, description: 'Start command for web services (e.g. "node dist/index.js")' },
-          env_vars: {
-            type: 'array' as const,
-            description: 'Environment variables array',
-            items: {
-              type: 'object' as const,
-              properties: {
-                key: { type: 'string' as const },
-                value: { type: 'string' as const },
-              },
-            },
+          script_content: {
+            type: 'string' as const,
+            description: 'Complete ES-module JavaScript source. Must export default an object with a fetch(request, env, ctx) handler. Can use fetch(), URL, Response, Request, and Node APIs (nodejs_compat enabled: Buffer, crypto, etc.). Access bindings via env.NEON_URL (if with_neon_db), env.ASSETS (if with_r2_assets), env.<custom> for additional_secrets.',
+          },
+          with_neon_db: {
+            type: 'boolean' as const,
+            description: 'Inject the company\'s Neon connection string as env.NEON_URL secret. Set true for apps with a database. Requires provision_database to have run first.',
+          },
+          with_r2_assets: {
+            type: 'boolean' as const,
+            description: 'Bind the R2 assets bucket so the Worker can read static files via env.ASSETS.get(key). Set true if the app serves images, CSS, etc. from R2.',
+          },
+          additional_secrets: {
+            type: 'object' as const,
+            description: 'Extra per-founder secrets to inject (e.g. { "STRIPE_KEY": "sk_...", "OPENAI_KEY": "sk-..." }). Each becomes env.<NAME> inside the Worker. Values are masked in CF logs.',
+            additionalProperties: { type: 'string' as const },
           },
         },
-        required: ['name', 'repo', 'type'],
+        required: ['script_content'],
       },
     },
     {
-      name: 'render_get_service',
-      description: 'Get details about a Render service including deployment status and URL.',
+      name: 'cf_redeploy_app',
+      description: 'Update an existing Tier 2/3 founder app with new code. Same semantics as cf_deploy_app — the script is replaced atomically. Use after fixing a bug or shipping a feature.',
       input_schema: {
         type: 'object' as const,
         properties: {
-          service_id: { type: 'string' as const, description: 'Render service ID (from render_create_service or company record)' },
+          script_content: { type: 'string' as const, description: 'Updated ES-module source (see cf_deploy_app).' },
+          with_neon_db: { type: 'boolean' as const },
+          with_r2_assets: { type: 'boolean' as const },
+          additional_secrets: { type: 'object' as const, additionalProperties: { type: 'string' as const } },
         },
-        required: ['service_id'],
+        required: ['script_content'],
       },
     },
     {
-      name: 'render_deploy',
-      description: 'Trigger a new deployment for an existing Render service.',
+      name: 'cf_get_app_info',
+      description: 'Get deployment info for this company\'s Tier 2/3 app (deploy status, etag, last modified). Does NOT return the source code. Returns null if no app is deployed.',
       input_schema: {
         type: 'object' as const,
-        properties: {
-          service_id: { type: 'string' as const, description: 'Render service ID' },
-          clear_cache: { type: 'boolean' as const, description: 'Whether to clear the build cache (default: false)' },
-        },
-        required: ['service_id'],
+        properties: {},
       },
     },
     {
-      name: 'render_get_deploy_status',
-      description: 'Check the status of the latest deployment for a Render service.',
+      name: 'cf_delete_app',
+      description: 'TIER 2/3: Fully remove this company\'s Worker script + route from Cloudflare. Use for teardown. The Tier 1 landing HTML in R2 is NOT deleted by this tool (use cf_delete_founder_app for that). Idempotent.',
       input_schema: {
         type: 'object' as const,
-        properties: {
-          service_id: { type: 'string' as const, description: 'Render service ID' },
-        },
-        required: ['service_id'],
+        properties: {},
       },
     },
     {
@@ -224,32 +225,6 @@ export function getEngineeringTools() {
         properties: {},
       },
     },
-    // ── Render Logs & Lifecycle ──
-    {
-      name: 'render_get_logs',
-      description: 'Get runtime logs from a deployed Render service. Essential for debugging deployed apps — shows console output, errors, crashes.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          service_id: { type: 'string' as const, description: 'Render service ID (from get_company_tech)' },
-          log_type: { type: 'string' as const, description: '"deploy" for build logs or "service" for runtime logs (default: service)' },
-          num_lines: { type: 'number' as const, description: 'Number of log lines to return (default: 100, max: 500)' },
-        },
-        required: ['service_id'],
-      },
-    },
-    {
-      name: 'render_delete_service',
-      description: 'DANGEROUS: Permanently delete a Render service and its deployments. Use only when explicitly asked to tear down infrastructure. This action cannot be undone.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          service_id: { type: 'string' as const, description: 'Render service ID to delete' },
-          confirm: { type: 'boolean' as const, description: 'Must be true to confirm deletion' },
-        },
-        required: ['service_id', 'confirm'],
-      },
-    },
     // ── Health & safety ──
     {
       name: 'check_url_health',
@@ -260,17 +235,6 @@ export function getEngineeringTools() {
           url: { type: 'string' as const, description: 'URL to check (e.g. https://acme.baljia.app)' },
         },
         required: ['url'],
-      },
-    },
-    {
-      name: 'render_rollback',
-      description: 'Roll back a Render service to its previous successful deployment. Use when a new deploy breaks the app.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          service_id: { type: 'string' as const, description: 'Render service ID (from get_company_tech)' },
-        },
-        required: ['service_id'],
       },
     },
     // ── Database Infrastructure (Neon Postgres) ──
@@ -389,29 +353,6 @@ export function getEngineeringTools() {
         required: ['repo', 'title', 'head_branch'],
       },
     },
-    // ── Render: list + metrics (KG spec: list_services, get_metrics, list_databases) ──
-    {
-      name: 'render_list_services',
-      description: 'List all Render services for the platform account. Useful to find a service_id when you only know the company name.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          limit: { type: 'number' as const, description: 'Max services to return (default: 20)' },
-        },
-      },
-    },
-    {
-      name: 'render_get_metrics',
-      description: 'Get CPU and memory metrics for a Render service to diagnose performance issues.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          service_id: { type: 'string' as const, description: 'Render service ID' },
-          resolution: { type: 'string' as const, description: 'Metric resolution: "10m", "1h", "1d" (default: 1h)' },
-        },
-        required: ['service_id'],
-      },
-    },
     // ── GitHub: search + commit (completing KG github spec) ──
     {
       name: 'github_search_code',
@@ -452,16 +393,6 @@ export function getEngineeringTools() {
       },
     },
     // ── Render: list_databases (completing KG render spec) ──
-    {
-      name: 'render_list_databases',
-      description: 'List all Render Postgres databases in the platform account. Useful to find database IDs for connection info.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          limit: { type: 'number' as const, description: 'Max databases to return (default: 20)' },
-        },
-      },
-    },
   ];
 }
 
@@ -512,7 +443,7 @@ export async function handleEngineeringTool(
     case 'github_delete_file':
       return githubDeleteFile(input, task.company_id);
 
-    // ── Cloudflare deploys (primary — ADR-002) ──
+    // ── Cloudflare deploys (sole deploy target for founder apps — ADR-002) ──
     case 'cf_deploy_landing':
       return cfDeployLanding(input, task.company_id);
 
@@ -522,22 +453,17 @@ export async function handleEngineeringTool(
     case 'cf_delete_founder_app':
       return cfDeleteFounderApp(input, task.company_id);
 
-    // ── Render deploys (legacy — platform-internal only) ──
-    case 'render_create_service':
-      return renderCreateService(input, task.company_id);
+    case 'cf_deploy_app':
+      return cfDeployApp(input, task.company_id);
 
-    case 'render_get_service': {
-      await assertServiceOwnership(input.service_id as string, task.company_id);
-      return renderGetService(input);
-    }
+    case 'cf_redeploy_app':
+      return cfDeployApp(input, task.company_id);  // same semantics — deployWorkerScript is idempotent (overwrite)
 
-    case 'render_deploy':
-      await assertServiceOwnership(input.service_id as string, task.company_id);
-      return renderDeploy(input, task.company_id);
+    case 'cf_get_app_info':
+      return cfGetAppInfo(input, task.company_id);
 
-    case 'render_get_deploy_status':
-      await assertServiceOwnership(input.service_id as string, task.company_id);
-      return renderGetDeployStatus(input);
+    case 'cf_delete_app':
+      return cfDeleteApp(input, task.company_id);
 
     case 'attach_custom_domain':
       return handleAttachCustomDomain(input, task.company_id);
@@ -548,10 +474,6 @@ export async function handleEngineeringTool(
     // ── Health & safety ──
     case 'check_url_health':
       return handleCheckUrlHealth(input);
-
-    case 'render_rollback':
-      await assertServiceOwnership(input.service_id as string, task.company_id);
-      return handleRenderRollback(input);
 
     // ── Database Infrastructure ──
     case 'provision_database':
@@ -565,15 +487,6 @@ export async function handleEngineeringTool(
 
     case 'query_company_db':
       return handleQueryCompanyDb(input, task.company_id);
-
-    // ── Render Logs & Lifecycle ──
-    case 'render_get_logs':
-      await assertServiceOwnership(input.service_id as string, task.company_id);
-      return renderGetLogs(input);
-
-    case 'render_delete_service':
-      await assertServiceOwnership(input.service_id as string, task.company_id);
-      return renderDeleteService(input, task.company_id);
 
     // ── Stripe Payments ──
     case 'stripe_create_product':
@@ -600,17 +513,6 @@ export async function handleEngineeringTool(
 
     case 'github_create_commit':
       return githubCreateCommit(input, task.company_id);
-
-    // ── Render list + metrics + databases ──
-    case 'render_list_services':
-      return renderListServices(input);
-
-    case 'render_get_metrics':
-      await assertServiceOwnership(input.service_id as string, task.company_id);
-      return renderGetMetrics(input);
-
-    case 'render_list_databases':
-      return renderListDatabases(input);
 
     default:
       return `Unknown engineering tool: ${toolName}`;
@@ -1879,5 +1781,160 @@ async function cfDeleteFounderApp(_input: Record<string, unknown>, companyId: st
     return `Deleted founder app at ${subdomain}.baljia.app (R2 landing asset removed; company.custom_domain cleared).`;
   } catch (err) {
     return `Cloudflare delete error: ${err instanceof Error ? err.message : 'Unknown error'}`;
+  }
+}
+
+// ══════════════════════════════════════════════
+// TIER 2/3 — CF WORKER APP DEPLOY HANDLERS
+// Full-stack apps: API endpoints, SSR, DB-backed features. Each founder gets a
+// dedicated Worker script at {slug}.baljia.app/* whose route overrides the
+// wildcard *.baljia.app/* (route specificity wins in CF).
+// ══════════════════════════════════════════════
+
+function workerScriptNameFor(subdomain: string): string {
+  // Dedicated script name per founder — stays under CF's 100-script limit on
+  // Workers Paid. Names must match [a-z0-9_-]+ and start with a letter.
+  return `baljia-app-${subdomain}`;
+}
+
+async function cfDeployApp(input: Record<string, unknown>, companyId: string): Promise<string> {
+  if (!isCloudflareDeployConfigured()) {
+    return 'Cloudflare deploy not configured. Set CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_ZONE_ID_APP, R2_* env vars.';
+  }
+  const scriptContent = input.script_content as string;
+  if (typeof scriptContent !== 'string' || scriptContent.length === 0) {
+    return 'Missing required input: script_content (full ES-module Worker source).';
+  }
+  if (scriptContent.length > 5 * 1024 * 1024) {
+    return `Script too large (${scriptContent.length} bytes raw). CF hard limit is 10 MB gzipped; keep source under 5 MB.`;
+  }
+  if (!/export\s+default\s*\{/.test(scriptContent) && !/export\s+default\s+\{/.test(scriptContent)) {
+    return 'Invalid script: must include `export default { fetch(request, env, ctx) { ... } }` as the module\'s default export. Check the Cloudflare Workers ES-module syntax.';
+  }
+
+  const withNeonDb = input.with_neon_db === true;
+  const withR2Assets = input.with_r2_assets === true;
+  const additionalSecrets = (input.additional_secrets as Record<string, string> | undefined) ?? {};
+
+  try {
+    const subdomain = await resolveCompanySubdomain(companyId);
+    const scriptName = workerScriptNameFor(subdomain);
+
+    // Assemble bindings
+    const bindings: WorkerBinding[] = [
+      { type: 'plain_text', name: 'PLATFORM_API_BASE', text: 'https://baljia.ai' },
+      { type: 'plain_text', name: 'COMPANY_ID', text: companyId },
+      { type: 'plain_text', name: 'COMPANY_SUBDOMAIN', text: subdomain },
+    ];
+    if (withR2Assets) {
+      bindings.push({ type: 'r2_bucket', name: 'ASSETS', bucket_name: process.env.R2_BUCKET_NAME ?? 'baljia-assets' });
+    }
+
+    // 1. Upload the Worker script (overwrites if exists)
+    const deployResult = await deployWorkerScript({
+      scriptName,
+      scriptContent,
+      bindings,
+    });
+    if (!deployResult) {
+      return `CF Worker deploy FAILED for ${scriptName} — check logs.`;
+    }
+
+    // 2. Inject Neon DB URL as secret (if requested)
+    if (withNeonDb) {
+      const [company] = await db
+        .select({ neon_connection_string: companies.neon_connection_string })
+        .from(companies)
+        .where(eq(companies.id, companyId))
+        .limit(1);
+      if (!company?.neon_connection_string) {
+        return `Worker deployed but NEON_URL secret NOT injected — company ${companyId} has no provisioned Neon DB. Call provision_database first, then cf_redeploy_app.`;
+      }
+      const ok = await putWorkerSecret({
+        scriptName,
+        key: 'NEON_URL',
+        value: company.neon_connection_string,
+      });
+      if (!ok) {
+        return `Worker deployed but NEON_URL secret injection FAILED. Worker script exists but will crash on env.NEON_URL access — check CF logs.`;
+      }
+    }
+
+    // 3. Inject any additional per-founder secrets
+    const secretResults: string[] = [];
+    for (const [key, value] of Object.entries(additionalSecrets)) {
+      if (typeof value !== 'string' || value.length === 0) continue;
+      const ok = await putWorkerSecret({ scriptName, key, value });
+      secretResults.push(`${key}: ${ok ? 'ok' : 'FAIL'}`);
+    }
+
+    // 4. Register per-subdomain route that overrides the wildcard Worker
+    const routePattern = `${subdomain}.baljia.app/*`;
+    const routeResult = await addWorkerRoute({ pattern: routePattern, scriptName });
+    if (!routeResult) {
+      return `Worker deployed but route ${routePattern} NOT registered — the wildcard Worker will still serve Tier 1 at this subdomain. Manual fix: add route via CF dashboard.`;
+    }
+
+    log.info('cf_deploy_app succeeded', {
+      companyId,
+      subdomain,
+      scriptName,
+      bytes: scriptContent.length,
+      withNeonDb,
+      withR2Assets,
+      extraSecrets: Object.keys(additionalSecrets).length,
+      etag: deployResult.etag,
+    });
+
+    return [
+      `✅ App deployed to Cloudflare Workers!`,
+      `URL: https://${subdomain}.baljia.app`,
+      `Script: ${scriptName}`,
+      `Route: ${routePattern} (overrides wildcard)`,
+      `Bytes: ${scriptContent.length}`,
+      `Neon DB bound: ${withNeonDb ? 'yes (env.NEON_URL)' : 'no'}`,
+      `R2 assets bound: ${withR2Assets ? 'yes (env.ASSETS)' : 'no'}`,
+      secretResults.length > 0 ? `Extra secrets: ${secretResults.join(', ')}` : '',
+      ``,
+      `Verify with cf_verify_founder_app. If you need to redeploy, use cf_redeploy_app.`,
+    ].filter(Boolean).join('\n');
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Unknown error';
+    log.error('cf_deploy_app failed', { companyId }, err);
+    return `Cloudflare app deploy error: ${msg}`;
+  }
+}
+
+async function cfGetAppInfo(_input: Record<string, unknown>, companyId: string): Promise<string> {
+  if (!isCloudflareDeployConfigured()) return 'Cloudflare deploy not configured.';
+  try {
+    const subdomain = await resolveCompanySubdomain(companyId);
+    const scriptName = workerScriptNameFor(subdomain);
+    const info = await getWorkerScriptInfo(scriptName);
+    if (!info) return `No Tier 2/3 app deployed for ${subdomain} (script "${scriptName}" not found). Use cf_deploy_app to create one, or cf_deploy_landing for a static Tier 1 landing page.`;
+    return [
+      `Tier 2/3 app info for ${subdomain}.baljia.app:`,
+      `  Script name: ${info.scriptName}`,
+      `  ETag:        ${info.etag}`,
+      `  URL:         https://${subdomain}.baljia.app`,
+    ].join('\n');
+  } catch (err) {
+    return `Get app info error: ${err instanceof Error ? err.message : 'Unknown error'}`;
+  }
+}
+
+async function cfDeleteApp(_input: Record<string, unknown>, companyId: string): Promise<string> {
+  if (!isCloudflareDeployConfigured()) return 'Cloudflare deploy not configured.';
+  try {
+    const subdomain = await resolveCompanySubdomain(companyId);
+    const scriptName = workerScriptNameFor(subdomain);
+
+    const ok = await deleteWorkerScript(scriptName);
+    if (!ok) return `Delete FAILED for script "${scriptName}" — check CF logs. (Route may still exist; remove manually if needed.)`;
+
+    log.info('cf_delete_app succeeded', { companyId, subdomain, scriptName });
+    return `✅ Tier 2/3 app removed from Cloudflare (script "${scriptName}"). The wildcard Worker will resume serving this subdomain (Tier 1 R2 landing, or branded 404 if no landing is deployed).`;
+  } catch (err) {
+    return `Cloudflare app delete error: ${err instanceof Error ? err.message : 'Unknown error'}`;
   }
 }
