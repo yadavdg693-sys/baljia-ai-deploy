@@ -2,6 +2,7 @@
 
 import { db, documents } from '@/lib/db';
 import * as documentService from '@/lib/services/document.service';
+import { sanitizeForFounder } from '@/lib/founder-safety/sanitize';
 import type {
   BuildMarketResearch,
   GrowMarketResearch,
@@ -17,6 +18,15 @@ export async function persistMarketResearch(
 ): Promise<void> {
   ctx.marketResearchJson = jsonResult;
   ctx.marketResearch = markdown;
+
+  // Founder-safety: market research legitimately names competitors like
+  // Cloudflare/Neon/Postgres — audit mode logs infra-phrase violations
+  // without mutating the markdown. If a real leak shows up, we investigate
+  // at the source (the JSON-mode screen should have caught it upstream).
+  sanitizeForFounder(markdown, {
+    mode: 'audit',
+    context: { callsite: 'persistMarketResearch', companyId: ctx.companyId },
+  });
 
   const docs = await documentService.getDocuments(ctx.companyId);
   const mrDoc = docs.find((d) => d.doc_type === 'market_research');

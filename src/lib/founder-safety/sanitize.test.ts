@@ -1,112 +1,148 @@
 // Unit tests for sanitizeForFounder — keep in lockstep with banned-terms.ts.
-// These run on every CI push and catch regressions where someone adds a new
-// banned term but forgets to update the matcher, or relaxes the matcher in a
-// way that lets real leaks through.
+// These run on every CI push. The banlist is intentionally NARROW (phrase
+// patterns only, no bare product names) so false positives are rare.
 
 import { describe, expect, it } from 'vitest';
 import { sanitizeForFounder, FounderSafetyViolation } from './sanitize';
 
-describe('sanitizeForFounder — soft mode', () => {
-  it('passes clean text untouched', () => {
-    const r = sanitizeForFounder('Setting up your backend infrastructure', { mode: 'soft' });
-    expect(r.hadViolations).toBe(false);
-    expect(r.clean).toBe('Setting up your backend infrastructure');
-    expect(r.violations).toHaveLength(0);
-  });
-
-  it('does not false-positive on common English words', () => {
-    // "render" as a verb (lowercase) is OK; only "Render service" / "hosted on Render" is banned
-    expect(sanitizeForFounder('render the page carefully', { mode: 'soft' }).hadViolations).toBe(false);
-    // "Express yourself" — the ambiguous bare "Express" is never banned alone
-    expect(sanitizeForFounder('Express yourself clearly', { mode: 'soft' }).hadViolations).toBe(false);
-    // "Mumbai" — geographic names must never trigger
-    expect(sanitizeForFounder('help every founder in Mumbai', { mode: 'soft' }).hadViolations).toBe(false);
-  });
-
-  it('catches infrastructure leaks', () => {
-    const cases = [
-      'Neon DB ready: my-app-123',
-      'hosted on Render',
-      'Express.js server',
-      'Cloudflare Worker deployed',
-      'Postgres connection string',
-      'Used wrangler to deploy',
+describe('sanitizeForFounder — narrow banlist (critical)', () => {
+  it('does NOT flag bare product names used as competitor references', () => {
+    // These are the legit-competitor cases we must NEVER mangle.
+    const legitCases = [
+      'Cloudflare is a major CDN competitor',
+      'Our target market is companies currently using Neon',
+      'Built on Postgres and highly scalable',
+      'We compete with Render and Vercel',
+      'The Express framework is one option',         // "Express framework" too generic — not banned
+      'Express yourself clearly',                     // bare "Express" — verb
+      'render the page carefully',                    // bare "render" — verb
+      'R2 object storage is a feature',               // bare "R2"
+      'We use a serverless function for this flow',   // generic industry term
+      'check our GitHub repo for the full code',      // founder phrasing
     ];
-    for (const input of cases) {
+    for (const input of legitCases) {
       const r = sanitizeForFounder(input, { mode: 'soft' });
-      expect(r.hadViolations, `expected ${JSON.stringify(input)} to flag`).toBe(true);
-      expect(r.clean, `expected ${JSON.stringify(input)} to be redacted`).toContain('[redacted]');
+      expect(r.hadViolations, `expected ${JSON.stringify(input)} to pass clean`).toBe(false);
+      expect(r.clean).toBe(input);
     }
   });
 
-  it('catches internal terminology leaks', () => {
-    const cases = [
-      'the worker agent will retry',       // "worker agent" is case-insensitive, catches "Worker" too
-      'Engineering agent will handle this', // "Engineering agent" is case-sensitive (proper noun)
-      'assigned to a worker_lane',
-      'using the ContextPacket',
+  it('does NOT flag founder input describing their own product space', () => {
+    const founderInputs = [
+      'build something like Vercel but for data',
+      'a Postgres GUI for non-technical teams',
+      'a Neon alternative with stricter SLAs',
+      'make a Render competitor focused on EU',
     ];
-    for (const input of cases) {
+    for (const input of founderInputs) {
       const r = sanitizeForFounder(input, { mode: 'soft' });
-      expect(r.hadViolations, `expected ${JSON.stringify(input)} to flag`).toBe(true);
+      expect(r.hadViolations, `expected ${JSON.stringify(input)} to pass clean`).toBe(false);
     }
   });
 
-  it('proper-noun terms are case-sensitive (avoid false positives on verbs)', () => {
-    // "engineering agent" lowercase is NOT banned — "Engineering agent" proper noun is.
-    // Prevents false positives when founders describe their own engineering work.
-    const lowercaseClean = sanitizeForFounder('my engineering plan', { mode: 'soft' });
-    expect(lowercaseClean.hadViolations).toBe(false);
-  });
-
-  it('catches multiple violations in one pass', () => {
-    const r = sanitizeForFounder('Used Cloudflare Workers + Neon Postgres to build', { mode: 'soft' });
-    expect(r.violations.length).toBeGreaterThanOrEqual(3);
-    const labels = r.violations.map((v) => v.label);
-    expect(labels).toContain('Cloudflare');
-    expect(labels).toContain('Neon');
-    expect(labels).toContain('Postgres');
-  });
-
-  it('redacts violations in place, preserving surrounding text', () => {
-    const r = sanitizeForFounder('The Postgres database is slow.', { mode: 'soft' });
-    expect(r.hadViolations).toBe(true);
-    expect(r.clean).toBe('The [redacted] database is slow.');
-  });
-
-  it('vendor category is excluded from strict list by default', () => {
-    // Hunter.io is a vendor — won't fire unless includeVendors is true
-    const withoutVendors = sanitizeForFounder('verified via Hunter.io', { mode: 'soft' });
-    expect(withoutVendors.hadViolations).toBe(false);
-
-    const withVendors = sanitizeForFounder('verified via Hunter.io', {
-      mode: 'soft',
-      includeVendors: true,
-    });
-    expect(withVendors.hadViolations).toBe(true);
+  it('passes clean platform-authored activity lines', () => {
+    const activities = [
+      'Setting up your backend infrastructure',
+      'Database ready: my-app-123',
+      'Code repository ready: https://github.com/BALAJIapps/my-app',  // URL not banned
+      'Scouting the web for: "book generator competitors"',
+      '3 tasks queued: engineering (3h) → research (1h) → outreach (1h)',
+      'Mission: help every founder in Mumbai',
+    ];
+    for (const input of activities) {
+      const r = sanitizeForFounder(input, { mode: 'soft' });
+      expect(r.hadViolations, `expected ${JSON.stringify(input)} to pass clean`).toBe(false);
+    }
   });
 });
 
-describe('sanitizeForFounder — strict mode', () => {
-  it('passes clean text without throwing', () => {
-    expect(() => sanitizeForFounder('Database ready: my-app', { mode: 'strict' })).not.toThrow();
-  });
-
-  it('throws FounderSafetyViolation on banned term', () => {
-    expect(() => sanitizeForFounder('Neon DB ready', { mode: 'strict' })).toThrow(FounderSafetyViolation);
-  });
-
-  it('error carries the violation list', () => {
-    try {
-      sanitizeForFounder('hosted on Render with Postgres', { mode: 'strict' });
-      expect.fail('should have thrown');
-    } catch (err) {
-      expect(err).toBeInstanceOf(FounderSafetyViolation);
-      const violations = (err as FounderSafetyViolation).violations;
-      expect(violations.length).toBeGreaterThan(0);
-      const labels = violations.map((v) => v.label);
-      expect(labels).toEqual(expect.arrayContaining(['hosted on Render', 'Postgres']));
+describe('sanitizeForFounder — still catches real leaks', () => {
+  it('catches implementation-leak phrases', () => {
+    const cases = [
+      'Cloudflare Worker deployed at {slug}.baljia.app',
+      'hosted on Cloudflare',
+      'Neon DB ready: my-app-123',
+      'our Neon database is live',
+      'Neon Postgres connection string',
+      'hosted on Render',
+      'the Render service spun up cleanly',
+      'Express.js server is listening',
+      'Express backend with middleware',
+      'Used wrangler to deploy',
+      'uses drizzle-orm for queries',
+    ];
+    for (const input of cases) {
+      const r = sanitizeForFounder(input, { mode: 'soft' });
+      expect(r.hadViolations, `expected ${JSON.stringify(input)} to flag`).toBe(true);
     }
+  });
+
+  it('catches internal terminology', () => {
+    const cases = [
+      'the worker agent will retry',
+      'Engineering agent will handle this',
+      'assigned to a worker_lane',
+      'using the ContextPacket',
+      'WORKER-VOICED reasoning expected',
+    ];
+    for (const input of cases) {
+      const r = sanitizeForFounder(input, { mode: 'soft' });
+      expect(r.hadViolations, `expected ${JSON.stringify(input)} to flag`).toBe(true);
+    }
+  });
+
+  it('catches multiple violations', () => {
+    const r = sanitizeForFounder(
+      'Cloudflare Worker hosted on Render with a Neon DB and Express.js',
+      { mode: 'soft' },
+    );
+    expect(r.violations.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it('redacts in place', () => {
+    const r = sanitizeForFounder('The Neon DB is ready.', { mode: 'soft' });
+    expect(r.clean).toBe('The [redacted] is ready.');
+  });
+});
+
+describe('sanitizeForFounder — mode semantics', () => {
+  it('strict throws on first violation', () => {
+    expect(() => sanitizeForFounder('Neon DB ready', { mode: 'strict' }))
+      .toThrow(FounderSafetyViolation);
+  });
+
+  it('strict passes clean content untouched', () => {
+    expect(() => sanitizeForFounder('Database ready', { mode: 'strict' })).not.toThrow();
+  });
+
+  it('audit logs but does NOT modify text', () => {
+    const input = 'the Neon DB crashed';
+    const r = sanitizeForFounder(input, { mode: 'audit' });
+    expect(r.hadViolations).toBe(true);
+    expect(r.clean).toBe(input); // unchanged — audit is log-only
+    expect(r.violations.map((v) => v.label)).toContain('Neon DB');
+  });
+
+  it('audit returns input unchanged when clean', () => {
+    const input = 'Cloudflare is a competitor in this space';
+    const r = sanitizeForFounder(input, { mode: 'audit' });
+    expect(r.hadViolations).toBe(false);
+    expect(r.clean).toBe(input);
+  });
+});
+
+describe('sanitizeForFounder — vendor opt-in', () => {
+  it('vendors excluded by default', () => {
+    const r = sanitizeForFounder('verified via Hunter.io', { mode: 'soft' });
+    expect(r.hadViolations).toBe(false);
+  });
+
+  it('vendors catch when includeVendors=true', () => {
+    const r = sanitizeForFounder('verified via Hunter.io', {
+      mode: 'soft',
+      includeVendors: true,
+    });
+    expect(r.hadViolations).toBe(true);
   });
 });
 
@@ -117,24 +153,25 @@ describe('sanitizeForFounder — edge cases', () => {
     expect(r.clean).toBe('');
   });
 
-  it('handles very long input without performance cliff', () => {
+  it('handles ~15kB in under 500ms', () => {
     const longClean = 'This is a long clean string. '.repeat(500);
     const start = Date.now();
     const r = sanitizeForFounder(longClean, { mode: 'soft' });
-    const elapsed = Date.now() - start;
     expect(r.hadViolations).toBe(false);
-    expect(elapsed).toBeLessThan(500); // 500ms budget for ~15kB of text
+    expect(Date.now() - start).toBeLessThan(500);
   });
 
-  it('counts each occurrence of a repeated banned term', () => {
-    const r = sanitizeForFounder('Postgres is slow. Postgres is slow.', { mode: 'soft' });
+  it('counts each occurrence of a repeated term', () => {
+    const r = sanitizeForFounder('Neon DB is slow. Neon DB is slow.', { mode: 'soft' });
     expect(r.violations.length).toBe(2);
   });
 
-  it('returns violation indices in ascending order', () => {
-    const r = sanitizeForFounder('Uses Neon and Postgres and Cloudflare', { mode: 'soft' });
-    const indices = r.violations.map((v) => v.index);
-    const sorted = [...indices].sort((a, b) => a - b);
-    expect(indices).toEqual(sorted);
+  it('violation indices ascend', () => {
+    const r = sanitizeForFounder(
+      'Neon DB first then a Cloudflare Worker',
+      { mode: 'soft' },
+    );
+    const idxs = r.violations.map((v) => v.index);
+    expect(idxs).toEqual([...idxs].sort((a, b) => a - b));
   });
 });

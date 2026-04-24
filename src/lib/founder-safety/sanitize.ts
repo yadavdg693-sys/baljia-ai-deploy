@@ -1,22 +1,27 @@
 // Sanitizer — scans a string for banned terms and returns the result.
 //
-// Two modes:
-//   - 'strict' throws on any hit. Use for HARDCODED strings in source code
-//     (activity lines, memory sections, task titles the engineer typed).
-//   - 'soft'   returns violations + redacted text. Use for LLM OUTPUT where
-//     we can't block onboarding over a single word — we redact + log so
-//     the founder gets a clean string and we still see the leak in Sentry.
+// Three modes (in order of aggressiveness):
+//   - 'audit'  logs violations but returns text UNCHANGED. Use for LLM output
+//              where over-sanitization would mangle legitimate content (market
+//              research, landing HTML). Gives us telemetry without side effects.
+//   - 'soft'   redacts violations with [redacted] and logs. Use when we MUST
+//              keep banned terms off the founder's screen — platform-authored
+//              strings (activity lines, memory sections we compose ourselves).
+//   - 'strict' throws on any hit. Use for HARDCODED strings via asFounderSafe()
+//              so the test suite catches them at build time.
 //
-// Violation logging goes through the standard logger so it shows up in
-// Sentry breadcrumbs. The `companyId` context is optional for call sites
-// that don't have it (e.g. outbound email body sanitization).
+// Principle: the banlist is narrow (phrases only, no bare product names), so
+// any hit is almost certainly a real leak. That means `soft` mode is safe to
+// use on platform-authored strings — false positives are rare. For LLM output
+// where we can't guarantee narrow phrasing, prefer `audit` so we never mangle
+// legitimate text.
 
 import { createLogger } from '@/lib/logger';
 import { STRICT_BANNED_TERMS, ALL_BANNED_TERMS, type BannedTerm } from './banned-terms';
 
 const log = createLogger('FounderSafety');
 
-export type SanitizeMode = 'strict' | 'soft';
+export type SanitizeMode = 'strict' | 'soft' | 'audit';
 
 export interface SanitizeViolation {
   label: string;
@@ -121,6 +126,21 @@ export function sanitizeForFounder(text: string, opts: SanitizeOptions = {}): Sa
       `Banned term${violations.length > 1 ? 's' : ''} in founder-visible text: ${labels}`,
       violations,
     );
+  }
+
+  if (mode === 'audit') {
+    // Log only — never modify the text. Use this when mangling the string would
+    // be worse than a subtle leak (LLM outputs, landing HTML, market research).
+    log.warn('founder-safety: audit-mode violation (not redacted)', {
+      ...context,
+      violations: violations.map((v) => v.label),
+      sample: text.slice(0, 200),
+    });
+    return {
+      clean: text,
+      violations,
+      hadViolations: true,
+    };
   }
 
   // Soft mode — redact, log, return

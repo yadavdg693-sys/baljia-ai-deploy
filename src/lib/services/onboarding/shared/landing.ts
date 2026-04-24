@@ -5,6 +5,7 @@
 import { db, documents } from '@/lib/db';
 import { createLogger } from '@/lib/logger';
 import * as documentService from '@/lib/services/document.service';
+import { sanitizeForFounder } from '@/lib/founder-safety/sanitize';
 import {
   deployLandingPage,
   isLandingDeployConfigured,
@@ -45,6 +46,16 @@ Keep it under 300 lines.`;
 
   try {
     const html = await callSmallLLM(prompt, 4000);
+
+    // Founder-safety: landing HTML ships to the public internet at
+    // {slug}.baljia.app — leaks are externally visible. Audit mode logs
+    // infra-phrase violations to Sentry without mangling the page so we
+    // catch regressions at source (the landing prompt) instead of in prod.
+    sanitizeForFounder(html, {
+      mode: 'audit',
+      context: { callsite: 'landing.generateLandingPage', companyId: ctx.companyId, slug: ctx.slug ?? null },
+    });
+
     const docs = await documentService.getDocuments(ctx.companyId);
     const landingDoc = docs.find((d) => d.doc_type === 'landing_page');
     if (landingDoc) {

@@ -1,6 +1,7 @@
 // Document Service — migrated to Drizzle + Neon
 import { db, documents, documentSuggestions } from '@/lib/db';
 import { eq, and, asc, sql } from 'drizzle-orm';
+import { sanitizeForFounder } from '@/lib/founder-safety/sanitize';
 import type { Document, DocumentSuggestion } from '@/types';
 
 export async function getDocuments(companyId: string): Promise<Document[]> {
@@ -40,8 +41,18 @@ export async function getDocumentByType(companyId: string, docType: string): Pro
 /**
  * Update document content with atomic version increment.
  * Drizzle supports SQL expressions, so we can do version + 1 in one query.
+ *
+ * Founder-safety: audit-mode scan. Documents (market research, mission,
+ * landing HTML) legitimately describe competitor products — mangling them
+ * would be worse than a rare infra-phrase leak. Audit mode logs violations
+ * to Sentry without modifying content so we catch regressions at source.
  */
 export async function updateDocument(documentId: string, content: string): Promise<Document> {
+  sanitizeForFounder(content, {
+    mode: 'audit',
+    context: { callsite: 'documentService.updateDocument', documentId },
+  });
+
   const [doc] = await db.update(documents)
     .set({
       content,

@@ -44,9 +44,11 @@ export async function createTask(input: CreateTaskInput): Promise<Task> {
     ? String(input.estimated_hours)
     : null;
 
-  // Founder-safety: task title / description / suggestion_reasoning all render
-  // on the dashboard as-is. Sanitize in SOFT mode — redact banned terms and
-  // log the violation so we catch regressions without breaking task creation.
+  // Founder-safety: task fields render on the dashboard as-is. With the
+  // narrow phrase-only banlist, soft redaction rarely hits legitimate content
+  // — any match is almost certainly a real implementation leak (e.g. "build
+  // the product using our Neon DB" instead of "build the product"). Log +
+  // redact keeps the leak off the founder's screen while we fix the source.
   const safeTitle = sanitizeForFounder(input.title, {
     mode: 'soft',
     context: { callsite: 'createTask.title', companyId: input.company_id, source: input.source ?? null },

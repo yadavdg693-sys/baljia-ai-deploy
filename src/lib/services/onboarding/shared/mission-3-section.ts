@@ -6,6 +6,7 @@
 import { db, companies, documents } from '@/lib/db';
 import { eq } from 'drizzle-orm';
 import * as documentService from '@/lib/services/document.service';
+import { sanitizeForFounder } from '@/lib/founder-safety/sanitize';
 import { callSmallLLMJson } from './json-mode';
 import { emitActivity } from '../stage-runner';
 import type { PipelineContext, MissionDoc } from '../types';
@@ -108,6 +109,14 @@ Rules:
     '',
     ctx.missionDoc.where_were_headed,
   ].join('\n');
+
+  // Founder-safety: mission may legitimately reference the space the
+  // founder operates in (including vendor names in competitor phrasing).
+  // Audit mode logs infra-phrase violations without mangling the copy.
+  sanitizeForFounder(markdown, {
+    mode: 'audit',
+    context: { callsite: 'mission.saveMission3Section', companyId: ctx.companyId },
+  });
 
   const docs = await documentService.getDocuments(ctx.companyId);
   const missionDoc = docs.find((d) => d.doc_type === 'mission');
