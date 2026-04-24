@@ -45,7 +45,11 @@ Return a JSON object with these exact keys:
   "rationale": "<one sentence: why this founder + this idea + this platform = credible>"
 }`;
 
-  const result = await callSmallLLMJson<InventedIdea>(prompt, { maxTokens: 500, retryOnce: true });
+  const result = await callSmallLLMJson<InventedIdea>(prompt, {
+    maxTokens: 500,
+    retryOnce: true,
+    sanitizeFields: ['invented_idea', 'changes_made', 'rationale'],
+  });
 
   if (!result.invented_idea?.trim()) {
     throw new Error('invent_idea: LLM returned empty invented_idea');

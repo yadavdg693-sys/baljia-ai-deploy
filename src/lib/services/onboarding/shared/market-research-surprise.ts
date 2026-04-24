@@ -90,7 +90,12 @@ Rules:
 - No source URLs or citations
 - Length: 1000-1300 words when rendered`;
 
-  const result = await callSmallLLMJson<SurpriseMarketResearch>(prompt, { maxTokens: 2800, retryOnce: true });
+  const result = await callSmallLLMJson<SurpriseMarketResearch>(prompt, {
+    maxTokens: 2800,
+    retryOnce: true,
+    sanitizeFields: ['idea_overview', 'why_this_fits_you'],
+    sanitizeArrayOfObjects: ['competitors', 'idea_refinements', 'first_priorities'],
+  });
 
   if (!Array.isArray(result.competitors) || result.competitors.length === 0) {
     throw new Error('Surprise market research: competitors array is empty');

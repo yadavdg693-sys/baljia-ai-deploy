@@ -64,7 +64,11 @@ Rules:
 
   await emitActivity(ctx, 'Writing mission (3-section: Mission / What we\'re building / Where we\'re headed)', 'llm');
 
-  const result = await callSmallLLMJson<MissionDoc>(prompt, { maxTokens: 900, retryOnce: true });
+  const result = await callSmallLLMJson<MissionDoc>(prompt, {
+    maxTokens: 900,
+    retryOnce: true,
+    sanitizeFields: ['mission', 'what_were_building', 'where_were_headed'],
+  });
 
   if (!result.mission?.trim() || !result.what_were_building?.trim() || !result.where_were_headed?.trim()) {
     throw new Error(`Mission generation failed: missing required sections. Got: ${JSON.stringify(result).slice(0, 200)}`);

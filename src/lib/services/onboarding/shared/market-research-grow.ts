@@ -98,7 +98,12 @@ Rules:
 - No source URLs or citations
 - Length: 1000-1400 words when rendered (Grow is denser than Build)`;
 
-  const result = await callSmallLLMJson<GrowMarketResearch>(prompt, { maxTokens: 2800, retryOnce: true });
+  const result = await callSmallLLMJson<GrowMarketResearch>(prompt, {
+    maxTokens: 2800,
+    retryOnce: true,
+    sanitizeFields: ['business_overview', 'revenue_model', 'notable_validation', 'why_this_fits_you'],
+    sanitizeArrayOfObjects: ['competitors', 'first_priorities'],
+  });
 
   if (!Array.isArray(result.competitors) || result.competitors.length === 0) {
     throw new Error('Grow market research: competitors array is empty');

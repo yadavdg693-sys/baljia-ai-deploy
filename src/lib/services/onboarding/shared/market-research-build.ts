@@ -82,7 +82,12 @@ Rules:
 - No source URLs or citations anywhere in the output
 - Length: 800-1200 words total when rendered`;
 
-  const result = await callSmallLLMJson<BuildMarketResearch>(prompt, { maxTokens: 2500, retryOnce: true });
+  const result = await callSmallLLMJson<BuildMarketResearch>(prompt, {
+    maxTokens: 2500,
+    retryOnce: true,
+    sanitizeFields: ['overview', 'opportunity', 'why_this_fits_you'],
+    sanitizeArrayOfObjects: ['competitors', 'first_priorities'],
+  });
 
   // Validate shape
   if (!Array.isArray(result.competitors) || result.competitors.length === 0) {

@@ -173,7 +173,11 @@ Return a JSON object with these exact keys:
   "rationale": "<one sentence: why this refined version is the highest-leverage buildable version — reference the scout/URL context if it informed the decision.>"
 }`;
 
-  const result = await callSmallLLMJson<RefinedIdea>(prompt, { maxTokens: 500, retryOnce: true });
+  const result = await callSmallLLMJson<RefinedIdea>(prompt, {
+    maxTokens: 500,
+    retryOnce: true,
+    sanitizeFields: ['refined_idea', 'changes_made', 'rationale'],
+  });
 
   if (!result.refined_idea?.trim()) {
     throw new Error('refine_idea: LLM returned empty refined_idea');
