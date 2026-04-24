@@ -1,6 +1,9 @@
 import type { Metadata } from 'next';
 import { ErrorBoundary } from '@/components/error-boundary';
 import './globals.css';
+// Polsia reference stylesheet — loaded after globals.css so its variables and
+// utility classes win. Drives the founder dashboard + live wall + portfolio UI.
+import '@/styles/polsia-shell.css';
 
 export const metadata: Metadata = {
   metadataBase: new URL('https://baljia.ai'),
@@ -52,18 +55,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className="dark">
-      <head>
-        <link
-          href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700,900&f[]=general-sans@400,500,600&display=swap"
-          rel="stylesheet"
-        />
-        <link
-          href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap"
-          rel="stylesheet"
-        />
-      </head>
-      <body className="antialiased min-h-screen bg-surface-primary text-text-primary">
+    <html lang="en">
+      <body className="site-shell">
         <ErrorBoundary>
           {children}
         </ErrorBoundary>

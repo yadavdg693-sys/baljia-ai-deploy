@@ -1,5 +1,4 @@
-// /portfolio — shows every company the founder owns.
-// Mirrors Polsia's founder-home shell: each row links into its dashboard.
+// /portfolio — Polsia-styled list of every company the founder owns.
 
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
@@ -44,63 +43,39 @@ export default async function PortfolioPage() {
   const liveCompanyCount = Number(liveCountResult?.count ?? 0);
 
   return (
-    <div className="min-h-screen bg-surface-primary text-text-primary">
+    <div className="dashboard-shell">
       <LiveBanner liveCount={liveCompanyCount} />
 
-      {/* Portfolio doesn't have a single "current company" — render a simpler top bar. */}
-      <header className="flex items-center justify-between px-4 py-3 border-b border-border-default bg-surface-primary sticky top-0 z-20">
-        <Link
-          href="/portfolio"
-          className="text-xl font-bold font-[family-name:var(--font-display)] text-text-primary"
-        >
-          Baljia
-        </Link>
-        <div className="flex items-center gap-3">
-          <span className="hidden sm:inline text-sm text-text-muted">{user.email}</span>
-          <Link
-            href="/onboarding"
-            className="px-4 py-2 text-sm font-medium rounded-lg border border-border-default bg-surface-card hover:bg-surface-hover text-text-primary transition-colors"
-          >
+      <header className="dashboard-topbar">
+        <div className="dashboard-topbar__title serif">My Portfolio</div>
+        <div className="dashboard-topbar__actions">
+          <Link className="chrome-button chrome-button--small" href="/onboarding">
             + New
           </Link>
         </div>
       </header>
 
-      <main className="mx-auto max-w-[1200px] px-4 py-8">
-        <div className="flex items-baseline justify-between mb-6">
-          <div>
-            <h1 className="text-2xl font-bold text-text-primary">Your Companies</h1>
-            <p className="text-sm text-text-muted mt-1">
-              {rows.length === 0
-                ? 'You haven\'t started a company yet.'
-                : `${rows.length} ${rows.length === 1 ? 'company' : 'companies'} running with Baljia`}
-            </p>
-          </div>
-          <Link
-            href="/onboarding"
-            className="rounded-lg bg-baljia-gold px-4 py-2 text-sm font-semibold text-surface-primary hover:bg-baljia-gold-light transition-colors"
-          >
-            + New company
-          </Link>
-        </div>
+      <main className="portfolio-page">
+        <p style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 16 }}>
+          {rows.length === 0
+            ? "You haven't started a company yet."
+            : `${rows.length} ${rows.length === 1 ? 'company' : 'companies'} · signed in as ${user.email}`}
+        </p>
 
         {rows.length === 0 ? (
-          <div className="rounded-xl border border-border-default bg-surface-card p-12 text-center">
-            <div className="mb-4 text-5xl opacity-50">🚀</div>
-            <h2 className="text-lg font-semibold mb-2">Ready to start your first company?</h2>
-            <p className="text-sm text-text-muted mb-6 max-w-md mx-auto">
+          <div className="portfolio-row" style={{ textAlign: 'center', padding: 32 }}>
+            <h2 className="serif" style={{ fontSize: 22, marginBottom: 8 }}>
+              Ready to start your first company?
+            </h2>
+            <p style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 18 }}>
               Baljia will take your idea — or invent one for you — and build a real company around it.
-              Landing page, email, ads, research. All of it.
             </p>
-            <Link
-              href="/onboarding"
-              className="inline-block rounded-lg bg-baljia-gold px-5 py-2.5 text-sm font-semibold text-surface-primary hover:bg-baljia-gold-light transition-colors"
-            >
+            <Link className="chrome-button chrome-button--hero" href="/onboarding">
               Start your first company →
             </Link>
           </div>
         ) : (
-          <ul className="space-y-3">
+          <div className="portfolio-list">
             {rows.map((row) => {
               const siteUrl = row.custom_domain
                 ? `https://${row.custom_domain}`
@@ -112,74 +87,58 @@ export default async function PortfolioPage() {
                 row.onboarding_status === 'initializing' || row.onboarding_status === 'running';
 
               return (
-                <li key={row.id}>
-                  <Link
-                    href={`/dashboard/${row.id}`}
-                    className="group block rounded-xl border border-border-default bg-surface-card p-5 hover:border-baljia-gold/40 hover:bg-surface-card-hover transition-colors"
-                  >
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-3">
-                          <h3 className="text-lg font-semibold text-text-primary group-hover:text-baljia-gold transition-colors">
-                            {row.name}
-                          </h3>
-                          {isActive && (
-                            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-400">
-                              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
-                              live
-                            </span>
-                          )}
-                          {onboardingRunning && (
-                            <span className="inline-flex items-center gap-1 rounded-full bg-baljia-gold/15 px-2 py-0.5 text-xs font-medium text-baljia-gold">
-                              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-baljia-gold" />
-                              setting up
-                            </span>
-                          )}
-                        </div>
-                        {row.one_liner && (
-                          <p className="mt-1 text-sm text-text-secondary line-clamp-2">{row.one_liner}</p>
-                        )}
-                        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-text-muted">
-                          <span className="capitalize">
-                            {String(row.company_stage).replace(/_/g, ' ')}
+                <Link
+                  key={row.id}
+                  href={`/dashboard/${row.id}`}
+                  className="portfolio-row"
+                  style={{ display: 'block' }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12 }}>
+                    <div style={{ minWidth: 0 }}>
+                      <h3 className="serif" style={{ fontSize: 18, lineHeight: 1.2, marginBottom: 4 }}>
+                        {row.name}
+                        {isActive && (
+                          <span className="micro-pill live-pill" style={{ marginLeft: 10, verticalAlign: 'middle' }}>
+                            live
                           </span>
-                          <span>·</span>
-                          <span>{row.total_tasks} tasks</span>
-                          {row.running_tasks > 0 && (
-                            <>
-                              <span>·</span>
-                              <span className="text-baljia-gold">{row.running_tasks} running</span>
-                            </>
-                          )}
-                          <span>·</span>
-                          <span className="capitalize">{row.plan_tier}</span>
-                        </div>
-                      </div>
-                      <div className="flex flex-col items-end gap-2">
-                        {siteUrl && (
-                          <a
-                            href={siteUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={(e) => e.stopPropagation()}
-                            className="text-xs text-text-muted hover:text-baljia-gold underline underline-offset-2"
-                          >
-                            Visit site ↗
-                          </a>
                         )}
-                        <span
-                          aria-hidden="true"
-                          className="text-text-muted transition-transform group-hover:translate-x-1"
-                        >
-                          →
+                        {onboardingRunning && (
+                          <span className="micro-pill" style={{ marginLeft: 10, verticalAlign: 'middle' }}>
+                            setting up
+                          </span>
+                        )}
+                      </h3>
+                      {row.one_liner && (
+                        <p style={{ fontSize: 12, color: '#3a3a3a', marginBottom: 6 }}>
+                          {row.one_liner}
+                        </p>
+                      )}
+                      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: 11, color: 'var(--muted)' }}>
+                        <span style={{ textTransform: 'capitalize' }}>
+                          {String(row.company_stage).replace(/_/g, ' ')}
                         </span>
+                        <span>·</span>
+                        <span>{row.total_tasks} tasks</span>
+                        {row.running_tasks > 0 && (
+                          <>
+                            <span>·</span>
+                            <span style={{ color: 'var(--orange)' }}>{row.running_tasks} running</span>
+                          </>
+                        )}
+                        <span>·</span>
+                        <span style={{ textTransform: 'capitalize' }}>{row.plan_tier}</span>
                       </div>
                     </div>
-                  </Link>
-                </li>
+                    {siteUrl && (
+                      <span style={{ fontSize: 11, color: 'var(--muted)', textDecoration: 'underline' }}>
+                        {siteUrl.replace(/^https?:\/\//, '')} ↗
+                      </span>
+                    )}
+                  </div>
+                </Link>
               );
             })}
-          </ul>
+          </div>
         )}
       </main>
     </div>

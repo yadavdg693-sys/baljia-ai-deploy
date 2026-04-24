@@ -1,33 +1,22 @@
+// DashboardShell — Polsia reference port.
+// 4-column founder layout, light theme, Georgia serif headings, orange accent.
+// See /c/Users/Vaishnavi/My_Projects/polsia/baljia-frontend/src/components/dashboard-shell.tsx
+// for the source; style rules live in src/styles/polsia-shell.css.
+
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
-import type { Company, Task, Document, Report } from '@/types';
-import type { User } from '@/types';
-import { BaljiaMascot } from '@/components/mascot/BaljiaMascot';
-import { CompanyHeader } from './CompanyHeader';
-import { TaskBoard } from './TaskBoard';
+import { useState, useCallback, useEffect, useMemo } from 'react';
+import Link from 'next/link';
+import type { Company, Task, Document, Report, User } from '@/types';
 import { TaskDetailDialog } from './TaskDetailDialog';
-import { DocumentList } from './DocumentList';
-import { MetricsPanel } from './MetricsPanel';
-import { CreditDisplay } from './CreditDisplay';
-import { PurchaseCreditsDialog } from './PurchaseCreditsDialog';
-// ActivityFeed removed from dashboard 2026-04-24. Component file still exists at
-// src/components/dashboard/ActivityFeed.tsx if we want to re-add it later.
 import { DocumentDialog } from './DocumentDialog';
-import { ChatPanel } from '@/components/chat/ChatPanel';
-import { DashboardHeader } from './DashboardHeader';
-import { TwitterPreview } from './TwitterPreview';
-import { EmailPreview } from './EmailPreview';
-import { AdsPreview } from './AdsPreview';
-import { LinksSection } from './LinksSection';
+import { PurchaseCreditsDialog } from './PurchaseCreditsDialog';
 import { UpgradeDialog } from './UpgradeDialog';
-// RoadmapRail removed from dashboard 2026-04-24 — decision on roadmap UX deferred to launch.
-// Component file kept at src/components/dashboard/RoadmapRail.tsx (dead-but-intact).
-// Roadmap onboarding stages also disconnected (see strategies/*.strategy.ts).
-import { OnboardingProgress } from './OnboardingProgress';
-import { DocumentSuggestionPanel } from './DocumentSuggestionPanel';
+import { DashboardMenu } from './DashboardMenu';
 import { LiveBanner } from './LiveBanner';
 import { CelebrationOverlay } from './CelebrationOverlay';
+import { StatusAvatar } from './StatusAvatar';
+import { FounderChatRail } from '@/components/chat/FounderChatRail';
 
 interface DocumentSuggestion {
   id: string;
@@ -60,264 +49,327 @@ interface DashboardShellProps {
   liveCompanyCount: number;
 }
 
+function formatAge(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const then = new Date(iso).getTime();
+  const diff = Date.now() - then;
+  const min = Math.floor(diff / 60000);
+  if (min < 1) return 'just now';
+  if (min < 60) return `${min} min ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const d = Math.floor(hr / 24);
+  if (d < 7) return `${d}d ago`;
+  if (d < 30) return `${Math.floor(d / 7)}w ago`;
+  return `${Math.floor(d / 30)}mo ago`;
+}
+
 export function DashboardShell({
   company,
   tasks: initialTasks,
   documents,
-  reports,
+  reports: _reports,
   creditBalance,
-  recentUsage,
-  pendingSuggestions,
+  recentUsage: _recentUsage,
+  pendingSuggestions: _pendingSuggestions,
   emails,
   user,
   liveCompanyCount,
 }: DashboardShellProps) {
-  // Derive email stats for the preview panel
+  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [selectedDoc, setSelectedDoc] = useState<Document | null>(null);
+  const [purchaseOpen, setPurchaseOpen] = useState(false);
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [tasks, setTasks] = useState(initialTasks);
+  const [celebrateTask, setCelebrateTask] = useState<{ id: string; title: string } | null>(null);
+
   const latestEmail = emails[0] ?? null;
-  const sentCount = emails.filter((e) => e.direction === 'sent' || e.direction === 'outbound').length;
-  const receivedCount = emails.filter((e) => e.direction === 'received' || e.direction === 'inbound').length;
   const companyEmailAddress =
     (company as unknown as { company_email?: string | null; email_identity?: string | null }).company_email
     ?? (company as unknown as { company_email?: string | null; email_identity?: string | null }).email_identity
     ?? null;
 
-  // Warnings surfaced in the CEO rail — derived from current company state
-  const chatWarnings: string[] = [];
-  if (creditBalance <= 0 && company.plan_tier !== 'trial') {
-    chatWarnings.push('You\'re out of task credits. Add more before queueing new work.');
-  } else if (creditBalance > 0 && creditBalance <= 3) {
-    chatWarnings.push(`Only ${creditBalance} task ${creditBalance === 1 ? 'credit' : 'credits'} left — top up soon.`);
-  }
-  if (company.onboarding_status === 'initializing' || company.onboarding_status === 'running') {
-    chatWarnings.push('Baljia is still setting things up — research, landing, and inbox are in flight.');
-  }
-  if (company.hosting_state === 'suspended') {
-    chatWarnings.push('Your app is suspended — resolve billing to bring it back online.');
-  }
-  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
-  const [selectedDoc, setSelectedDoc] = useState<Document | null>(null);
-  const [chatOpen, setChatOpen] = useState(false);
-  const [purchaseOpen, setPurchaseOpen] = useState(false);
-  const [upgradeOpen, setUpgradeOpen] = useState(false);
-  const [tasks, setTasks] = useState(initialTasks);
-  const [suggestions, setSuggestions] = useState(pendingSuggestions);
-  const [celebrateTask, setCelebrateTask] = useState<{ id: string; title: string } | null>(null);
-
-  // Detect a newly-completed task between page loads. Stores the set of
-  // completed task IDs in sessionStorage; anything in `initialTasks` that
-  // reports `completed` but isn't in that set is "new" and worth celebrating.
+  // Celebration trigger — diff completed tasks against the last snapshot
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const key = `baljia:seen-completed:${company.id}`;
     let seen: string[];
-    try {
-      seen = JSON.parse(sessionStorage.getItem(key) ?? '[]');
-    } catch {
-      seen = [];
-    }
+    try { seen = JSON.parse(sessionStorage.getItem(key) ?? '[]'); } catch { seen = []; }
     const completed = initialTasks.filter((t) => t.status === 'completed');
     const seenSet = new Set(seen);
     const fresh = completed.find((t) => !seenSet.has(t.id));
-    if (fresh) {
-      setCelebrateTask({ id: fresh.id, title: fresh.title ?? 'Task complete' });
-    }
+    if (fresh) setCelebrateTask({ id: fresh.id, title: fresh.title ?? 'Task complete' });
     sessionStorage.setItem(key, JSON.stringify(completed.map((t) => t.id)));
   }, [initialTasks, company.id]);
 
-  // State-only callbacks — TaskDetailDialog owns the API mutation.
-  // These just sync local state after the dialog confirms success.
+  // CEO chat rail needs warnings derived from current state
+  const chatWarnings = useMemo<string[]>(() => {
+    const w: string[] = [];
+    if (creditBalance <= 0 && company.plan_tier !== 'trial') {
+      w.push("You're out of task credits. Add more before queueing new work.");
+    } else if (creditBalance > 0 && creditBalance <= 3) {
+      w.push(`Only ${creditBalance} task ${creditBalance === 1 ? 'credit' : 'credits'} left — top up soon.`);
+    }
+    if (company.onboarding_status === 'initializing' || company.onboarding_status === 'running') {
+      w.push('Baljia is still setting things up — research, landing, and inbox are in flight.');
+    }
+    if (company.hosting_state === 'suspended') {
+      w.push('Your app is suspended — resolve billing to bring it back online.');
+    }
+    return w;
+  }, [creditBalance, company.plan_tier, company.onboarding_status, company.hosting_state]);
+
   const handleApprove = useCallback((taskId: string) => {
-    setTasks((prev) =>
-      prev.map((t) => (t.id === taskId ? { ...t, status: 'in_progress' as const } : t))
-    );
+    setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, status: 'in_progress' as const } : t)));
   }, []);
 
   const handleReject = useCallback((taskId: string) => {
-    setTasks((prev) =>
-      prev.map((t) => (t.id === taskId ? { ...t, status: 'rejected' as const } : t))
-    );
+    setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, status: 'rejected' as const } : t)));
   }, []);
 
-  // Handle document suggestion actions
-  const handleSuggestionAction = useCallback(async (id: string, action: 'accept' | 'skip') => {
-    setSuggestions((prev) => prev.filter((s) => s.id !== id));
-    try {
-      await fetch(`/api/document-suggestions/${id}/${action}`, { method: 'POST' });
-    } catch {
-      // Silently fail — suggestion already removed from UI
-    }
-  }, []);
+  // Tasks shown as cards on the main column — top 3 most-recent non-terminal.
+  const previewTasks = useMemo(() => {
+    const priority: Record<string, number> = {
+      todo: 0, in_progress: 1, verifying: 2, repair: 3,
+      completed: 4, failed: 5, failed_permanent: 5, rejected: 6,
+    };
+    return [...tasks]
+      .sort((a, b) => (priority[a.status] ?? 99) - (priority[b.status] ?? 99))
+      .slice(0, 3);
+  }, [tasks]);
+
+  const docsSorted = useMemo(
+    () => [...documents].sort((a, b) => new Date(b.updated_at ?? b.created_at ?? 0).getTime()
+                                       - new Date(a.updated_at ?? a.created_at ?? 0).getTime()),
+    [documents],
+  );
+
+  const sitePath = company.subdomain ? `https://${company.subdomain}.baljia.app` : '';
+  const inboxAddress = companyEmailAddress ?? '';
+
+  // Chat rail owns its own width via CSS var — matches Polsia's --chat-pane-width.
+  const founderGridStyle = { ['--chat-pane-width' as string]: '260px' } as React.CSSProperties;
 
   return (
-    <div className="min-h-screen bg-surface-primary text-text-primary">
-      {/* Live banner — links to /live, shows active company count */}
+    <div className="dashboard-shell">
       <LiveBanner liveCount={liveCompanyCount} />
 
-      {/* Top header bar — matches Polsia: company name + New + Menu */}
-      <DashboardHeader company={company} user={user} creditBalance={creditBalance} />
+      <header className="dashboard-topbar">
+        <div className="dashboard-topbar__title serif">{company.name}</div>
+        <div className="dashboard-topbar__actions">
+          <Link className="chrome-button chrome-button--small" href="/onboarding">
+            + New
+          </Link>
+          <button
+            className="chrome-button chrome-button--small"
+            onClick={() => setMenuOpen((v) => !v)}
+            type="button"
+          >
+            Menu
+          </button>
+        </div>
+      </header>
 
-      {/* Desktop: 3-column layout | Mobile: single column */}
-      <div className="mx-auto max-w-[1600px] p-4 lg:grid lg:grid-cols-[280px_1fr_380px] lg:gap-6">
-
-        {/* ── Left Column: Mascot + Credits + Metrics ── */}
-        <aside className="hidden lg:flex lg:flex-col lg:gap-4">
-          {/* Mascot card */}
-          <div className="rounded-xl bg-surface-card border border-border-default p-5 flex flex-col items-center gap-3">
-            <BaljiaMascot
-              status={{ state: 'listening', label: 'Ready', detail: 'Waiting for instructions' }}
-              size="dashboard"
-              showLabel={false}
-              showDetail={false}
-            />
-            <div className="text-center">
-              <p className="font-bold text-baljia-gold">{company.name}</p>
-              {company.one_liner && (
-                <p className="text-xs text-text-muted mt-1 line-clamp-2">{company.one_liner}</p>
-              )}
+      <div className="dashboard-grid dashboard-grid--founder" style={founderGridStyle}>
+        {/* ── Left column ── */}
+        <section className="dashboard-column dashboard-column--left">
+          <div className="panel-title"><span className="serif">Baljia</span></div>
+          <div className="status-block">
+            <StatusAvatar />
+            <div>
+              <h2 className="serif">{company.one_liner ?? 'Ready'}</h2>
+              <p>
+                {company.onboarding_status === 'completed'
+                  ? 'Company online. Chat with the CEO or approve a task.'
+                  : 'Baljia is still setting things up.'}
+              </p>
             </div>
           </div>
 
-          {/* Credits */}
-          <CreditDisplay
-            balance={creditBalance}
-            planTier={company.plan_tier}
-            recentUsage={recentUsage}
-            onPurchase={() => setPurchaseOpen(true)}
-          />
-
-          {/* Business — matches Polsia left sidebar */}
-          <div className="rounded-xl bg-surface-card border border-border-default p-4">
-            <h3 className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-3">Business</h3>
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-text-secondary">Revenue:</span>
-                <span className="font-semibold">$0.00</span>
-              </div>
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-text-secondary">Balance:</span>
-                <span className="font-semibold">$0.00</span>
-                <button className="ml-2 px-2 py-0.5 text-xs rounded border border-border-default text-text-muted hover:text-text-primary transition-colors">
-                  Withdraw
-                </button>
-              </div>
-            </div>
-            <p className="text-xs text-text-muted mt-3">
-              Updated just now <button className="text-text-muted hover:text-text-secondary underline">(refresh)</button>
-            </p>
-          </div>
-
-          {/* Upgrade CTA — like Polsia "Hire Your AI Employee" */}
           {company.plan_tier === 'trial' && (
-            <div className="rounded-xl bg-surface-card border border-border-default p-5 text-center">
-              <p className="font-semibold text-text-primary mb-1">Hire Your AI Employee</p>
-              <p className="text-xs text-text-muted mb-4">$1.63/day &middot; Works while you sleep</p>
+            <div className="trial-card">
+              <h3 className="serif">Hire Your AI Employee</h3>
+              <p>$1.63/day · Works while you sleep</p>
               <button
+                className="chrome-button chrome-button--hero"
                 onClick={() => setUpgradeOpen(true)}
-                className="w-full py-3 rounded-xl bg-baljia-gold text-surface-primary font-semibold hover:bg-baljia-gold-light transition-colors"
+                type="button"
               >
                 Start free trial
               </button>
-              <p className="text-xs text-text-muted mt-2">3-day trial &middot; $49/mo</p>
+              <small>3-day trial · $49/mo</small>
             </div>
           )}
 
-          {/* Stage */}
-          <div className="rounded-xl bg-surface-card border border-border-default p-4">
-            <h3 className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-2">Stage</h3>
-            <p className="text-sm font-medium capitalize">{company.company_stage}</p>
-            <p className="text-xs text-text-muted mt-1 capitalize">{company.lifecycle.replace(/_/g, ' ')}</p>
+          <div className="panel-title"><span className="serif">Business</span></div>
+          <div className="business-list">
+            <div><span>Revenue:</span><strong>$0.00</strong></div>
+            <div><span>Lifetime Earnings:</span><strong>$0.00</strong></div>
+            <div><span>Payments paused</span></div>
           </div>
-
-          {/* Onboarding progress — visible while onboarding is still running */}
-          {(company.onboarding_status === 'initializing' || company.onboarding_status === 'running') && (
-            <OnboardingProgress
-              companyId={company.id}
-              status={company.onboarding_status}
-            />
-          )}
-        </aside>
-
-        {/* ── Center Column: Tasks + Documents + Ledger ── */}
-        <main className="min-w-0 space-y-6">
-          {/* Mobile company header */}
-          <div className="lg:hidden mb-4">
-            <CompanyHeader company={company} />
+          <button
+            className="verify-button"
+            onClick={() => setPurchaseOpen(true)}
+            type="button"
+          >
+            Complete verification to accept payments
+          </button>
+          <div className="refresh-note">
+            Credits: {creditBalance} · {company.company_stage?.replace(/_/g, ' ') ?? 'pre-launch'}
           </div>
+        </section>
 
-          {/* Desktop company header */}
-          <div className="hidden lg:block">
-            <CompanyHeader company={company} />
-          </div>
-
-          {/* Task board */}
-          <section>
-            <h2 className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-3">Tasks</h2>
-            <TaskBoard
-              tasks={tasks}
-              onTaskClick={setSelectedTask}
-              onApprove={handleApprove}
-              onReject={handleReject}
-            />
-          </section>
-
-          {/* Document Suggestion Review — Accept / Edit / Skip */}
-          <section>
-            <DocumentSuggestionPanel companyId={company.id} />
-          </section>
-
-          {/* Documents */}
-          <section>
-            <h2 className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-3">Documents</h2>
-            <div className="rounded-xl bg-surface-card border border-border-default p-4">
-              <DocumentList documents={documents} onDocumentClick={setSelectedDoc} />
-            </div>
-          </section>
-
-          {/* Reports */}
-          {reports.length > 0 && (
-            <section>
-              <h2 className="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-3">Recent Reports</h2>
-              <div className="rounded-xl bg-surface-card border border-border-default p-4 space-y-2">
-                {reports.map((report) => (
-                  <div key={report.id} className="p-3 rounded-lg bg-surface-secondary">
-                    <p className="text-sm font-medium">{report.title ?? 'Untitled Report'}</p>
-                    <p className="text-xs text-text-muted capitalize">{report.report_type}</p>
+        {/* ── Main column: tasks / documents / links ── */}
+        <section className="dashboard-column dashboard-column--main">
+          <div className="dashboard-section">
+            <div className="panel-title"><span className="serif">Tasks</span></div>
+            <div className="task-preview-list">
+              {previewTasks.length === 0 ? (
+                <p style={{ fontSize: 12, color: '#6f6f6f', padding: '10px 0' }}>
+                  No tasks yet. Chat with the CEO to get started.
+                </p>
+              ) : previewTasks.map((task) => (
+                <button
+                  className="task-preview-card"
+                  key={task.id}
+                  onClick={() => setSelectedTask(task)}
+                  type="button"
+                >
+                  <h3>{task.title}</h3>
+                  {task.description && <p>{task.description}</p>}
+                  <div className="task-preview-card__meta">
+                    <span className="micro-pill">{task.tag ?? task.status.replace(/_/g, ' ')}</span>
+                    {task.status === 'in_progress' && (
+                      <span className="micro-pill micro-pill--dark">Running</span>
+                    )}
+                    {task.status === 'todo' && task.source === 'ceo_suggested' && (
+                      <span className="micro-pill micro-pill--dark">Awaiting approval</span>
+                    )}
                   </div>
-                ))}
-              </div>
-            </section>
+                </button>
+              ))}
+            </div>
+            {tasks.length > previewTasks.length && (
+              <Link className="text-link" href={`/dashboard/${company.id}/tasks`}>
+                Manage →
+              </Link>
+            )}
+          </div>
+
+          <div className="dashboard-section">
+            <div className="panel-title"><span className="serif">Documents</span></div>
+            <div className="document-list">
+              {docsSorted.length === 0 ? (
+                <p style={{ fontSize: 12, color: '#6f6f6f', padding: '4px 0' }}>
+                  No documents yet.
+                </p>
+              ) : docsSorted.slice(0, 5).map((doc) => (
+                <button
+                  className="document-row document-row--button"
+                  key={doc.id}
+                  onClick={() => setSelectedDoc(doc)}
+                  type="button"
+                >
+                  <span className="document-row__icon">||</span>
+                  <div><strong>{doc.title ?? doc.doc_type}</strong></div>
+                  <small>{formatAge(doc.updated_at ?? doc.created_at ?? null)}</small>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="dashboard-section">
+            <div className="panel-title"><span className="serif">Links</span></div>
+            <div className="links-list">
+              {sitePath && (
+                <a className="link-item" href={sitePath} target="_blank" rel="noopener noreferrer">
+                  <strong>{company.name}</strong>
+                  <span>{sitePath.replace(/^https?:\/\//, '')}</span>
+                </a>
+              )}
+              {inboxAddress && (
+                <div className="link-item">
+                  <strong>Company Inbox</strong>
+                  <span>{inboxAddress}</span>
+                </div>
+              )}
+              {sitePath && (
+                <a className="link-item" href={`${sitePath}/trial/${company.slug}`} target="_blank" rel="noopener noreferrer">
+                  <strong>Hosted Checkout</strong>
+                  <span>{sitePath.replace(/^https?:\/\//, '')}/trial/{company.slug}</span>
+                </a>
+              )}
+            </div>
+          </div>
+        </section>
+
+        {/* ── Channels column: Twitter / Email / Ads ── */}
+        <section className="dashboard-column dashboard-column--channels">
+          <div className="dashboard-section">
+            <div className="panel-title"><span className="serif">Twitter</span></div>
+            <div className="channel-handle">@{company.slug ?? 'baljia'}</div>
+            <div className="tweet-box">
+              <p style={{ color: '#6f6f6f' }}>No tweets yet — run a Twitter task to see posts here.</p>
+              <small>—</small>
+            </div>
+            <button className="chrome-button chrome-button--small" type="button" disabled>
+              Tweet
+            </button>
+          </div>
+
+          <div className="dashboard-section">
+            <div className="panel-title"><span className="serif">Email</span></div>
+            <div className="channel-handle">{inboxAddress || '—'}</div>
+            <div className="mail-list">
+              {emails.length === 0 ? (
+                <p style={{ fontSize: 12, color: '#6f6f6f' }}>No emails yet.</p>
+              ) : emails.slice(0, 3).map((e) => (
+                <div className="mail-row" key={e.id}>
+                  <strong>{e.subject ?? '(no subject)'}</strong>
+                  <span>{e.direction === 'outbound' ? `To: ${e.to_address}` : `From: ${e.from_address ?? e.to_address}`}</span>
+                  <small>{formatAge(e.created_at)}</small>
+                </div>
+              ))}
+            </div>
+            <button className="chrome-button chrome-button--small" type="button" disabled>
+              Cold Outreach
+            </button>
+          </div>
+
+          <div className="dashboard-section">
+            <div className="panel-title"><span className="serif">Ads</span></div>
+            <button className="chrome-button chrome-button--small" type="button" disabled>
+              Run Ads
+            </button>
+            <div className="ads-summary">
+              No campaigns. Spend today: $0.00.
+            </div>
+          </div>
+
+          {latestEmail && emails.length > 3 && (
+            <p style={{ fontSize: 11, color: '#8a8a8a' }}>
+              +{emails.length - 3} more in inbox
+            </p>
           )}
-        </main>
+        </section>
 
-        {/* ── Right Column: Twitter + Email + Ads + Links + Chat + Activity ── */}
-        <aside className="hidden lg:flex lg:flex-col lg:gap-4">
-          {/* Twitter */}
-          <TwitterPreview handle={null} latestTweet={null} />
-
-          {/* Email */}
-          <EmailPreview
-            companyEmail={companyEmailAddress}
-            latestEmail={latestEmail}
-            sentCount={sentCount}
-            receivedCount={receivedCount}
-          />
-
-          {/* Ads */}
-          <AdsPreview activeCampaigns={0} />
-
-          {/* Links */}
-          <LinksSection
-            companyName={company.name}
-            subdomain={company.subdomain}
-            customDomain={company.custom_domain}
-          />
-
-          {/* Chat panel */}
-          <ChatPanel companyId={company.id} warnings={chatWarnings} />
-        </aside>
+        {/* ── CEO chat rail ── */}
+        <FounderChatRail companyId={company.id} warnings={chatWarnings} />
       </div>
 
-      {/* ── Task detail dialog ── */}
+      {/* ── Overlays + dialogs ── */}
+      {menuOpen && (
+        <DashboardMenu
+          user={user}
+          company={company}
+          creditBalance={creditBalance}
+          onClose={() => setMenuOpen(false)}
+          onOpenUpgrade={() => { setMenuOpen(false); setUpgradeOpen(true); }}
+          onOpenPurchase={() => { setMenuOpen(false); setPurchaseOpen(true); }}
+        />
+      )}
+
       <TaskDetailDialog
         task={selectedTask}
         open={selectedTask !== null}
@@ -326,71 +378,30 @@ export function DashboardShell({
         onReject={handleReject}
       />
 
-      {/* ── Document viewer ── */}
       <DocumentDialog
         doc={selectedDoc}
         onClose={() => setSelectedDoc(null)}
         companySlug={company.slug ?? undefined}
       />
 
-      {/* ── Celebration overlay — fires on newly-completed tasks ── */}
-      {celebrateTask && (
-        <CelebrationOverlay
-          taskTitle={celebrateTask.title}
-          onDismiss={() => setCelebrateTask(null)}
-        />
-      )}
-
-      {/* ── Purchase credits dialog ── */}
       <PurchaseCreditsDialog
         open={purchaseOpen}
         onOpenChange={setPurchaseOpen}
         currentBalance={creditBalance}
       />
 
-      {/* ── Upgrade dialog ── */}
       <UpgradeDialog
         open={upgradeOpen}
         onOpenChange={setUpgradeOpen}
         companyId={company.id}
       />
 
-      {/* ── Mobile: slide-up chat drawer ── */}
-      {chatOpen && (
-        <div className="lg:hidden fixed inset-0 z-40">
-          {/* Backdrop */}
-          <div
-            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-            onClick={() => setChatOpen(false)}
-          />
-          {/* Drawer */}
-          <div className="absolute bottom-0 left-0 right-0 h-[85vh] bg-surface-primary rounded-t-2xl border-t border-border-default shadow-2xl animate-slide-up">
-            {/* Handle bar */}
-            <div className="flex items-center justify-center py-3">
-              <div className="w-10 h-1 rounded-full bg-border-default" />
-            </div>
-            {/* Chat */}
-            <div className="h-[calc(85vh-40px)]">
-              <ChatPanel companyId={company.id} warnings={chatWarnings} />
-            </div>
-          </div>
-        </div>
+      {celebrateTask && (
+        <CelebrationOverlay
+          taskTitle={celebrateTask.title}
+          onDismiss={() => setCelebrateTask(null)}
+        />
       )}
-
-      {/* Mobile: floating chat button */}
-      <button
-        className="lg:hidden fixed bottom-6 right-6 w-14 h-14 rounded-full bg-baljia-gold text-surface-primary flex items-center justify-center shadow-lg hover:bg-baljia-gold-light transition-colors z-30"
-        onClick={() => setChatOpen(!chatOpen)}
-        aria-label="Open CEO chat"
-      >
-        <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-          {chatOpen ? (
-            <path d="M18 6 6 18M6 6l12 12" />
-          ) : (
-            <path d="m3 21 1.9-5.7a8.5 8.5 0 1 1 3.8 3.8z" />
-          )}
-        </svg>
-      </button>
     </div>
   );
 }

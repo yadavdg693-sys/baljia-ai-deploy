@@ -120,7 +120,8 @@ async function purgeR2FounderApps(): Promise<number> {
 // ─────────────────────────────────────────────────
 // DB: wipe one company's entire graph (FK-ordered)
 // ─────────────────────────────────────────────────
-async function wipeCompanyGraph(sql: ReturnType<typeof neon>, ids: string[]): Promise<void> {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function wipeCompanyGraph(sql: any, ids: string[]): Promise<void> {
   if (ids.length === 0) return;
 
   const steps: Array<[string, () => Promise<unknown>]> = [
@@ -188,7 +189,8 @@ async function wipeCompanyGraph(sql: ReturnType<typeof neon>, ids: string[]): Pr
 // Waitlist FK is nullable with no cascade — null it out before delete.
 // magic_link_tokens and user_sessions are ON DELETE CASCADE — auto-cleaned.
 // ─────────────────────────────────────────────────
-async function wipeTestUsers(sql: ReturnType<typeof neon>, idsToDelete: string[]): Promise<void> {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function wipeTestUsers(sql: any, idsToDelete: string[]): Promise<void> {
   if (idsToDelete.length === 0) return;
   await sql`UPDATE waitlist SET converted_user_id = NULL WHERE converted_user_id = ANY(${idsToDelete})`;
   console.log(`    ✓ waitlist.converted_user_id → NULL`);
