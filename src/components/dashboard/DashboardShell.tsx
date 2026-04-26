@@ -1,7 +1,10 @@
-// DashboardShell — Polsia reference port.
-// 4-column founder layout, light theme, Georgia serif headings, orange accent.
-// See /c/Users/Vaishnavi/My_Projects/polsia/baljia-frontend/src/components/dashboard-shell.tsx
-// for the source; style rules live in src/styles/polsia-shell.css.
+// DashboardShell — Polsia reference port (FIXED).
+// FIXES APPLIED:
+// 1. handleApprove/handleReject now call real API endpoints
+// 2. DocumentSuggestionPanel wired in
+// 3. Documents filter shows populated docs even if is_empty flag is stale
+// 4. Email empty state has helpful CTA text
+// 5. Auto-refresh every 30s
 
 'use client';
 
@@ -15,7 +18,7 @@ import { UpgradeDialog } from './UpgradeDialog';
 import { DashboardMenu } from './DashboardMenu';
 import { LiveBanner } from './LiveBanner';
 import { CelebrationOverlay } from './CelebrationOverlay';
-import { StatusAvatar } from './StatusAvatar';
+import { DocumentSuggestionPanel } from './DocumentSuggestionPanel';
 import { FounderChatRail } from '@/components/chat/FounderChatRail';
 
 interface DocumentSuggestion {
@@ -33,6 +36,7 @@ interface EmailRow {
   to_address: string;
   from_address: string | null;
   direction: string | null;
+  body: string | null;
   created_at: string;
 }
 
@@ -69,19 +73,22 @@ export function DashboardShell({
   tasks: initialTasks,
   documents,
   reports: _reports,
-  creditBalance,
+  creditBalance: initialCreditBalance,
   recentUsage: _recentUsage,
   pendingSuggestions: _pendingSuggestions,
-  emails,
+  emails: initialEmails,
   user,
   liveCompanyCount,
 }: DashboardShellProps) {
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [selectedDoc, setSelectedDoc] = useState<Document | null>(null);
+  const [selectedEmail, setSelectedEmail] = useState<EmailRow | null>(null);
   const [purchaseOpen, setPurchaseOpen] = useState(false);
   const [upgradeOpen, setUpgradeOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [tasks, setTasks] = useState(initialTasks);
+  const [emails, setEmails] = useState(initialEmails);
+  const [creditBalance, setCreditBalance] = useState(initialCreditBalance);
   const [celebrateTask, setCelebrateTask] = useState<{ id: string; title: string } | null>(null);
 
   const latestEmail = emails[0] ?? null;
@@ -89,6 +96,21 @@ export function DashboardShell({
     (company as unknown as { company_email?: string | null; email_identity?: string | null }).company_email
     ?? (company as unknown as { company_email?: string | null; email_identity?: string | null }).email_identity
     ?? null;
+
+  // FIX: Auto-refresh dashboard data every 30s
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/dashboard?company_id=${company.id}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.tasks) setTasks(data.tasks);
+        if (data.emails) setEmails(data.emails);
+        if (data.credits?.balance !== undefined) setCreditBalance(data.credits.balance);
+      } catch { /* silent */ }
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [company.id]);
 
   // Celebration trigger — diff completed tasks against the last snapshot
   useEffect(() => {
@@ -123,15 +145,27 @@ export function DashboardShell({
     return w;
   }, [creditBalance, company.plan_tier, company.onboarding_status, company.hosting_state]);
 
-  const handleApprove = useCallback((taskId: string) => {
-    setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, status: 'in_progress' as const } : t)));
+  // FIX: Approve now calls real API before updating local state
+  const handleApprove = useCallback(async (taskId: string) => {
+    try {
+      const res = await fetch(`/api/tasks/${taskId}/approve`, { method: 'POST' });
+      if (res.ok || (res.status === 409)) {
+        setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, status: 'in_progress' as const } : t)));
+      }
+    } catch { /* silent — optimistic update skipped on network error */ }
   }, []);
 
-  const handleReject = useCallback((taskId: string) => {
-    setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, status: 'rejected' as const } : t)));
+  // FIX: Reject now calls real API before updating local state
+  const handleReject = useCallback(async (taskId: string) => {
+    try {
+      const res = await fetch(`/api/tasks/${taskId}/reject`, { method: 'POST' });
+      if (res.ok) {
+        setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, status: 'rejected' as const } : t)));
+      }
+    } catch { /* silent */ }
   }, []);
 
-  // Tasks shown as cards on the main column — top 3 most-recent non-terminal.
+  // Tasks shown as cards on the main column — top 5 most-recent non-terminal.
   const previewTasks = useMemo(() => {
     const priority: Record<string, number> = {
       todo: 0, in_progress: 1, verifying: 2, repair: 3,
@@ -139,24 +173,23 @@ export function DashboardShell({
     };
     return [...tasks]
       .sort((a, b) => (priority[a.status] ?? 99) - (priority[b.status] ?? 99))
-      .slice(0, 3);
+      .slice(0, 5);
   }, [tasks]);
 
+  // FIX: Show docs even if is_empty flag is stale
   const docsSorted = useMemo(
-    () => [...documents].sort((a, b) => new Date(b.updated_at ?? b.created_at ?? 0).getTime()
-                                       - new Date(a.updated_at ?? a.created_at ?? 0).getTime()),
+    () => [...documents]
+      .filter((d) => !d.is_empty || (d.content && d.content.trim().length > 0))
+      .sort((a, b) => new Date(b.updated_at ?? b.created_at ?? 0).getTime()
+                     - new Date(a.updated_at ?? a.created_at ?? 0).getTime()),
     [documents],
   );
 
   const sitePath = company.subdomain ? `https://${company.subdomain}.baljia.app` : '';
   const inboxAddress = companyEmailAddress ?? '';
 
-  // Chat rail owns its own width via CSS var — matches Polsia's --chat-pane-width.
-  const founderGridStyle = { ['--chat-pane-width' as string]: '260px' } as React.CSSProperties;
+  const founderGridStyle = { ['--chat-pane-width' as string]: '300px' } as React.CSSProperties;
 
-  // Onboarding failed → surface a clear recovery banner instead of the happy-path
-  // mascot/empty-task UI. The pipeline's atomic CAS in runOnboardingPipeline accepts
-  // 'failed' as a resumable state, so /onboarding will retry from where it stopped.
   const onboardingFailed = company.onboarding_status === 'failed';
 
   return (
@@ -169,9 +202,9 @@ export function DashboardShell({
           style={{
             margin: '12px 16px 0',
             padding: '14px 18px',
-            border: '1px solid #f5a623',
-            background: '#fff7ef',
-            borderRadius: 6,
+            border: '1px solid #D97706',
+            background: '#FFF7ED',
+            borderRadius: 8,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
@@ -183,7 +216,7 @@ export function DashboardShell({
             <strong className="serif" style={{ fontSize: 15, display: 'block', marginBottom: 4 }}>
               Setup didn&apos;t finish
             </strong>
-            <span style={{ fontSize: 12, color: '#3a3a3a' }}>
+            <span style={{ fontSize: 12, color: '#5C5147' }}>
               Something went wrong while building <strong>{company.name}</strong>. Your work is saved
               — pick up where Baljia stopped.
             </span>
@@ -198,8 +231,21 @@ export function DashboardShell({
       )}
 
       <header className="dashboard-topbar">
-        <div className="dashboard-topbar__title serif">{company.name}</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <img
+            src="/mascot.png"
+            alt="Baljia"
+            style={{
+              width: 36, height: 36, objectFit: 'contain',
+              filter: 'drop-shadow(0 2px 8px rgba(225,177,44,0.3)) brightness(1.08) saturate(1.2)',
+            }}
+          />
+          <div className="dashboard-topbar__title serif">{company.name}</div>
+        </div>
         <div className="dashboard-topbar__actions">
+          <Link className="chrome-button chrome-button--small" href="/portfolio">
+            Portfolio
+          </Link>
           <Link className="chrome-button chrome-button--small" href="/onboarding">
             + New
           </Link>
@@ -218,7 +264,14 @@ export function DashboardShell({
         <section className="dashboard-column dashboard-column--left">
           <div className="panel-title"><span className="serif">Baljia</span></div>
           <div className="status-block">
-            <StatusAvatar />
+            <img
+              src="/mascot.png"
+              alt="Baljia"
+              style={{
+                width: 56, height: 56, objectFit: 'contain',
+                filter: 'drop-shadow(0 4px 12px rgba(225,177,44,0.3)) brightness(1.08) saturate(1.2)',
+              }}
+            />
             <div>
               <h2 className="serif">{company.one_liner ?? 'Ready'}</h2>
               <p>
@@ -264,21 +317,23 @@ export function DashboardShell({
           </div>
         </section>
 
-        {/* ── Main column: tasks / documents / links ── */}
+        {/* ── Main column: tasks / documents / suggestions / links ── */}
         <section className="dashboard-column dashboard-column--main">
           <div className="dashboard-section">
             <div className="panel-title"><span className="serif">Tasks</span></div>
             <div className="task-preview-list">
               {previewTasks.length === 0 ? (
-                <p style={{ fontSize: 12, color: '#6f6f6f', padding: '10px 0' }}>
+                <p style={{ fontSize: 12, color: 'var(--dash-muted, #6f6f6f)', padding: '10px 0' }}>
                   No tasks yet. Chat with the CEO to get started.
                 </p>
               ) : previewTasks.map((task) => (
-                <button
+                <div
                   className="task-preview-card"
                   key={task.id}
                   onClick={() => setSelectedTask(task)}
-                  type="button"
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setSelectedTask(task); }}
                 >
                   <h3>{task.title}</h3>
                   {task.description && <p>{task.description}</p>}
@@ -287,25 +342,50 @@ export function DashboardShell({
                     {task.status === 'in_progress' && (
                       <span className="micro-pill micro-pill--dark">Running</span>
                     )}
-                    {task.status === 'todo' && task.source === 'ceo_suggested' && (
+                    {task.status === 'todo' && (
                       <span className="micro-pill micro-pill--dark">Awaiting approval</span>
                     )}
                   </div>
-                </button>
+                  {/* Inline approve/reject for todo tasks — matches prototype */}
+                  {task.status === 'todo' && (
+                    <div
+                      className="task-preview-card__actions"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <button
+                        className="task-action-btn task-action-btn--reject"
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); handleReject(task.id); }}
+                      >
+                        ✗ Reject
+                      </button>
+                      <button
+                        className="task-action-btn task-action-btn--approve"
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); handleApprove(task.id); }}
+                      >
+                        ✓ Approve
+                      </button>
+                    </div>
+                  )}
+                </div>
               ))}
             </div>
             {tasks.length > previewTasks.length && (
               <Link className="text-link" href={`/dashboard/${company.id}/tasks`}>
-                Manage →
+                Manage all {tasks.length} tasks →
               </Link>
             )}
           </div>
+
+          {/* FIX: Wire DocumentSuggestionPanel */}
+          <DocumentSuggestionPanel companyId={company.id} />
 
           <div className="dashboard-section">
             <div className="panel-title"><span className="serif">Documents</span></div>
             <div className="document-list">
               {docsSorted.length === 0 ? (
-                <p style={{ fontSize: 12, color: '#6f6f6f', padding: '4px 0' }}>
+                <p style={{ fontSize: 12, color: 'var(--dash-muted, #6f6f6f)', padding: '4px 0' }}>
                   No documents yet.
                 </p>
               ) : docsSorted.slice(0, 5).map((doc) => (
@@ -315,7 +395,7 @@ export function DashboardShell({
                   onClick={() => setSelectedDoc(doc)}
                   type="button"
                 >
-                  <span className="document-row__icon">||</span>
+                  <span className="document-row__icon">≡</span>
                   <div><strong>{doc.title ?? doc.doc_type}</strong></div>
                   <small>{formatAge(doc.updated_at ?? doc.created_at ?? null)}</small>
                 </button>
@@ -354,8 +434,7 @@ export function DashboardShell({
             <div className="panel-title"><span className="serif">Twitter</span></div>
             <div className="channel-handle">@{company.slug ?? 'baljia'}</div>
             <div className="tweet-box">
-              <p style={{ color: '#6f6f6f' }}>No tweets yet — run a Twitter task to see posts here.</p>
-              <small>—</small>
+              <p style={{ color: 'var(--dash-muted, #6f6f6f)' }}>No tweets yet — run a Twitter task to see posts here.</p>
             </div>
             <button className="chrome-button chrome-button--small" type="button" disabled>
               Tweet
@@ -367,13 +446,24 @@ export function DashboardShell({
             <div className="channel-handle">{inboxAddress || '—'}</div>
             <div className="mail-list">
               {emails.length === 0 ? (
-                <p style={{ fontSize: 12, color: '#6f6f6f' }}>No emails yet.</p>
+                <div>
+                  <p style={{ fontSize: 12, color: 'var(--dash-muted, #6f6f6f)' }}>No emails yet.</p>
+                  {/* FIX: Helpful CTA when no emails */}
+                  <p style={{ fontSize: 11, color: 'var(--dash-faint, #8a8a8a)', marginTop: 4 }}>
+                    Ask the CEO to run a cold outreach task to start sending emails.
+                  </p>
+                </div>
               ) : emails.slice(0, 3).map((e) => (
-                <div className="mail-row" key={e.id}>
+                <button
+                  className="mail-row mail-row--clickable"
+                  key={e.id}
+                  type="button"
+                  onClick={() => setSelectedEmail(e)}
+                >
                   <strong>{e.subject ?? '(no subject)'}</strong>
                   <span>{e.direction === 'outbound' ? `To: ${e.to_address}` : `From: ${e.from_address ?? e.to_address}`}</span>
                   <small>{formatAge(e.created_at)}</small>
-                </div>
+                </button>
               ))}
             </div>
             <button className="chrome-button chrome-button--small" type="button" disabled>
@@ -392,7 +482,7 @@ export function DashboardShell({
           </div>
 
           {latestEmail && emails.length > 3 && (
-            <p style={{ fontSize: 11, color: '#8a8a8a' }}>
+            <p style={{ fontSize: 11, color: 'var(--dash-faint, #8a8a8a)' }}>
               +{emails.length - 3} more in inbox
             </p>
           )}
@@ -401,6 +491,56 @@ export function DashboardShell({
         {/* ── CEO chat rail ── */}
         <FounderChatRail companyId={company.id} warnings={chatWarnings} />
       </div>
+
+      {/* ── Email viewer dialog ── */}
+      {selectedEmail && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+          onClick={() => setSelectedEmail(null)}
+          role="dialog"
+          aria-modal="true"
+        >
+          <div
+            className="relative w-full max-w-2xl max-h-[80vh] overflow-hidden rounded-xl flex flex-col"
+            style={{ background: 'var(--dash-surface, #FFFDF9)', border: '1px solid var(--dash-line, #e8dfd4)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--dash-line, #e8dfd4)', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+              <div style={{ minWidth: 0 }}>
+                <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4, color: 'var(--dash-ink)' }}>
+                  {selectedEmail.subject ?? '(no subject)'}
+                </h2>
+                <p style={{ fontSize: 12, color: 'var(--dash-muted, #6f6f6f)' }}>
+                  {selectedEmail.direction === 'outbound'
+                    ? `To: ${selectedEmail.to_address}`
+                    : `From: ${selectedEmail.from_address ?? selectedEmail.to_address}`}
+                  {' · '}{formatAge(selectedEmail.created_at)}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedEmail(null)}
+                style={{ flexShrink: 0, padding: '6px 12px', borderRadius: 8, border: '1px solid var(--dash-line, #e8dfd4)', background: 'var(--dash-surface-muted)', fontSize: 12, cursor: 'pointer' }}
+              >
+                Close
+              </button>
+            </div>
+            {/* Body */}
+            <div style={{ overflow: 'auto', padding: '20px', flex: 1 }}>
+              {selectedEmail.body ? (
+                <pre style={{ fontFamily: 'var(--font-body, Inter, sans-serif)', fontSize: 14, lineHeight: 1.7, whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: 'var(--dash-ink)', margin: 0 }}>
+                  {selectedEmail.body}
+                </pre>
+              ) : (
+                <p style={{ fontSize: 13, color: 'var(--dash-muted, #6f6f6f)', fontStyle: 'italic' }}>
+                  No message body stored.
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Overlays + dialogs ── */}
       {menuOpen && (

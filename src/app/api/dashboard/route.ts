@@ -54,7 +54,9 @@ export async function GET(request: NextRequest) {
       id: emailThreads.id,
       subject: emailThreads.subject,
       from_address: emailThreads.from_address,
+      to_address: emailThreads.to_address,
       direction: emailThreads.direction,
+      body: emailThreads.body,
       created_at: emailThreads.created_at,
     }).from(emailThreads)
       .where(eq(emailThreads.company_id, companyId))

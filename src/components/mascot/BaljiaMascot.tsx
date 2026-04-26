@@ -1,16 +1,29 @@
+// BaljiaMascot — uses real mascot.png image instead of emojis (FIXED).
+// Place mascot.png in /public/mascot.png
+
 'use client';
 
 import { cn } from '@/lib/utils';
 import type { BaljiaState, BaljiaStatus } from '@/types';
 
-const STATE_CONFIG: Record<BaljiaState, { emoji: string; color: string; glow: string }> = {
-  listening:     { emoji: '👁️',  color: 'text-baljia-gold',      glow: 'shadow-baljia-gold/20' },
-  planning:      { emoji: '🧠',  color: 'text-status-planning',   glow: 'shadow-status-planning/20' },
-  running:       { emoji: '⚡',  color: 'text-status-running',    glow: 'shadow-status-running/20' },
-  investigating: { emoji: '🔍',  color: 'text-status-investigating', glow: 'shadow-status-investigating/20' },
-  blocked:       { emoji: '⏸️',  color: 'text-status-blocked',    glow: 'shadow-status-blocked/20' },
-  resolved:      { emoji: '✅',  color: 'text-status-success',    glow: 'shadow-status-success/20' },
-  growth_mode:   { emoji: '📈',  color: 'text-baljia-gold',      glow: 'shadow-baljia-gold/20' },
+const STATE_CONFIG: Record<BaljiaState, { label: string; glowColor: string; pulseClass: string }> = {
+  listening:     { label: 'Listening',      glowColor: 'rgba(225,177,44,0.3)',  pulseClass: '' },
+  planning:      { label: 'Planning',       glowColor: 'rgba(139,92,246,0.3)',  pulseClass: '' },
+  running:       { label: 'Running',        glowColor: 'rgba(225,177,44,0.4)',  pulseClass: 'animate-pulse' },
+  investigating: { label: 'Investigating',  glowColor: 'rgba(236,72,153,0.3)',  pulseClass: '' },
+  blocked:       { label: 'Blocked',        glowColor: 'rgba(245,158,11,0.3)',  pulseClass: '' },
+  resolved:      { label: 'Resolved',       glowColor: 'rgba(34,197,94,0.3)',   pulseClass: '' },
+  growth_mode:   { label: 'Growth Mode',    glowColor: 'rgba(225,177,44,0.4)',  pulseClass: '' },
+};
+
+const STATE_COLORS: Record<BaljiaState, string> = {
+  listening:     'text-baljia-gold',
+  planning:      'text-status-planning',
+  running:       'text-status-running',
+  investigating: 'text-status-investigating',
+  blocked:       'text-status-blocked',
+  resolved:      'text-status-success',
+  growth_mode:   'text-baljia-gold',
 };
 
 type BaljiaSize = 'chat' | 'header' | 'dashboard' | 'live-wall' | 'hero';
@@ -31,43 +44,50 @@ interface BaljiaMascotProps {
   className?: string;
 }
 
-export function BaljiaMascot({ 
-  status, 
-  size = 'dashboard', 
+export function BaljiaMascot({
+  status,
+  size = 'dashboard',
   showLabel = true,
   showDetail = true,
-  className 
+  className,
 }: BaljiaMascotProps) {
   const config = STATE_CONFIG[status.state];
-  
+  const colorClass = STATE_COLORS[status.state];
+
   return (
     <div className={cn('flex items-center gap-4', className)}>
-      {/* Mascot avatar — state-driven */}
+      {/* Mascot avatar — real image with state-driven glow */}
       <div className={cn(
         SIZE_MAP[size],
-        'relative rounded-2xl bg-surface-card border border-border-default flex items-center justify-center',
+        'relative rounded-2xl flex items-center justify-center',
         'transition-all duration-500',
-        config.glow,
-        'shadow-lg'
       )}>
-        <span className={cn(
-          'transition-transform duration-300',
-          size === 'chat' ? 'text-lg' : size === 'header' ? 'text-xl' : size === 'dashboard' ? 'text-5xl' : 'text-6xl'
-        )}>
-          {config.emoji}
-        </span>
-        
-        {/* Subtle pulse animation when running */}
+        <img
+          src="/mascot.png"
+          alt={`Baljia — ${config.label}`}
+          className={cn('w-full h-full object-contain', config.pulseClass)}
+          style={{
+            filter: `drop-shadow(0 4px 16px ${config.glowColor}) brightness(1.08) saturate(1.2)`,
+          }}
+        />
+
+        {/* Subtle pulse ring when running */}
         {status.state === 'running' && (
-          <div className="absolute inset-0 rounded-2xl border-2 border-status-running/30 animate-ping" />
+          <div
+            className="absolute inset-0 rounded-2xl animate-ping"
+            style={{
+              border: '2px solid rgba(225,177,44,0.25)',
+              animationDuration: '2s',
+            }}
+          />
         )}
       </div>
-      
-      {/* Text — meaning layer (separate from image) */}
+
+      {/* Text — meaning layer */}
       {(showLabel || showDetail) && (
         <div className="flex flex-col gap-0.5">
           {showLabel && (
-            <span className={cn('font-semibold text-sm', config.color)}>
+            <span className={cn('font-semibold text-sm', colorClass)}>
               {status.label}
             </span>
           )}

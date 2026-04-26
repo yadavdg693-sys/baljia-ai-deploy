@@ -114,6 +114,7 @@ export default async function CompanyDashboard({ params }: Props) {
       to_address: emailThreads.to_address,
       from_address: emailThreads.from_address,
       direction: emailThreads.direction,
+      body: emailThreads.body,
       created_at: emailThreads.created_at,
     })
       .from(emailThreads)

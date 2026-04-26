@@ -1,8 +1,5 @@
-// FounderChatRail — Polsia-styled CEO chat column.
-// Lives in the 4-column dashboard grid at column 4 (variable width).
-// Source reference: polsia/baljia-frontend/src/components/dashboard-shell.tsx:12-136
-// Styles: .dashboard-column--chat / .chat-pane / .warning-list / .how-it-works
-// / .chat-thread / .chat-composer / .founder-bubble / .thought-row.
+// FounderChatRail — CEO chat column (FIXED).
+// FIXES: Corrected "How It Works" copy to describe Baljia, not browser agent.
 
 'use client';
 
@@ -14,13 +11,14 @@ interface FounderChatRailProps {
   warnings?: string[];
 }
 
+// FIX: Correct How It Works to describe Baljia, not browser sessions
 const HOW_IT_WORKS_STEPS = [
-  'You describe what you want done on a website',
-  'Agent opens a real browser session',
-  'Navigates, clicks, fills, extracts — step by step',
-  'Takes screenshots to verify it\'s on the right page',
-  'Saves any credentials or data it creates',
-  'Delivers results as a report',
+  'Tell Baljia what you want — a task, a question, or a strategy discussion',
+  'Your AI CEO scopes the work and estimates credits',
+  'Approve the task — Baljia assigns the right AI agent',
+  'The agent executes autonomously (up to 4 hours per task)',
+  'A verifier checks the output before marking it complete',
+  'Results appear as reports, documents, or deployed code',
 ];
 
 export function FounderChatRail({ companyId, warnings = [] }: FounderChatRailProps) {
@@ -124,7 +122,7 @@ export function FounderChatRail({ companyId, warnings = [] }: FounderChatRailPro
           onClick={() => setCollapsed(false)}
           type="button"
         >
-          CEO
+          CEO Chat
         </button>
       </section>
     );
@@ -136,15 +134,31 @@ export function FounderChatRail({ companyId, warnings = [] }: FounderChatRailPro
     <section className="dashboard-column dashboard-column--chat">
       <div className="chat-pane">
         <div className="chat-pane__header">
-          <span>CEO</span>
-          <button
-            className="chat-pane__close"
-            onClick={() => setCollapsed(true)}
-            type="button"
-            aria-label="Collapse chat"
-          >
-            ×
-          </button>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <img
+              src="/mascot.png"
+              alt=""
+              style={{
+                width: 20, height: 20, objectFit: 'contain',
+                filter: 'drop-shadow(0 0 4px rgba(225,177,44,0.3))',
+              }}
+            />
+            <span style={{ fontWeight: 700, fontSize: 13, letterSpacing: '.3px', textTransform: 'uppercase' as const }}>CEO Chat</span>
+          </span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600, color: '#16A34A' }}>
+              <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#16A34A', boxShadow: '0 0 6px #16A34A', display: 'inline-block' }} />
+              ONLINE
+            </span>
+            <button
+              className="chat-pane__close"
+              onClick={() => setCollapsed(true)}
+              type="button"
+              aria-label="Collapse chat"
+            >
+              ×
+            </button>
+          </span>
         </div>
 
         <div className="chat-pane__scroll" ref={scrollRef}>
@@ -152,7 +166,7 @@ export function FounderChatRail({ companyId, warnings = [] }: FounderChatRailPro
             <div className="warning-list">
               {warnings.map((w) => (
                 <div className="warning-row" key={w}>
-                  <span className="warning-row__icon">×</span>
+                  <span className="warning-row__icon">⚠</span>
                   <span>{w}</span>
                 </div>
               ))}
@@ -162,12 +176,15 @@ export function FounderChatRail({ companyId, warnings = [] }: FounderChatRailPro
           {isEmpty && (
             <div className="how-it-works">
               <h3 className="serif">How It Works</h3>
+              <p style={{ fontSize: 13, color: 'var(--dash-muted, #6f6f6f)', marginBottom: 8 }}>
+                Chat with your AI CEO to manage your company.
+              </p>
               <ol>
                 {HOW_IT_WORKS_STEPS.map((step) => (
                   <li key={step}>{step}</li>
                 ))}
               </ol>
-              <p>Each task = 1 credit, max 4 hours per session. Pretty powerful for founder tasks.</p>
+              <p>Each task = 1 credit, max 4 hours per session.</p>
             </div>
           )}
 
@@ -178,7 +195,17 @@ export function FounderChatRail({ companyId, warnings = [] }: FounderChatRailPro
                   <div className="founder-bubble" key={msg.id}>{msg.content}</div>
                 ) : (
                   <div className="thought-row" key={msg.id}>
-                    <small>CEO</small>
+                    <small style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <img
+                        src="/mascot.png"
+                        alt=""
+                        style={{
+                          width: 14, height: 14, objectFit: 'contain',
+                          filter: 'drop-shadow(0 0 3px rgba(225,177,44,0.2))',
+                        }}
+                      />
+                      CEO
+                    </small>
                     <p>{msg.content}</p>
                   </div>
                 )
@@ -192,7 +219,7 @@ export function FounderChatRail({ companyId, warnings = [] }: FounderChatRailPro
               {isStreaming && !streamingText && (
                 <div className="thought-row">
                   <small>CEO</small>
-                  <p style={{ opacity: 0.6 }}>thinking...</p>
+                  <p style={{ opacity: 0.6, fontStyle: 'italic' }}>thinking...</p>
                 </div>
               )}
             </div>
@@ -200,7 +227,7 @@ export function FounderChatRail({ companyId, warnings = [] }: FounderChatRailPro
         </div>
 
         <form className="chat-composer" onSubmit={handleSend}>
-          <span className="chat-composer__icon">o</span>
+          <span className="chat-composer__icon">💬</span>
           <input
             className="chat-composer__input"
             value={draft}
@@ -209,7 +236,7 @@ export function FounderChatRail({ companyId, warnings = [] }: FounderChatRailPro
             disabled={isStreaming}
           />
           <button className="chat-composer__send" type="submit" aria-label="Send">
-            {'->'}
+            →
           </button>
         </form>
       </div>

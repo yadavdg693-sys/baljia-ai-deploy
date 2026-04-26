@@ -15,6 +15,15 @@ const nextConfig: NextConfig = {
       },
     ],
   },
+  // Serve the standalone waitlist page at the root — keeps URL clean (no redirect)
+  async rewrites() {
+    return [
+      {
+        source: '/',
+        destination: '/waitlist.html',
+      },
+    ];
+  },
 };
 
 // Wrap with Sentry only when auth token is available (avoids build errors in dev)

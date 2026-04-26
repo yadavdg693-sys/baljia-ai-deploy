@@ -1,93 +1,184 @@
+/* ═══════════════════════════════════════════════════════
+   globals.css — v2 with Dark/Light theme support
+
+   Uses CSS custom properties toggled by body.dark class.
+   Same approach as the Baljia Waitlist page.
+   ═══════════════════════════════════════════════════════ */
+
 @import "tailwindcss";
 
 @theme {
-  /* Baljia Brand Colors */
-  --color-baljia-gold: #F5A623;
-  --color-baljia-gold-light: #FBC86A;
-  --color-baljia-gold-dark: #D4891A;
-  
-  --color-surface-primary: #0A0A0B;
-  --color-surface-secondary: #111113;
-  --color-surface-tertiary: #1A1A1D;
-  --color-surface-card: #16161A;
-  --color-surface-hover: #1E1E22;
-  
-  --color-border-default: #2A2A2E;
-  --color-border-subtle: #1F1F23;
-  --color-border-active: #F5A623;
-  
-  --color-text-primary: #FAFAF9;
-  --color-text-secondary: #A1A1AA;
-  --color-text-muted: #71717A;
-  
-  --color-status-running: #F5A623;
+  /* Baljia Brand — constant across themes */
+  --color-baljia-gold: #E1B12C;
+  --color-baljia-gold-light: #FCD34D;
+  --color-baljia-gold-dark: #D97706;
+  --color-baljia-gold-deep: #A35F05;
+
+  /* Light theme defaults (overridden by body.dark) */
+  --color-surface-primary: #FCFBF8;
+  --color-surface-secondary: #F4F2EC;
+  --color-surface-tertiary: #EAE5DD;
+  --color-surface-card: #FFFDF9;
+  --color-surface-hover: #F0ECE4;
+
+  --color-border-default: #DED6CA;
+  --color-border-subtle: #EAE5DD;
+  --color-border-active: #D97706;
+  --color-border-gold: rgba(225, 177, 44, 0.28);
+
+  --color-text-primary: #1E1A16;
+  --color-text-secondary: #5C5147;
+  --color-text-muted: #8A7D72;
+
+  /* Status */
+  --color-status-running: #E1B12C;
   --color-status-success: #22C55E;
   --color-status-error: #EF4444;
   --color-status-blocked: #F59E0B;
   --color-status-planning: #8B5CF6;
   --color-status-investigating: #EC4899;
-  
-  /* Baljia Mascot Size Tokens */
+
+  /* Mascot sizes */
   --size-baljia-chat: 40px;
   --size-baljia-header: 48px;
-  --size-baljia-dashboard: 112px;
+  --size-baljia-dashboard: 80px;
   --size-baljia-live-wall: 152px;
   --size-baljia-hero: 220px;
-  
+
   /* Typography */
-  --font-display: 'Satoshi', 'SF Pro Display', system-ui, sans-serif;
-  --font-body: 'General Sans', 'SF Pro Text', system-ui, sans-serif;
+  --font-display: 'Newsreader', Georgia, serif;
+  --font-body: 'Inter', system-ui, -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', 'SF Mono', monospace;
 }
 
-/* Global Styles */
+/* ═══ CSS Custom Properties for theme switching ═══ */
+:root {
+  --bg: #FCFBF8;
+  --bg-alt: #F4F2EC;
+  --bg-muted: #EAE5DD;
+  --bg-card: #FFFDF9;
+  --ink: #1E1A16;
+  --ink-2: #3A332C;
+  --text: #1E1A16;
+  --text-muted: #5C5147;
+  --text-dim: #8A7D72;
+  --line: #DED6CA;
+  --line-strong: #B8AC9D;
+  --border: rgba(217,119,6,0.10);
+  --border-strong: rgba(217,119,6,0.22);
+  --gold-bg: rgba(225,177,44,0.10);
+  --gold-border: rgba(225,177,44,0.28);
+  --shadow-md: 0 8px 24px rgba(24,18,10,0.06), 0 1px 2px rgba(24,18,10,0.04);
+  --shadow-lg: 0 24px 60px rgba(24,18,10,0.10), 0 2px 6px rgba(24,18,10,0.04);
+  --shadow-gold: 0 18px 40px rgba(217,119,6,0.18);
+}
+
+body.dark {
+  --bg: #14110D;
+  --bg-alt: #1B1712;
+  --bg-muted: #231E17;
+  --bg-card: #1A1611;
+  --ink: #F5EFE4;
+  --ink-2: #E6DDCB;
+  --text: #F5EFE4;
+  --text-muted: #BDB09C;
+  --text-dim: #8A7D6B;
+  --line: #2E2820;
+  --line-strong: #3D352A;
+  --border: rgba(225,177,44,0.14);
+  --border-strong: rgba(225,177,44,0.28);
+  --gold-bg: rgba(225,177,44,0.12);
+  --gold-border: rgba(225,177,44,0.28);
+  --shadow-md: 0 10px 30px rgba(0,0,0,0.40);
+  --shadow-lg: 0 30px 70px rgba(0,0,0,0.55);
+  --shadow-gold: 0 24px 50px rgba(225,177,44,0.18);
+
+  /* Override Tailwind theme tokens for dark */
+  --color-surface-primary: #14110D;
+  --color-surface-secondary: #1B1712;
+  --color-surface-tertiary: #231E17;
+  --color-surface-card: #1A1611;
+  --color-surface-hover: #2E2820;
+  --color-text-primary: #F5EFE4;
+  --color-text-secondary: #BDB09C;
+  --color-text-muted: #8A7D6B;
+  --color-border-default: #2E2820;
+  --color-border-subtle: #231E17;
+}
+
+/* ═══ Global Styles ═══ */
 @layer base {
   body {
-    background-color: var(--color-surface-primary);
-    color: var(--color-text-primary);
+    background-color: var(--bg);
+    color: var(--text);
     font-family: var(--font-body);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    transition: background-color 0.45s ease, color 0.45s ease;
   }
-  
+
   ::selection {
-    background-color: color-mix(in srgb, var(--color-baljia-gold) 30%, transparent);
+    background-color: rgba(225, 177, 44, 0.30);
+    color: var(--ink);
   }
 }
 
-/* Animations */
+/* ═══ Animations ═══ */
 @keyframes slide-up {
-  from {
-    transform: translateY(100%);
-    opacity: 0;
-  }
-  to {
-    transform: translateY(0);
-    opacity: 1;
-  }
+  from { transform: translateY(100%); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
 }
-
-.animate-slide-up {
-  animation: slide-up 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
 }
-
-/* Scrollbar */
-@layer utilities {
-  .scrollbar-thin::-webkit-scrollbar {
-    width: 6px;
-  }
-  .scrollbar-thin::-webkit-scrollbar-track {
-    background: transparent;
-  }
-  .scrollbar-thin::-webkit-scrollbar-thumb {
-    background-color: var(--color-border-default);
-    border-radius: 3px;
-  }
-}
-
-/* C4: Fade-in animation for chat messages + panels */
 @keyframes fade-in {
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: translateY(0); }
 }
-.animate-fade-in {
-  animation: fade-in 0.2s ease-out;
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+@keyframes bob {
+  to { transform: translateY(-8px); }
+}
+
+.animate-slide-up { animation: slide-up 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
+.animate-fade-up { animation: fade-up 0.6s cubic-bezier(0.16, 1, 0.3, 1) both; }
+.animate-fade-in { animation: fade-in 0.2s ease-out; }
+
+/* ═══ Scrollbar ═══ */
+@layer utilities {
+  .scrollbar-thin::-webkit-scrollbar { width: 6px; }
+  .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+  .scrollbar-thin::-webkit-scrollbar-thumb { background-color: var(--line); border-radius: 3px; }
+}
+
+/* ═══ Utilities ═══ */
+.serif { font-family: var(--font-display); }
+.mono { font-family: var(--font-mono); }
+.text-gold-gradient {
+  background: linear-gradient(135deg, #FFB800, #D97706);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ═══ Theme toggle button ═══ */
+.theme-toggle {
+  width: 36px; height: 36px; border-radius: 999px;
+  background: var(--bg-alt); border: 1px solid var(--border);
+  display: grid; place-items: center; cursor: pointer;
+  color: var(--ink); transition: transform 0.3s, background 0.3s;
+}
+.theme-toggle:hover { transform: rotate(15deg); }
+.theme-toggle svg { width: 16px; height: 16px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
 }

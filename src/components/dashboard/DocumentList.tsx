@@ -9,7 +9,8 @@ interface DocumentListProps {
 }
 
 export function DocumentList({ documents, onDocumentClick }: DocumentListProps) {
-  const populated = documents.filter((d) => !d.is_empty);
+  // FIX: Also show docs that have content even if is_empty flag is stale
+  const populated = documents.filter((d) => !d.is_empty || (d.content && d.content.trim().length > 0));
 
   return (
     <div className="space-y-2">
