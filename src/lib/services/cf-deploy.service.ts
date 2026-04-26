@@ -503,6 +503,112 @@ export async function getWorkerScriptInfo(scriptName: string): Promise<WorkerScr
   }
 }
 
+// ══════════════════════════════════════════════
+// LOGS — Workers GraphQL Analytics API
+// ══════════════════════════════════════════════
+//
+// Returns per-minute aggregates of worker invocations grouped by HTTP status
+// and outcome (ok / exception / exceededCpu / scriptThrew / canceled). This is
+// what's available without WebSocket-based Tail sessions and is enough for the
+// most common diagnostic question: "is the worker erroring, and at what rate?"
+//
+// For console.log capture and per-request exception messages, a Tail-based
+// follow-up tool is the next step (requires a WebSocket session).
+
+export interface WorkerLogBucket {
+  /** ISO-8601 minute boundary, e.g. "2026-04-25T08:30:00Z" */
+  minute: string;
+  status: number;
+  /** ok | exception | exceededCpu | exceededMemory | scriptThrew | canceled | unknown */
+  outcome: string;
+  requests: number;
+  errors: number;
+  subrequests: number;
+}
+
+export interface GetWorkerLogsParams {
+  scriptName: string;
+  /** Lookback in minutes (default 60, max 1440 = 24h) */
+  sinceMinutes?: number;
+  /** Max rows returned (default 100, hard max 500) */
+  limit?: number;
+}
+
+const CF_GRAPHQL = 'https://api.cloudflare.com/client/v4/graphql';
+
+export async function getWorkerLogs(params: GetWorkerLogsParams): Promise<WorkerLogBucket[] | null> {
+  if (!isCloudflareDeployConfigured()) return null;
+
+  const sinceMinutes = Math.max(1, Math.min(params.sinceMinutes ?? 60, 1440));
+  const limit = Math.max(1, Math.min(params.limit ?? 100, 500));
+  const since = new Date(Date.now() - sinceMinutes * 60_000).toISOString();
+
+  const query = `
+    query WorkerInvocations($accountTag: String!, $scriptName: String!, $since: Time!, $limit: Int!) {
+      viewer {
+        accounts(filter: { accountTag: $accountTag }) {
+          workersInvocationsAdaptive(
+            limit: $limit,
+            filter: { datetime_geq: $since, scriptName: $scriptName },
+            orderBy: [datetimeMinute_DESC]
+          ) {
+            sum { requests errors subrequests }
+            dimensions { datetimeMinute status outcome }
+          }
+        }
+      }
+    }
+  `;
+
+  try {
+    const response = await cfFetch(CF_GRAPHQL, {
+      method: 'POST',
+      headers: { ...cfApiHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query,
+        variables: { accountTag: cfAccountId(), scriptName: params.scriptName, since, limit },
+      }),
+    });
+
+    if (!response.ok) {
+      log.warn('CF GraphQL non-2xx', { status: response.status, scriptName: params.scriptName });
+      return null;
+    }
+
+    const json = await response.json() as {
+      data?: {
+        viewer?: {
+          accounts?: Array<{
+            workersInvocationsAdaptive?: Array<{
+              sum: { requests: number; errors: number; subrequests: number };
+              dimensions: { datetimeMinute: string; status: number; outcome: string };
+            }>;
+          }>;
+        };
+      };
+      errors?: Array<{ message: string }>;
+    };
+
+    if (json.errors?.length) {
+      log.warn('CF GraphQL errors', { errors: json.errors.map((e) => e.message), scriptName: params.scriptName });
+      return null;
+    }
+
+    const rows = json.data?.viewer?.accounts?.[0]?.workersInvocationsAdaptive ?? [];
+    return rows.map((r) => ({
+      minute: r.dimensions.datetimeMinute,
+      status: r.dimensions.status,
+      outcome: r.dimensions.outcome,
+      requests: r.sum.requests,
+      errors: r.sum.errors,
+      subrequests: r.sum.subrequests,
+    }));
+  } catch (error) {
+    log.error('CF getWorkerLogs error', { scriptName: params.scriptName }, error);
+    return null;
+  }
+}
+
 /**
  * Reach the live URL and return the HTTP status + body snippet for verification.
  * Useful in the Engineering agent's verifier step post-deploy.

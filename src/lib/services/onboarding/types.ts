@@ -111,15 +111,29 @@ export interface FirstPriority {
   rationale: string;
 }
 
+// Gap-filling: after first-pass research, the LLM identifies gaps it couldn't
+// fill from initial Tavily snippets and writes targeted queries to fill them.
+// Orchestrator runs those queries (2-4 calls), then re-synthesizes with combined
+// raw data. Cheap upgrade ($0.05 + ~25s) that materially reduces hallucination
+// risk for thin-data markets. See market-research-*.ts.
+export interface GapFillingQuery {
+  query: string;     // concrete Tavily search string
+  fills: string;     // 1-line label of which gap this query targets
+}
+
 // Build My Idea — lean report
 export interface BuildMarketResearch {
   overview: string;
   competitors: MarketCompetitor[];
   opportunity: string;
   why_this_fits_you: string;
-  market_size?: TaggedStat[];          // NEW: confidence-tagged market stats
-  demand_signals?: string[];           // NEW: evidence people want this (Reddit complaints, forum posts, app store reviews). Empty string in slot 0 if none found.
-  data_gaps?: string[];                // NEW: what Tavily didn't cover — transparency vs hallucinated completeness
+  market_size?: TaggedStat[];          // confidence-tagged market stats
+  demand_signals?: string[];           // evidence people want this (Reddit complaints, forum posts, app store reviews). Empty if none found.
+  data_gaps?: string[];                // what Tavily didn't cover — transparency vs hallucinated completeness
+  gap_filling_queries?: GapFillingQuery[];  // 1st pass: LLM-recommended targeted queries to fill data_gaps. Orchestrator runs them and re-synthesizes.
+  research_quality_warning?: string;   // set by orchestrator after 2nd pass if gaps still significant — surfaces "thin public data, validate manually" to the founder
+  proceed_or_pause?: 'proceed' | 'narrow_first' | 'validate_first';  // BUILD-only: explicit go/no-go gate. validate_first when demand_signals empty after gap-filling.
+  proceed_note?: string;               // BUILD-only: 1-line founder-facing rationale for the proceed_or_pause decision
   first_priorities: FirstPriority[];
 }
 
@@ -156,10 +170,12 @@ export interface GrowMarketResearch {
   gaps_to_exploit: string[];
   why_this_fits_you: string;
   ai_leverage_points: string[];
-  market_size?: TaggedStat[];          // NEW
-  retention_check?: RetentionCheck;    // NEW: gates acquisition advice
-  funnel_diagnosis?: FunnelDiagnosis;  // NEW: where to focus
-  data_gaps?: string[];                // NEW
+  market_size?: TaggedStat[];
+  retention_check?: RetentionCheck;    // gates acquisition advice
+  funnel_diagnosis?: FunnelDiagnosis;  // where to focus
+  data_gaps?: string[];
+  gap_filling_queries?: GapFillingQuery[];  // 1st pass: targeted queries to fill data_gaps
+  research_quality_warning?: string;   // set by orchestrator after 2nd pass if gaps still significant
   first_priorities: FirstPriority[];
 }
 
@@ -172,14 +188,16 @@ export interface IdeaRefinement {
 export interface SurpriseMarketResearch {
   idea_overview: string;
   market_validation: {
-    size_and_growth: TaggedStat[];     // CHANGED: now confidence-tagged
+    size_and_growth: TaggedStat[];     // confidence-tagged
     why_now: string[];
-    demand_signals?: string[];         // NEW
+    demand_signals?: string[];
   };
   competitors: MarketCompetitor[];
   why_this_fits_you: string;
   idea_refinements: IdeaRefinement[];
-  data_gaps?: string[];                // NEW
+  data_gaps?: string[];
+  gap_filling_queries?: GapFillingQuery[];  // 1st pass: targeted queries to fill data_gaps
+  research_quality_warning?: string;   // set by orchestrator after 2nd pass if gaps still significant
   first_priorities: FirstPriority[];
 }
 

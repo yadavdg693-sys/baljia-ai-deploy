@@ -11,6 +11,19 @@ const log = createLogger('OnboardingNaming');
 const MAX_NAME_RETRIES = 3;
 
 export async function nameCompany(ctx: PipelineContext): Promise<void> {
+  // Resume guard (Bug 1): if the orchestrator hydrated ctx from a DB row
+  // that already had a non-placeholder name, do NOT regenerate. The
+  // founder's company identity is locked the moment provision_infrastructure
+  // committed it; a retry must preserve "Lichora", not roll a new name.
+  if (ctx.companyName && ctx.companyName !== 'My Company') {
+    log.info('Skipping name generation — company already named', {
+      companyId: ctx.companyId,
+      name: ctx.companyName,
+    });
+    await emitActivity(ctx, `Company name: ${ctx.companyName}`, 'naming');
+    return;
+  }
+
   const contextLines: string[] = [];
   if (ctx.founderName) contextLines.push(`Founder name: ${ctx.founderName}`);
   if (ctx.input) contextLines.push(`Idea/URL: ${ctx.input}`);

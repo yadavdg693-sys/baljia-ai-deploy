@@ -1,8 +1,12 @@
 // Company Service — migrated to Drizzle + Neon
-import { db, companies } from '@/lib/db';
+import { db, companies, subscriptions } from '@/lib/db';
 import { eq, desc, sql } from 'drizzle-orm';
 import { generateSlug } from '@/lib/slug';
 import type { Company } from '@/types';
+
+// Trial defaults — keep in sync with PLAN_CONFIG.trial in billing.service.ts
+const TRIAL_NIGHT_SHIFTS = 3;
+const TRIAL_DURATION_DAYS = 14;
 
 interface CreateCompanyInput {
   owner_id: string;
@@ -43,6 +47,26 @@ export async function createCompany(input: CreateCompanyInput): Promise<Company>
     hosting_state: 'live',
     company_stage: 'early',
   }).returning();
+
+  // Provision a trial subscription row so the night-shift cron's INNER JOIN
+  // matches this company (CLAUDE.md Gotcha #3: "Trial gets night shifts").
+  // Without this row the company is silently excluded from night shifts —
+  // contradicting the night_shifts_remaining: 3 allowance promised in the
+  // onboarding ceo-summary / celebrate steps.
+  // Stripe fields stay null until real checkout (handled in billing.service).
+  const now = new Date();
+  const trialEndsAt = new Date(now.getTime() + TRIAL_DURATION_DAYS * 24 * 60 * 60 * 1000);
+  await db.insert(subscriptions).values({
+    user_id: input.owner_id,
+    company_id: company.id,
+    plan_type: 'trial',
+    status: 'active',
+    night_shifts_total: TRIAL_NIGHT_SHIFTS,
+    night_shifts_remaining: TRIAL_NIGHT_SHIFTS,
+    trial_ends_at: trialEndsAt,
+    current_period_start: now,
+    current_period_end: trialEndsAt,
+  });
 
   return company as unknown as Company;
 }

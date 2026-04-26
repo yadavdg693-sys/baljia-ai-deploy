@@ -17,7 +17,11 @@ import { loginOpenAICodex, refreshOpenAICodexToken } from '@mariozechner/pi-ai/o
 import { exec } from 'node:child_process';
 
 const ROOT = process.cwd();
-const STORE_PATH = path.join(ROOT, 'data', 'baljia-openai-codex-oauth.json');
+function getStorePath() {
+  return process.env.BALJIA_OPENAI_OAUTH_STORE_PATH
+    ? path.resolve(process.env.BALJIA_OPENAI_OAUTH_STORE_PATH)
+    : path.join(ROOT, 'data', 'baljia-openai-codex-oauth.json');
+}
 
 // ── Encryption (mirrors credential-crypto.ts) ──
 
@@ -72,18 +76,18 @@ function deriveIdentity(accessToken, fallbackAccountId) {
 // ── Load / Save ──
 
 function loadCredentials() {
-  if (!fs.existsSync(STORE_PATH)) return null;
+  if (!fs.existsSync(getStorePath())) return null;
   try {
-    const payload = JSON.parse(fs.readFileSync(STORE_PATH, 'utf8'));
+    const payload = JSON.parse(fs.readFileSync(getStorePath(), 'utf8'));
     const access = payload?.credentials?.access ? decrypt(payload.credentials.access) : null;
     const refresh = payload?.credentials?.refresh ? decrypt(payload.credentials.refresh) : null;
     if (!access || !refresh) return null;
-    return { access, refresh, expires: payload.credentials.expires, identity: payload.identity, storePath: STORE_PATH };
+    return { access, refresh, expires: payload.credentials.expires, identity: payload.identity, storePath: getStorePath() };
   } catch { return null; }
 }
 
 async function saveCredentials(creds) {
-  await fsp.mkdir(path.dirname(STORE_PATH), { recursive: true });
+  await fsp.mkdir(path.dirname(getStorePath()), { recursive: true });
   const identity = deriveIdentity(creds.access, creds.accountId ?? null);
   const payload = {
     version: 1,
@@ -97,8 +101,8 @@ async function saveCredentials(creds) {
     },
     identity,
   };
-  await fsp.writeFile(STORE_PATH, JSON.stringify(payload, null, 2) + '\n', 'utf8');
-  return { ...creds, identity, storePath: STORE_PATH };
+  await fsp.writeFile(getStorePath(), JSON.stringify(payload, null, 2) + '\n', 'utf8');
+  return { ...creds, identity, storePath: getStorePath() };
 }
 
 // ── Load .env.local for AUTH_SECRET ──

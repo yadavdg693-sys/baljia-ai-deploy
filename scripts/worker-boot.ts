@@ -74,6 +74,7 @@ async function claimOne(): Promise<typeof tasks.$inferSelect | null> {
     WHERE id = (
       SELECT id FROM tasks
       WHERE status = 'todo'
+        AND authorized_by IS NOT NULL
         AND (lease_expires_at IS NULL OR lease_expires_at < NOW())
         AND COALESCE(attempt_count, 0) < ${MAX_ATTEMPTS}
       ORDER BY priority DESC NULLS LAST, queue_order ASC NULLS LAST, created_at ASC

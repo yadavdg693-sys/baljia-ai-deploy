@@ -1,8 +1,11 @@
-// Composite: landing → tweet → ceo_summary → magic_link → inbox_message →
+// Composite: tweet → ceo_summary → magic_link → inbox_message →
 // completion email (with embedded magic link) → diagnostics → celebrate
+//
+// generate_landing_page was moved OUT of this group in the 60-90s speedup:
+// strategies now run it in parallel with create_starter_tasks (both depend
+// on mission + research but not on each other).
 
 import { stage } from '../stage-runner';
-import { generateLandingPage } from './landing';
 import { postLaunchTweet } from './tweets';
 import { generateCeoSummary } from './ceo-summary';
 import { generateOnboardingMagicLink, type MagicLinkExtension } from './generate-magic-link';
@@ -13,7 +16,6 @@ import { flushDiagnostics, celebrate } from './celebrate';
 import type { PipelineContext } from '../types';
 
 export async function proofGroup(ctx: PipelineContext): Promise<void> {
-  await stage(ctx, 'generate_landing_page', () => generateLandingPage(ctx), { optional: true });
   await stage(ctx, 'post_launch_tweet', () => postLaunchTweet(ctx), { optional: true });
   await stage(ctx, 'generate_ceo_summary', () => generateCeoSummary(ctx));
   // Phase 6: collect the Neon DB + GitHub repo that were kicked off in infra-group.

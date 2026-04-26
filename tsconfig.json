@@ -40,6 +40,8 @@
     "cf-workflow-poc",
     "waitlist-site",
     "dist",
-    ".open-next"
+    ".open-next",
+    "src/scripts",
+    "scripts"
   ]
 }

@@ -45,10 +45,15 @@ export default async function CompanyDashboard({ params }: Props) {
     .where(and(eq(companies.id, companyId), eq(companies.owner_id, user.id)))
     .limit(1);
 
-  if (!company) redirect('/onboarding');
+  // No company OR not owned by this user → bounce to portfolio (which shows
+  // their existing companies or an empty state with a CTA). Previously this
+  // silently redirected to /onboarding even when the user already had other
+  // companies, which lost context with no explanation.
+  if (!company) redirect('/portfolio');
 
   // If company was created via quick-start but pipeline hasn't run yet,
-  // redirect to onboarding to auto-resume the pipeline
+  // redirect to onboarding to auto-resume the pipeline (intentional UX:
+  // these companies have no dashboard content to show yet).
   if (company.onboarding_status === 'pending_auth') {
     redirect(`/onboarding?resume=${company.id}`);
   }

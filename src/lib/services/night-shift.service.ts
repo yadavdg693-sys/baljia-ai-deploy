@@ -1,6 +1,5 @@
 // Night Shift Engine — migrated to Drizzle + Neon
 import * as taskService from '@/lib/services/task.service';
-import * as creditService from '@/lib/services/credit.service';
 import * as eventService from '@/lib/services/event.service';
 import * as roadmapService from '@/lib/services/roadmap.service';
 import * as failureService from '@/lib/services/failure.service';
@@ -137,13 +136,13 @@ async function probeCompanyHealth(companyId: string, liveUrl: string): Promise<s
       await db.insert(tasksTable).values({
         company_id: companyId,
         title,
-        description: `Night Shift health probe detected an issue:\n- URL: ${liveUrl}\n- Response: ${msg}\n\nCheck render_get_logs for the error, fix and redeploy. This is affecting live users.`,
+        description: `Night Shift health probe detected an issue:\n- URL: ${liveUrl}\n- Response: ${msg}\n\nDiagnose first: call cf_get_logs with errors_only=true to see the error pattern (status codes, outcome, when it started). Then call get_company_tech for the current source, fix the Worker, and redeploy with cf_deploy_app (or cf_deploy_landing for static HTML). This is affecting live users.`,
         tag: 'bug-fix',
         priority: 95,
         source: 'auto_remediation',
         status: 'todo',
         queue_order: 0,
-        estimated_credits: 2,
+        estimated_credits: 1,
         max_turns: 200,
         executability_type: 'can_run_now',
       });
@@ -165,13 +164,13 @@ async function probeCompanyHealth(companyId: string, liveUrl: string): Promise<s
       await db.insert(tasksTable).values({
         company_id: companyId,
         title,
-        description: `Night Shift health probe could not reach the app:\n- URL: ${liveUrl}\n- Error: ${reason}\n\nCheck Render service status, review render_get_logs, and redeploy. If deploy is broken, use render_rollback.`,
+        description: `Night Shift health probe could not reach the app:\n- URL: ${liveUrl}\n- Error: ${reason}\n\nThe Cloudflare Worker is unreachable. Diagnose with cf_get_logs (errors_only=true) — if there are no recent invocations, the script is missing or the route isn't bound. Call get_company_tech to find the current source, then redeploy with cf_deploy_app (or cf_deploy_landing for static HTML). If the current source is broken, revert by redeploying the last known-good version from GitHub.`,
         tag: 'bug-fix',
         priority: 99,
         source: 'auto_remediation',
         status: 'todo',
         queue_order: 0,
-        estimated_credits: 2,
+        estimated_credits: 1,
         max_turns: 200,
         executability_type: 'can_run_now',
       });
@@ -189,22 +188,26 @@ async function runHealthProbes(companyId: string): Promise<string[]> {
   try {
     const [company] = await db.select({
       custom_domain: companies.custom_domain,
+      subdomain: companies.subdomain,
       slug: companies.slug,
-      render_service_id: companies.render_service_id,
     }).from(companies)
       .where(eq(companies.id, companyId))
       .limit(1);
 
     if (!company) return [];
 
-    // Determine live URL: prefer custom domain, fallback to slug subdomain
+    // Determine live URL: prefer custom domain, fallback to Cloudflare
+    // {subdomain|slug}.baljia.app (ADR-002). Founder apps live on Cloudflare
+    // now — no Render gating. If there's no subdomain/slug yet, the company
+    // hasn't been provisioned, so skip.
+    const cfHost = company.subdomain ?? company.slug;
     const liveUrl = company.custom_domain
       ? `https://${company.custom_domain}`
-      : company.render_service_id && company.slug
-      ? `https://${company.slug}.baljia.app`
+      : cfHost
+      ? `https://${cfHost}.baljia.app`
       : null;
 
-    if (!liveUrl) return []; // no deployment yet — skip
+    if (!liveUrl) return []; // not provisioned yet — skip
 
     const alert = await probeCompanyHealth(companyId, liveUrl);
     return alert ? [alert] : [];
@@ -373,25 +376,29 @@ async function planNightShift(companyId: string): Promise<NightShiftPlan> {
 
 async function executeNightShift(plan: NightShiftPlan): Promise<{ completed: number; failed: number }> {
   let completed = 0; let failed = 0;
-  const balance = await creditService.getBalance(plan.companyId);
 
-  // Bug #4 fix: track committed credits across BOTH task creation and execution.
-  // Creating a task reserves a credit slot (it will be consumed when executed).
-  // Without this, balance checks allow n tasks to be created against balance=1.
-  let creditsCommitted = 0;
-
+  // Night-shift cycles are funded by the subscription's night_shifts_remaining
+  // allowance, not by founder credit balance. Task creation and execution here
+  // do NOT deduct from credit_ledger — see worker-launcher's subscriptionFunded
+  // path. Per-cycle decrement of the allowance happens in runNightShift.
   for (const newTask of plan.tasks_to_create) {
-    if (balance - creditsCommitted <= 0) { log.warn('Out of credits for new tasks', { companyId: plan.companyId }); break; }
     try {
       await taskService.createTask({ company_id: plan.companyId, title: newTask.title, tag: newTask.tag, description: newTask.description, priority: 80, source: 'night_shift_generated', status: 'todo', queue_order: 1, estimated_credits: 1, max_turns: 200, executability_type: 'can_run_now', authorized_by: 'night_shift', authorization_reason: `Night shift auto-created: stage=${plan.stage}, objective=${plan.objective}` });
-      creditsCommitted++; // Count creation as a committed credit slot
-    } catch (error) { log.error('Failed to create retry task', { title: newTask.title }, error); }
+    } catch (error) { log.error('Failed to create night-shift task', { title: newTask.title }, error); }
   }
 
-  const maxTasks = Math.min(plan.tasks_to_execute.length, balance - creditsCommitted, 1);
+  // SPEC-CTRL-001: One execution slot per company. A night-shift cycle runs
+  // at most one task through the queue; remaining queued work drains on
+  // subsequent cycles or manual triggers.
+  const maxTasks = Math.min(plan.tasks_to_execute.length, 1);
   for (let i = 0; i < maxTasks; i++) {
-    try { const processed = await processQueue(plan.companyId); if (processed > 0) { completed++; creditsCommitted++; } else break; }
-    catch (error) { log.error('Task execution failed', { companyId: plan.companyId }, error); failed++; }
+    try {
+      const processed = await processQueue(plan.companyId, { subscriptionFunded: true });
+      if (processed > 0) completed++; else break;
+    } catch (error) {
+      log.error('Task execution failed', { companyId: plan.companyId }, error);
+      failed++;
+    }
   }
 
   return { completed, failed };
@@ -479,6 +486,19 @@ export async function runNightShift(companyId: string): Promise<NightShiftCycle>
   const [cycle] = await db.insert(nightShiftCycles).values({
     company_id: companyId, summary, company_stage: plan.stage,
   }).returning();
+
+  // Consume one night-shift allowance slot from the active subscription.
+  // GREATEST clamps at 0 — defense-in-depth, but the cron gate should already
+  // prevent cycles when remaining=0.
+  try {
+    await db.execute(sql`
+      UPDATE subscriptions
+      SET night_shifts_remaining = GREATEST(0, COALESCE(night_shifts_remaining, 0) - 1)
+      WHERE company_id = ${companyId} AND status = 'active'
+    `);
+  } catch (err) {
+    log.warn('Failed to decrement night_shifts_remaining', { companyId, error: err instanceof Error ? err.message : 'unknown' });
+  }
 
   await eventService.emit(companyId, 'night_shift_completed', { tasks_completed: results.completed, tasks_failed: results.failed, tasks_created: plan.tasks_to_create.length });
 

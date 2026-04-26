@@ -26,6 +26,7 @@ import {
   addWorkerRoute,
   putWorkerSecret,
   getWorkerScriptInfo,
+  getWorkerLogs,
   type WorkerBinding,
 } from '@/lib/services/cf-deploy.service';
 import { createLogger } from '@/lib/logger';
@@ -143,7 +144,7 @@ export function getEngineeringTools() {
     },
     {
       name: 'cf_deploy_app',
-      description: 'TIER 2/3 APPS: Deploy a full-stack founder app (Express-style API, SSR pages, etc.) as a Cloudflare Worker at {subdomain}.baljia.app. Takes a complete ES-module JS source that exports default { fetch(request, env, ctx) }. Automatically: uploads the script, registers a per-subdomain route (overrides wildcard for this founder), injects the company Neon DB URL as NEON_URL secret if with_neon_db=true, binds the R2 ASSETS bucket if with_r2_assets=true. Use THIS instead of cf_deploy_landing when the app has dynamic logic, DB reads/writes, or API endpoints. Max script size 10 MB gzipped.',
+      description: 'TIER 2/3 APPS: Deploy or redeploy a full-stack founder app (Express-style API, SSR pages, etc.) as a Cloudflare Worker at {subdomain}.baljia.app. Idempotent — the same call works for first deploy and for shipping updates/bug fixes (the script is replaced atomically). Takes a complete ES-module JS source that exports default { fetch(request, env, ctx) }. Automatically: uploads the script, registers a per-subdomain route (overrides wildcard for this founder), injects the company Neon DB URL as NEON_URL secret if with_neon_db=true, binds the R2 ASSETS bucket if with_r2_assets=true. Use THIS instead of cf_deploy_landing when the app has dynamic logic, DB reads/writes, or API endpoints. Max script size 10 MB gzipped.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -169,20 +170,6 @@ export function getEngineeringTools() {
       },
     },
     {
-      name: 'cf_redeploy_app',
-      description: 'Update an existing Tier 2/3 founder app with new code. Same semantics as cf_deploy_app — the script is replaced atomically. Use after fixing a bug or shipping a feature.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          script_content: { type: 'string' as const, description: 'Updated ES-module source (see cf_deploy_app).' },
-          with_neon_db: { type: 'boolean' as const },
-          with_r2_assets: { type: 'boolean' as const },
-          additional_secrets: { type: 'object' as const, additionalProperties: { type: 'string' as const } },
-        },
-        required: ['script_content'],
-      },
-    },
-    {
       name: 'cf_get_app_info',
       description: 'Get deployment info for this company\'s Tier 2/3 app (deploy status, etag, last modified). Does NOT return the source code. Returns null if no app is deployed.',
       input_schema: {
@@ -196,6 +183,27 @@ export function getEngineeringTools() {
       input_schema: {
         type: 'object' as const,
         properties: {},
+      },
+    },
+    {
+      name: 'cf_get_logs',
+      description: 'Get Cloudflare Worker invocation logs for THIS company\'s Tier 2/3 founder app. Returns minute-bucketed counts of requests grouped by HTTP status (200, 404, 500, etc.) and outcome (ok, exception, exceededCpu, scriptThrew, canceled). Use when an app is failing health probes or returning errors — this shows WHEN errors started and WHAT outcome (e.g. exception vs status 500 vs CPU exceeded). Only works for apps deployed via cf_deploy_app — Tier 1 landing pages (cf_deploy_landing) ride the wildcard Worker and do not have per-founder logs. Returns null with a helpful message in those cases.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          since_minutes: {
+            type: 'number' as const,
+            description: 'Lookback window in minutes (default 60, max 1440 = 24h).',
+          },
+          limit: {
+            type: 'number' as const,
+            description: 'Max rows returned (default 100, hard max 500). Each row is one (minute, status, outcome) bucket.',
+          },
+          errors_only: {
+            type: 'boolean' as const,
+            description: 'When true, filter the response to only buckets where outcome != "ok" or status >= 400. Useful when debugging.',
+          },
+        },
       },
     },
     {
@@ -456,14 +464,14 @@ export async function handleEngineeringTool(
     case 'cf_deploy_app':
       return cfDeployApp(input, task.company_id);
 
-    case 'cf_redeploy_app':
-      return cfDeployApp(input, task.company_id);  // same semantics — deployWorkerScript is idempotent (overwrite)
-
     case 'cf_get_app_info':
       return cfGetAppInfo(input, task.company_id);
 
     case 'cf_delete_app':
       return cfDeleteApp(input, task.company_id);
+
+    case 'cf_get_logs':
+      return cfGetLogs(input, task.company_id);
 
     case 'attach_custom_domain':
       return handleAttachCustomDomain(input, task.company_id);
@@ -1848,7 +1856,7 @@ async function cfDeployApp(input: Record<string, unknown>, companyId: string): P
         .where(eq(companies.id, companyId))
         .limit(1);
       if (!company?.neon_connection_string) {
-        return `Worker deployed but NEON_URL secret NOT injected — company ${companyId} has no provisioned Neon DB. Call provision_database first, then cf_redeploy_app.`;
+        return `Worker deployed but NEON_URL secret NOT injected — company ${companyId} has no provisioned Neon DB. Call provision_database first, then cf_deploy_app again with with_neon_db=true.`;
       }
       const ok = await putWorkerSecret({
         scriptName,
@@ -1896,7 +1904,7 @@ async function cfDeployApp(input: Record<string, unknown>, companyId: string): P
       `R2 assets bound: ${withR2Assets ? 'yes (env.ASSETS)' : 'no'}`,
       secretResults.length > 0 ? `Extra secrets: ${secretResults.join(', ')}` : '',
       ``,
-      `Verify with cf_verify_founder_app. If you need to redeploy, use cf_redeploy_app.`,
+      `Verify with cf_verify_founder_app. To redeploy, call cf_deploy_app again — it's idempotent.`,
     ].filter(Boolean).join('\n');
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
@@ -1936,5 +1944,65 @@ async function cfDeleteApp(_input: Record<string, unknown>, companyId: string): 
     return `✅ Tier 2/3 app removed from Cloudflare (script "${scriptName}"). The wildcard Worker will resume serving this subdomain (Tier 1 R2 landing, or branded 404 if no landing is deployed).`;
   } catch (err) {
     return `Cloudflare app delete error: ${err instanceof Error ? err.message : 'Unknown error'}`;
+  }
+}
+
+async function cfGetLogs(input: Record<string, unknown>, companyId: string): Promise<string> {
+  if (!isCloudflareDeployConfigured()) return 'Cloudflare deploy not configured.';
+
+  const sinceMinutes = typeof input.since_minutes === 'number' ? input.since_minutes : 60;
+  const limit = typeof input.limit === 'number' ? input.limit : 100;
+  const errorsOnly = input.errors_only === true;
+
+  try {
+    const subdomain = await resolveCompanySubdomain(companyId);
+    const scriptName = workerScriptNameFor(subdomain);
+
+    // Confirm a per-founder Worker actually exists. Tier 1 landing-only
+    // apps have no dedicated script — their traffic rides the wildcard.
+    const info = await getWorkerScriptInfo(scriptName);
+    if (!info) {
+      return `No Tier 2/3 Worker found for ${subdomain}.baljia.app (script "${scriptName}" not deployed). If this is a Tier 1 landing page, per-founder logs are not available — verify the page directly with cf_verify_founder_app instead. If the app should exist, deploy it first with cf_deploy_app.`;
+    }
+
+    const rows = await getWorkerLogs({ scriptName, sinceMinutes, limit });
+    if (rows === null) {
+      return `Could not fetch CF logs for "${scriptName}" — the GraphQL Analytics API returned an error (token scope or transient). Try again or check Cloudflare dashboard directly.`;
+    }
+
+    const filtered = errorsOnly
+      ? rows.filter((r) => r.outcome !== 'ok' || r.status >= 400)
+      : rows;
+
+    if (filtered.length === 0) {
+      return errorsOnly
+        ? `No errors logged for "${scriptName}" in the last ${sinceMinutes} minutes. The Worker is responding cleanly.`
+        : `No invocations logged for "${scriptName}" in the last ${sinceMinutes} minutes. Either no traffic, or the script name is wrong.`;
+    }
+
+    // Aggregate quick rollup so the agent can summarize without reading every row.
+    const totals = filtered.reduce(
+      (acc, r) => {
+        acc.requests += r.requests;
+        acc.errors += r.errors;
+        acc.subrequests += r.subrequests;
+        return acc;
+      },
+      { requests: 0, errors: 0, subrequests: 0 },
+    );
+
+    const tableLines = filtered.slice(0, 50).map(
+      (r) => `${r.minute}  status=${r.status}  outcome=${r.outcome}  reqs=${r.requests}  errs=${r.errors}`,
+    );
+
+    return [
+      `Cloudflare Worker logs for "${scriptName}" (last ${sinceMinutes} min, ${filtered.length} buckets${errorsOnly ? ', errors_only' : ''}):`,
+      `Totals: ${totals.requests} requests, ${totals.errors} errors, ${totals.subrequests} subrequests`,
+      '',
+      ...tableLines,
+      filtered.length > 50 ? `... (${filtered.length - 50} more rows truncated; raise limit or narrow window)` : '',
+    ].filter(Boolean).join('\n');
+  } catch (err) {
+    return `cf_get_logs error: ${err instanceof Error ? err.message : 'Unknown error'}`;
   }
 }

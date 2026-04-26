@@ -10,7 +10,7 @@ import { OnboardingLogStrip } from '@/components/onboarding/OnboardingLogStrip';
 type Step = 'level1' | 'level2' | 'idea_input' | 'url_input' | 'creating';
 
 interface StageUpdate {
-  type: 'stage' | 'activity' | 'mood' | 'completed' | 'failed' | 'ping' | 'timeout';
+  type: 'stage' | 'activity' | 'mood' | 'transformation' | 'completed' | 'failed' | 'ping' | 'timeout';
   stage?: string;
   status?: 'running' | 'done' | 'error' | 'skipped';
   label?: string;
@@ -22,6 +22,10 @@ interface StageUpdate {
   timestamp?: number;
   // mood
   mood?: string;
+  // transformation — idea was reinterpreted
+  original?: string;
+  refined?: string;
+  changes_made?: string | null;
 }
 
 export interface ActivityLine {
@@ -79,6 +83,9 @@ function OnboardingPageInner() {
   const [mood, setMood] = useState<string>('listening');
   const [logDone, setLogDone] = useState(false);
   const activityIdRef = useRef(0);
+  const [transformation, setTransformation] = useState<{
+    original: string; refined: string; changes_made: string | null;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const resumeTriggered = useRef(false);
@@ -146,6 +153,14 @@ function OnboardingPageInner() {
 
       if (update.type === 'mood' && update.mood) {
         setMood(update.mood);
+      }
+
+      if (update.type === 'transformation' && update.original && update.refined) {
+        setTransformation({
+          original: update.original,
+          refined: update.refined,
+          changes_made: update.changes_made ?? null,
+        });
       }
 
       if (update.type === 'completed') {
@@ -463,6 +478,26 @@ function OnboardingPageInner() {
             <p className="text-sm text-baljia-gold font-mono mb-6 min-h-[1.25rem]">
               {currentStageLabel}
             </p>
+
+            {/* Idea-transformation banner — fires when refine_idea meaningfully changes the input */}
+            {transformation && (
+              <div className="mb-6 p-4 rounded-xl border border-baljia-gold/40 bg-baljia-gold/5 text-left">
+                <p className="text-xs text-baljia-gold font-semibold uppercase tracking-wider mb-2">
+                  ✦ We interpreted your idea as
+                </p>
+                <p className="text-sm text-text-primary font-medium mb-3">
+                  {transformation.refined}
+                </p>
+                {transformation.changes_made && (
+                  <p className="text-xs text-text-muted mb-3">
+                    {transformation.changes_made}
+                  </p>
+                )}
+                <p className="text-xs text-text-muted italic">
+                  You typed: &quot;{transformation.original}&quot;
+                </p>
+              </div>
+            )}
 
             {/* Stage checklist */}
             <div className="p-4 rounded-lg bg-surface-secondary border border-border-subtle text-left space-y-1.5">

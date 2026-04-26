@@ -114,6 +114,9 @@ export function DashboardShell({
     if (company.onboarding_status === 'initializing' || company.onboarding_status === 'running') {
       w.push('Baljia is still setting things up — research, landing, and inbox are in flight.');
     }
+    if (company.onboarding_status === 'failed') {
+      w.push('Setup paused before finishing. Resume from the banner above to continue.');
+    }
     if (company.hosting_state === 'suspended') {
       w.push('Your app is suspended — resolve billing to bring it back online.');
     }
@@ -151,9 +154,48 @@ export function DashboardShell({
   // Chat rail owns its own width via CSS var — matches Polsia's --chat-pane-width.
   const founderGridStyle = { ['--chat-pane-width' as string]: '260px' } as React.CSSProperties;
 
+  // Onboarding failed → surface a clear recovery banner instead of the happy-path
+  // mascot/empty-task UI. The pipeline's atomic CAS in runOnboardingPipeline accepts
+  // 'failed' as a resumable state, so /onboarding will retry from where it stopped.
+  const onboardingFailed = company.onboarding_status === 'failed';
+
   return (
     <div className="dashboard-shell">
       <LiveBanner liveCount={liveCompanyCount} />
+
+      {onboardingFailed && (
+        <div
+          role="alert"
+          style={{
+            margin: '12px 16px 0',
+            padding: '14px 18px',
+            border: '1px solid #f5a623',
+            background: '#fff7ef',
+            borderRadius: 6,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 16,
+            flexWrap: 'wrap',
+          }}
+        >
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <strong className="serif" style={{ fontSize: 15, display: 'block', marginBottom: 4 }}>
+              Setup didn&apos;t finish
+            </strong>
+            <span style={{ fontSize: 12, color: '#3a3a3a' }}>
+              Something went wrong while building <strong>{company.name}</strong>. Your work is saved
+              — pick up where Baljia stopped.
+            </span>
+          </div>
+          <Link
+            className="chrome-button chrome-button--hero"
+            href={`/onboarding?resume=${company.id}`}
+          >
+            Resume setup →
+          </Link>
+        </div>
+      )}
 
       <header className="dashboard-topbar">
         <div className="dashboard-topbar__title serif">{company.name}</div>
@@ -182,7 +224,9 @@ export function DashboardShell({
               <p>
                 {company.onboarding_status === 'completed'
                   ? 'Company online. Chat with the CEO or approve a task.'
-                  : 'Baljia is still setting things up.'}
+                  : onboardingFailed
+                    ? 'Setup paused — resume above to finish bringing your company online.'
+                    : 'Baljia is still setting things up.'}
               </p>
             </div>
           </div>

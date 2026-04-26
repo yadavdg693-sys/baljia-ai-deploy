@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { cn } from '@/lib/utils';
 
 export default function LoginPage() {
@@ -8,11 +8,20 @@ export default function LoginPage() {
   const [sent, setSent] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [devMagicLink, setDevMagicLink] = useState<string | null>(null);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('error') === 'google-unavailable') {
+      setError('Google sign-in is not configured in this environment. Use the magic link instead.');
+    }
+  }, []);
 
   async function handleMagicLink(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
     setError(null);
+    setDevMagicLink(null);
 
     try {
       const res = await fetch('/api/auth/magic-link', {
@@ -22,6 +31,8 @@ export default function LoginPage() {
       });
 
       if (res.ok) {
+        const data = await res.json();
+        setDevMagicLink(typeof data.magicLink === 'string' ? data.magicLink : null);
         setSent(true);
       } else {
         const data = await res.json();
@@ -56,6 +67,17 @@ export default function LoginPage() {
             <p className="text-sm text-text-secondary">
               We sent a secure login link to <strong className="text-text-primary">{email}</strong>
             </p>
+            {devMagicLink && (
+              <a
+                href={devMagicLink}
+                className={cn(
+                  'mt-5 inline-flex w-full items-center justify-center rounded-xl p-4 font-semibold',
+                  'bg-baljia-gold text-surface-primary hover:bg-baljia-gold-light'
+                )}
+              >
+                Open local magic link
+              </a>
+            )}
             <p className="text-xs text-text-muted mt-4">No password needed. Link expires in 15 minutes.</p>
           </div>
         ) : (

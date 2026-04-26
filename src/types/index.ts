@@ -282,6 +282,7 @@ export type EventType =
   | 'onboarding_activity'
   | 'onboarding_mood'
   | 'onboarding_costs'
+  | 'onboarding_transformation'
   | 'onboarding_completed'
   | 'onboarding_failed'
   | 'credit_low'

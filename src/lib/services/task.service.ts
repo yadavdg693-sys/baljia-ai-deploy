@@ -72,7 +72,8 @@ export async function createTask(input: CreateTaskInput): Promise<Task> {
       queue_order, assigned_to_agent_id, estimated_credits, actual_credits_charged,
       max_turns, turn_count, executability_type, suggestion_reasoning,
       execution_mode, verification_level, related_task_ids,
-      complexity, estimated_hours, created_at, updated_at
+      complexity, estimated_hours, authorized_by, authorization_reason,
+      created_at, updated_at
     )
     SELECT
       gen_random_uuid(),
@@ -98,6 +99,8 @@ export async function createTask(input: CreateTaskInput): Promise<Task> {
       ${JSON.stringify(input.related_task_ids ?? [])}::jsonb,
       ${input.complexity ?? null}::int,
       ${estimatedHoursValue}::numeric,
+      ${input.authorized_by ?? null},
+      ${input.authorization_reason ?? null},
       NOW(),
       NOW()
     RETURNING *

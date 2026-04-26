@@ -5,7 +5,13 @@
 name = "baljia-cf-spike"
 compatibility_date = "2025-03-01"
 compatibility_flags = ["nodejs_compat"]
-main = ".open-next/worker.js"
+
+# Entry wraps OpenNext output (.open-next/worker.js) and adds a scheduled()
+# handler so [triggers.crons] below actually fire. See src/cf-worker-entry.ts
+# for the cron->route dispatch table — KEEP THE TWO IN SYNC.
+# Build order: `opennextjs-cloudflare build` produces .open-next/, then
+# `wrangler deploy` bundles this TS entry which re-imports worker.js.
+main = "src/cf-worker-entry.ts"
 
 [assets]
 directory = ".open-next/assets"
@@ -24,6 +30,8 @@ crons = [
   "*/15 * * * *",    # baljia-platform-ops     — every 15 min
   "0 4 * * *",       # baljia-credit-renewal   — daily 4am UTC
   "*/5 * * * *",     # baljia-onboarding-cleanup — every 5 min
+  "* * * * *",       # baljia-queue-tick       — every 1 min (CF replacement for Render's worker-boot poller)
+  "*/3 * * * *",     # baljia-lease-reclaim    — every 3 min (Render had */5; */5 slot is taken by onboarding-cleanup so we picked */3 — adjacent cadence, defensive lease cleanup runs slightly more often)
 ]
 
 # ─────────────────────────────────────────────────────────────

@@ -395,18 +395,13 @@ export async function assembleWorkerPacket(
     sections.push(`### Recent high-confidence learnings\n${lines.join('\n')}`);
   }
 
-  // 2A-4: L3 cross-company memory (platform-wide patterns)
-  try {
-    const [layer3] = await db.select({ content: memoryLayers.content })
-      .from(memoryLayers)
-      .where(and(eq(memoryLayers.company_id, companyId), eq(memoryLayers.layer, 3)))
-      .limit(1);
-
-    if (layer3?.content?.trim()) {
-      const capped = evictToFit(layer3.content, TOKEN_BUDGETS[3], 3);
-      sections.push(`### Cross-Company Patterns\n${capped}`);
-    }
-  } catch { /* L3 may not exist for this company */ }
+  // L3 cross-company patterns: intentionally NOT read here.
+  // L3 has no write path in the current platform — no agent or service writes
+  // to layer=3, and the schema is per-company so it can't be cross-company in
+  // any meaningful sense (Finding B6 in POLSIA_BALJIA_COMPARISON.md). Reading
+  // dead structure into the briefing implied a capability that doesn't exist
+  // and consumed assembly time. Re-add this block once a real platform-wide
+  // L3 store exists with quality-gated, anonymized writes.
 
   return sections.length === 0 ? '' : sections.join('\n\n');
 }
@@ -564,11 +559,13 @@ export async function buildContextPacket(
     .where(eq(companies.id, companyId))
     .limit(1);
 
-  // 5. Compile briefing string from memory layers
+  // 5. Compile briefing string from memory layers.
+  // L3 is intentionally not appended — see Finding B6: no write path exists
+  // and the schema is per-company. Returning the (empty) field on the typed
+  // contract is fine; injecting an empty section header isn't.
   const briefingSections: string[] = [];
   if (layerMap[1]?.trim()) briefingSections.push(`### Domain Knowledge\n${evictToFit(layerMap[1], TOKEN_BUDGETS[1], 1)}`);
   if (layerMap[2]?.trim()) briefingSections.push(`### Founder Preferences\n${evictToFit(layerMap[2], TOKEN_BUDGETS[2], 2)}`);
-  if (layerMap[3]?.trim()) briefingSections.push(`### Cross-Company Patterns\n${evictToFit(layerMap[3], TOKEN_BUDGETS[3], 3)}`);
   const compiledBriefing = briefingSections.join('\n\n');
 
   return {

@@ -20,10 +20,13 @@ export async function POST(request: NextRequest) {
     const ipLimit = await checkRateLimitAsync(request, { maxRequests: 10, windowMs: 60_000, keyPrefix: 'magic-link:ip' });
     if (ipLimit) return ipLimit;
 
-    await authService.createMagicLink(email);
+    const result = await authService.createMagicLink(email);
 
     // Always return success (don't leak whether email exists)
-    return NextResponse.json({ success: true });
+    return NextResponse.json({
+      success: true,
+      magicLink: process.env.NODE_ENV === 'development' ? result.magicLink : undefined,
+    });
   } catch (err) {
     if (err instanceof z.ZodError) {
       return NextResponse.json({ error: 'Invalid email address' }, { status: 400 });

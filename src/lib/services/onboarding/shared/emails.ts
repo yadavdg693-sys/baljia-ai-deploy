@@ -32,7 +32,7 @@ export async function sendStartupEmail(ctx: PipelineContext): Promise<void> {
   try {
     await sendEmail({
       to: ctx.founderEmail,
-      from: fromAddress,
+      from: `${ctx.companyName} <${fromAddress}>`,
       subject: `Your first email from ${ctx.companyName}`,
       textBody: [
         `Hi ${ctx.founderName ?? 'there'},`,
@@ -111,7 +111,7 @@ export async function sendCompletionEmail(ctx: PipelineContext, magicLinkUrl?: s
   try {
     await sendEmail({
       to: ctx.founderEmail,
-      from: fromAddress,
+      from: `Baljia <${fromAddress}>`,
       subject: `${ctx.companyName} is live`,
       textBody: [
         `${ctx.founderName ?? 'Hi'}, your ${ctx.oneLiner ?? ctx.companyName} is live.`,

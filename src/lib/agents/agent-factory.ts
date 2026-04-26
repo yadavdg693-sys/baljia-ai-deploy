@@ -240,13 +240,24 @@ const BASE_TOOLS = [
   },
   {
     name: 'query_reports',
-    description: 'Search previously created reports for this company. Useful to avoid duplicating work or to understand what was previously built.',
+    description: 'List previously created reports for this company. Returns a compact list with report IDs, titles, types, dates, and a short preview. To read the FULL content of a specific report, follow up with read_report(report_id). Use this to discover what was previously built; use read_report to actually consume one.',
     input_schema: {
       type: 'object' as const,
       properties: {
         report_type: { type: 'string' as const, description: 'Filter by type: research, analytics, execution, strategy (optional)' },
-        limit: { type: 'number' as const, description: 'Max reports to return (default: 5)' },
+        limit: { type: 'number' as const, description: 'Max reports to return (default: 5, max 20)' },
       },
+    },
+  },
+  {
+    name: 'read_report',
+    description: 'Read the FULL content of a specific report by ID. Use after query_reports identifies a report that looks relevant to the current task. Returns title + type + date + complete content with no truncation.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        report_id: { type: 'string' as const, description: 'The UUID of the report to read (from query_reports output)' },
+      },
+      required: ['report_id'],
     },
   },
   {
@@ -591,15 +602,23 @@ This task follows a known pattern. Customize a standard approach with project-sp
   }
   // full_agent: no additional constraints
 
-  // 2A-2: Known failure fingerprints — inject context to avoid repeating mistakes
+  // 2A-2: Known failure fingerprints — inject context to avoid repeating mistakes.
+  // Filter is intentionally tight: only show failures that
+  //   (a) affected THIS agent, AND
+  //   (b) fall in this task's category, AND
+  //   (c) are still unresolved.
+  // Loose OR-filters surfaced unrelated past failures (e.g. Twitter rate limits
+  // showing up in Engineering deploy briefings) — high token cost, low signal.
   try {
     const recentFailures = await failureService.getRecentFailures(
       new Date(Date.now() - 7 * 24 * 3600_000).toISOString()
     );
-    // Filter to failures relevant to this agent or task tag
     const relevant = recentFailures.filter((f) => {
       const affectedAgents = (f.affected_agents as number[] | null) ?? [];
-      return affectedAgents.includes(agentId) || (f.category === task.tag);
+      const agentMatches = affectedAgents.includes(agentId);
+      const categoryMatches = f.category === task.tag;
+      const stillOpen = f.fix_status !== 'fixed';
+      return agentMatches && categoryMatches && stillOpen;
     }).slice(0, 5);
     if (relevant.length > 0) {
       const lines = relevant.map((f) =>
@@ -609,24 +628,11 @@ This task follows a known pattern. Customize a standard approach with project-sp
     }
   } catch { /* continue without failure context */ }
 
-  // 2A-5: Prior reports — give agent context from previous related work
-  try {
-    const priorReports = await db.select({
-      title: reports.title,
-      content: reports.content,
-      report_type: reports.report_type,
-    }).from(reports)
-      .where(eq(reports.company_id, task.company_id))
-      .orderBy(desc(reports.created_at))
-      .limit(3);
-    const nonEmpty = priorReports.filter((r) => r.content?.trim());
-    if (nonEmpty.length > 0) {
-      const summaries = nonEmpty.map((r) =>
-        `### ${r.title ?? 'Report'} (${r.report_type ?? 'execution'})\n${r.content!.substring(0, 300)}${r.content!.length > 300 ? '...' : ''}`
-      );
-      sections.push(`## Prior Work (recent reports)\n${summaries.join('\n\n')}`);
-    }
-  } catch { /* continue without prior reports */ }
+  // Prior reports are NOT injected here. The previous 300-char truncation
+  // produced teasers that looked informative but lacked actionable content
+  // (schema, routes, env vars all got cut). Agents now fetch what they
+  // actually need via the read_recent_reports BASE tool — full content,
+  // optionally filtered by tag. See agent-factory BASE_TOOLS.
 
   // 2A-6: Related task context — inject logs from prior attempts so agent doesn't repeat mistakes
   try {
@@ -758,12 +764,35 @@ async function handleToolCall(
         const limit = Math.min((toolInput.limit as number) ?? 5, 20);
         const conditions = [eq(reports.company_id, task.company_id)];
         if (toolInput.report_type) conditions.push(eq(reports.report_type, toolInput.report_type as string));
-        const data = await db.select({ title: reports.title, report_type: reports.report_type, created_at: reports.created_at, content: reports.content })
+        const data = await db.select({ id: reports.id, title: reports.title, report_type: reports.report_type, created_at: reports.created_at, content: reports.content })
           .from(reports).where(and(...conditions)).orderBy(desc(reports.created_at)).limit(limit);
         if (!data.length) return 'No reports found.';
-        return data.map((r) => `- [${r.report_type}] ${r.title} (${r.created_at?.toISOString().split('T')[0]})\n  ${(r.content ?? '').substring(0, 200)}`).join('\n\n');
+        // Returns a list view with IDs. Use read_report(report_id) to fetch full content of a relevant report.
+        return data.map((r) => `- ${r.id} | [${r.report_type}] ${r.title} (${r.created_at?.toISOString().split('T')[0]}) — ${(r.content ?? '').substring(0, 120)}...`).join('\n');
       } catch (err) {
         return `Could not query reports: ${err instanceof Error ? err.message : 'Unknown'}`;
+      }
+    }
+
+    case 'read_report': {
+      try {
+        const reportId = toolInput.report_id as string;
+        if (!reportId || typeof reportId !== 'string') return 'Missing required input: report_id';
+        const { db, reports } = await import('@/lib/db');
+        const { eq, and } = await import('drizzle-orm');
+        const [r] = await db.select({
+          id: reports.id, title: reports.title, report_type: reports.report_type,
+          created_at: reports.created_at, content: reports.content,
+        })
+          .from(reports)
+          // Tenant isolation: only this company's reports
+          .where(and(eq(reports.id, reportId), eq(reports.company_id, task.company_id)))
+          .limit(1);
+        if (!r) return `Report ${reportId} not found (or belongs to a different company).`;
+        const date = r.created_at?.toISOString().split('T')[0] ?? 'unknown';
+        return `# ${r.title ?? 'Untitled'}\n**Type:** ${r.report_type ?? 'execution'}  **Date:** ${date}  **ID:** ${r.id}\n\n${r.content ?? '(empty)'}`;
+      } catch (err) {
+        return `Could not read report: ${err instanceof Error ? err.message : 'Unknown'}`;
       }
     }
 
@@ -1166,7 +1195,7 @@ const ENGINEERING_TOOLS = new Set([
   // Cloudflare — Tier 1 static landing pages (R2)
   'cf_deploy_landing', 'cf_verify_founder_app', 'cf_delete_founder_app',
   // Cloudflare — Tier 2/3 full-stack apps (Workers + R2 + Neon bindings)
-  'cf_deploy_app', 'cf_redeploy_app', 'cf_get_app_info', 'cf_delete_app',
+  'cf_deploy_app', 'cf_get_app_info', 'cf_delete_app',
   // Company + domain
   'get_company_tech',
   'attach_custom_domain', 'verify_custom_domain',

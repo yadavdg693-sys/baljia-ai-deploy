@@ -6,6 +6,11 @@
 
 import { getCodexApiKeySync } from '@/lib/codex-oauth';
 import { createLogger } from '@/lib/logger';
+// Eager import installs the unhandledRejection guard for pi-ai's floating
+// `dynamic-import("node:fs"|"node:os"|"node:path")` probes BEFORE any pi-ai
+// module is loaded. Order matters: the guard must be installed at the time
+// pi-ai's module body executes, not later.
+import { loadPiAi, loadPiAiOAuth } from '@/lib/pi-ai-shim';
 
 const log = createLogger('LLMProvider');
 
@@ -232,8 +237,7 @@ function isCodexJwt(key: string): boolean {
  * ChatGPT subscription billing, not the standard OpenAI API plan.
  */
 async function callCodex(apiKey: string, opts: OpenAICallOptions): Promise<string> {
-  const { getModel } = await import('@mariozechner/pi-ai');
-  const { streamSimple } = await import('@mariozechner/pi-ai');
+  const { getModel, streamSimple } = await loadPiAi();
 
   const {
     model = OPENAI_MODELS.GPT_5_4_MINI,
@@ -436,7 +440,7 @@ export async function runCodexAgentTurn(params: {
   reasoning?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
   signal?: AbortSignal;
 }): Promise<CodexTurnResult> {
-  const { getModel, streamSimple } = await import('@mariozechner/pi-ai');
+  const { getModel, streamSimple } = await loadPiAi();
 
   const piModel = getModel('openai-codex', 'gpt-5.4');
 
@@ -542,7 +546,7 @@ export async function* streamCodexAgentTurn(params: {
   reasoning?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
   signal?: AbortSignal;
 }): AsyncGenerator<CodexStreamEvent> {
-  const { getModel, streamSimple } = await import('@mariozechner/pi-ai');
+  const { getModel, streamSimple } = await loadPiAi();
 
   const piModel = getModel('openai-codex', 'gpt-5.4');
 

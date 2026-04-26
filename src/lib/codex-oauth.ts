@@ -3,16 +3,82 @@
 //
 // Flow: Browser OAuth → access token → encrypted store on disk → auto-refresh
 // The access token doubles as an OpenAI API key for LLM calls.
+//
+// CF Workers note: `node:fs`/`node:path` are loaded lazily so this module can
+// be imported on Cloudflare Workers without crashing. Codex OAuth credentials
+// live in `data/baljia-openai-codex-oauth.json` on local disk and are only
+// usable from a Node deployment (Render legacy path or local dev). On CF the
+// sync helpers gracefully return null because there's no FS to read from —
+// platform falls back to ANTHROPIC_API_KEY / OPENAI_API_KEY env vars.
 
-import fs from 'node:fs';
-import fsp from 'node:fs/promises';
-import path from 'node:path';
 // pi-ai/oauth is ESM-only and breaks tsx CJS resolution if imported statically.
 // Lazy-load it inside the only two functions that need it (login + refresh) so
 // sync reads of the credential file work in any runtime (tsx scripts, Next.js,
 // node ESM). Cold-start is also faster — pi-ai oauth pulls in all providers.
 import { encryptSecret, decryptSecret } from '@/lib/credential-crypto';
 import { createLogger } from '@/lib/logger';
+// Eager import installs unhandledRejection guard for pi-ai's floating
+// `node:fs|os|path` dynamic-import probes (see pi-ai-shim.ts).
+import { loadPiAiOAuth } from '@/lib/pi-ai-shim';
+
+// ── Lazy node module accessors (CF-safe) ──
+type NodeFs = typeof import('node:fs');
+type NodeFsp = typeof import('node:fs/promises');
+type NodePath = typeof import('node:path');
+
+let _fs: NodeFs | null = null;
+let _fsp: NodeFsp | null = null;
+let _path: NodePath | null = null;
+
+function isNodeRuntime(): boolean {
+  try {
+    if (typeof process === 'undefined') return false;
+    // Cloudflare Workers (workerd) with `nodejs_compat` polyfills
+    // `process.versions.node` to look Node-ish, so that check alone is not
+    // enough. Real Node sets `process.release.name === 'node'`; workerd does
+    // not. The navigator UA is also a reliable CF marker.
+    // Reference: https://developers.cloudflare.com/workers/runtime-apis/nodejs/
+    const ua = (globalThis as { navigator?: { userAgent?: string } }).navigator?.userAgent;
+    if (ua && ua.includes('Cloudflare-Workers')) return false;
+    if (process.release?.name !== 'node') return false;
+    return !!process.versions?.node;
+  } catch {
+    return false;
+  }
+}
+
+function getFs(): NodeFs | null {
+  if (_fs) return _fs;
+  if (!isNodeRuntime()) return null;
+  try {
+    _fs = require('node:fs') as NodeFs;
+    return _fs;
+  } catch {
+    return null;
+  }
+}
+
+function getFsp(): NodeFsp | null {
+  if (_fsp) return _fsp;
+  if (!isNodeRuntime()) return null;
+  try {
+    _fsp = require('node:fs/promises') as NodeFsp;
+    return _fsp;
+  } catch {
+    return null;
+  }
+}
+
+function getPath(): NodePath | null {
+  if (_path) return _path;
+  if (!isNodeRuntime()) return null;
+  try {
+    _path = require('node:path') as NodePath;
+    return _path;
+  } catch {
+    return null;
+  }
+}
 
 const log = createLogger('CodexOAuth');
 
@@ -59,6 +125,11 @@ interface StoredPayload {
 // ══════════════════════════════════════════════
 
 function resolveStorePath(rootDir = process.cwd()): string {
+  const path = getPath();
+  if (!path) {
+    // Non-Node runtime: return a sentinel that downstream FS calls will short-circuit on
+    return '';
+  }
   const explicit = process.env.BALJIA_OPENAI_OAUTH_STORE_PATH;
   if (explicit) return path.resolve(explicit);
   return path.join(rootDir, 'data', STORE_FILENAME);
@@ -69,8 +140,10 @@ function resolveStorePath(rootDir = process.cwd()): string {
 // ══════════════════════════════════════════════
 
 export function loadCodexCredentialsSync(rootDir = process.cwd()): CodexCredentials | null {
+  const fs = getFs();
+  if (!fs) return null;
   const storePath = resolveStorePath(rootDir);
-  if (!fs.existsSync(storePath)) return null;
+  if (!storePath || !fs.existsSync(storePath)) return null;
 
   try {
     const payload: StoredPayload = JSON.parse(fs.readFileSync(storePath, 'utf8'));
@@ -89,6 +162,11 @@ export async function saveCodexCredentials(
   credentials: { access: string; refresh: string; expires: number; accountId?: string | null },
   rootDir = process.cwd(),
 ): Promise<CodexCredentials | null> {
+  const fsp = getFsp();
+  const path = getPath();
+  if (!fsp || !path) {
+    throw new Error('saveCodexCredentials requires Node runtime (filesystem unavailable in current runtime).');
+  }
   const storePath = resolveStorePath(rootDir);
   await fsp.mkdir(path.dirname(storePath), { recursive: true });
 
@@ -124,7 +202,7 @@ export async function getValidCodexCredentials(rootDir = process.cwd()): Promise
   if (!stored.refresh) return null;
 
   try {
-    const { refreshOpenAICodexToken } = await import('@mariozechner/pi-ai/oauth');
+    const { refreshOpenAICodexToken } = await loadPiAiOAuth();
     const refreshed = await refreshOpenAICodexToken(stored.refresh);
     return saveCodexCredentials(refreshed, rootDir);
   } catch (err) {
@@ -153,7 +231,7 @@ export function getCodexApiKeySync(rootDir = process.cwd()): string | null {
 export async function mintCodexCredentials(options: {
   onAuth?: (data: { url: string; instructions?: string }) => void;
 } = {}): Promise<CodexCredentials & { identity: CodexIdentity }> {
-  const { loginOpenAICodex } = await import('@mariozechner/pi-ai/oauth');
+  const { loginOpenAICodex } = await loadPiAiOAuth();
   const credentials = await loginOpenAICodex({
     originator: 'baljia',
     onAuth: options.onAuth ?? (() => {}),

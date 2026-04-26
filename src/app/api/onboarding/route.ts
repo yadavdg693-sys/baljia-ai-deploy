@@ -36,8 +36,11 @@ export async function POST(request: NextRequest) {
   if (existing.length > 0) {
     const company = existing[0];
 
-    // If company was created via quick-start (pending_auth), resume the pipeline now
-    if (company.onboarding_status === 'pending_auth') {
+    // Resumable states: pending_auth (quick-start), failed (retry), initializing (stuck before claim).
+    // The orchestrator's atomic CAS in runOnboardingPipeline only claims rows in
+    // ['initializing', 'failed'], and pending_auth is special-cased above that path.
+    const RESUMABLE = ['pending_auth', 'failed', 'initializing'] as const;
+    if (RESUMABLE.includes(company.onboarding_status as typeof RESUMABLE[number])) {
       const resolvedJourney = company.onboarding_journey ?? parsed.data.journey;
       const input = parsed.data.idea ?? parsed.data.business_url ?? company.original_idea;
       runOnboardingPipeline(

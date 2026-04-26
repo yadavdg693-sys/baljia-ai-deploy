@@ -28,7 +28,6 @@ export function FounderChatRail({ companyId, warnings = [] }: FounderChatRailPro
   const [draft, setDraft] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingText, setStreamingText] = useState('');
-  const [historyLoaded, setHistoryLoaded] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -43,8 +42,6 @@ export function FounderChatRail({ companyId, warnings = [] }: FounderChatRailPro
         }
       } catch {
         // non-blocking
-      } finally {
-        if (!cancelled) setHistoryLoaded(true);
       }
     }
     loadHistory();
@@ -133,7 +130,7 @@ export function FounderChatRail({ companyId, warnings = [] }: FounderChatRailPro
     );
   }
 
-  const isEmpty = messages.length === 0 && !isStreaming && historyLoaded;
+  const isEmpty = messages.length === 0 && !isStreaming;
 
   return (
     <section className="dashboard-column dashboard-column--chat">

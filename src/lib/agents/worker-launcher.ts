@@ -48,7 +48,16 @@ const ACTIVE_LIFECYCLES: Lifecycle[] = ['trial_active', 'full_active'];
 // LAUNCH — picks up a todo task and runs it
 // ══════════════════════════════════════════════
 
-export async function launchTask(taskId: string): Promise<TaskExecution> {
+export interface LaunchOptions {
+  /**
+   * When true, skip credit_ledger deduction — execution is funded by the
+   * subscription's night_shift allowance rather than founder credits.
+   * Slot-busy and task-status checks still apply.
+   */
+  subscriptionFunded?: boolean;
+}
+
+export async function launchTask(taskId: string, opts: LaunchOptions = {}): Promise<TaskExecution> {
   const task = await taskService.getTask(taskId);
   if (!task) throw new Error(`Task not found: ${taskId}`);
 
@@ -98,7 +107,7 @@ export async function launchTask(taskId: string): Promise<TaskExecution> {
       await taskService.updateTask(taskId, { status: 'blocked_pre_start' });
       throw new Error(
         `Auto-remediation circuit breaker: ${count} retries in last 24h (max ${MAX_AUTO_RETRIES}). ` +
-        `Task blocked to prevent credit drain.`
+        `Task blocked to prevent runaway loops.`
       );
     }
   }
@@ -109,15 +118,20 @@ export async function launchTask(taskId: string): Promise<TaskExecution> {
 
   log.info('Launching task', { taskId, title: task.title, agent: agentName, agentId });
 
-  // ATOMIC: Claim slot + claim task + deduct credit in one SQL statement.
-  // Replaces the previous 3-step sequence (slot check → startTask → deductCredit)
-  // that had race condition windows between each step.
-  const claimResult = await creditService.claimSlotAndCharge({
-    companyId: task.company_id,
-    taskId: task.id,
-    amount: task.estimated_credits,
-    description: `Task: ${task.title}`,
-  });
+  // ATOMIC: Claim slot (+ deduct credit for founder-funded runs) in one SQL
+  // statement. Night-shift cycles are subscription-funded, so they skip the
+  // credit_ledger deduction and use claimSlotOnly instead.
+  const claimResult = opts.subscriptionFunded
+    ? await creditService.claimSlotOnly({
+        companyId: task.company_id,
+        taskId: task.id,
+      })
+    : await creditService.claimSlotAndCharge({
+        companyId: task.company_id,
+        taskId: task.id,
+        amount: task.estimated_credits,
+        description: `Task: ${task.title}`,
+      });
 
   if (!claimResult.success) {
     const reasonMap: Record<string, string> = {
@@ -279,7 +293,8 @@ export async function launchTask(taskId: string): Promise<TaskExecution> {
     await taskService.completeTask(taskId); // transitions to 'verifying'
     await taskService.updateTask(taskId, {
       turn_count: result.turnCount,
-      actual_credits_charged: task.estimated_credits,
+      // Subscription-funded runs (night-shift) don't touch credit_ledger
+      actual_credits_charged: opts.subscriptionFunded ? 0 : task.estimated_credits,
     });
 
     // 7. Verification is MANDATORY — verifier is the sole authority for final status
@@ -411,7 +426,7 @@ function determineFailureClass(errorMessage: string): import('@/types').FailureC
 // Night shift and manual execution share the slot — no parallel runs.
 const MAX_CONCURRENT = 1;
 
-export async function processQueue(companyId: string): Promise<number> {
+export async function processQueue(companyId: string, opts: LaunchOptions = {}): Promise<number> {
   const allTasks = await taskService.getTasks(companyId);
   const todoTasks = allTasks
     .filter((t) => t.status === 'todo')
@@ -439,7 +454,7 @@ export async function processQueue(companyId: string): Promise<number> {
 
     try {
       // launchTask uses atomic startTask (WHERE status='todo') — safe against races
-      await launchTask(task.id);
+      await launchTask(task.id, opts);
       launched++;
     } catch (error) {
       log.error('Queue processing failed for task', { companyId, title: task.title }, error);

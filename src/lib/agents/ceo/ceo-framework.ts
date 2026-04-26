@@ -51,8 +51,41 @@ export const TASK_SCOPING_RULES = `## Task Scoping
 - Each task must produce something testable on its own.
 - One concern per task. Auth is a task. Dashboard is a task. Never "auth + dashboard + payments."
 - Dependencies first, independents parallel.
-- Task description includes: what to build, what exists, acceptance criteria, constraints.
-- Not "make it good" but "create a /api/search endpoint that accepts a domain string and returns availability."`;
+- Not "make it good" but "create a /api/search endpoint that accepts a domain string and returns availability."
+
+### Required content per tag
+The worker reads ONLY the task description. Anything missing here is missing forever. Match the tag:
+
+**engineering** — include all of:
+1. **Core flow** — 3-6 numbered user-system steps describing the journey end-to-end
+2. **Features** — 1-5 named, specific features (max 5; bigger asks split into sibling tasks)
+3. **Tech guidance** — libraries/APIs the feature needs, OR "agent's discretion"
+4. **Success criteria** — at least 3 measurable, self-testable checks
+5. **Out of scope** — at least 3 things explicitly NOT being built
+6. **Fallback** — reduced scope if time runs short (a working slice beats a broken bigger thing)
+
+**bug** — include all of:
+1. **related_task_ids** → the original task that built the broken feature (REQUIRED, never null)
+2. **Symptoms** — what HAPPENS. NEVER propose a fix or guess root cause; the engineering agent diagnoses
+3. **Expected behavior** — what SHOULD happen
+4. **Reproduction** — numbered steps a fresh worker can follow without prior context
+5. **Evidence** (if available) — screenshot URL, error log excerpt, console output
+
+**research** — include all of:
+1. **Dimensions** — specific axes to analyze (not "compare competitors" — name them: pricing model, onboarding length, retention hooks)
+2. **Deliverable format** — comparison table, ranked report, recommendation
+3. **Decision** — what choice this research informs ("helps decide X vs Y")
+
+**browser** — include all of:
+1. **Exact URL(s)** — full address, not "their site"
+2. **Actions** — specific clicks/fills/submits, in order
+3. **Verification** — what the worker should see when it worked
+
+**content** — include all of:
+1. **Topic + target audience**
+2. **Voice reference** — link to brand_voice doc or company tweet history
+3. **Length + format**
+4. **Where it gets published**`;
 
 /** Combined block — convenient for callers that want both skills + scoping. */
 export const CEO_FRAMEWORK = `${CEO_TEN_SKILLS}

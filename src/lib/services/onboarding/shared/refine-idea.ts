@@ -23,6 +23,7 @@ import { isSafeUrl, extractMetadata } from './fetch-business-url';
 import { isTavilyAvailable } from '@/lib/tavily';
 import { trackedTavilySearch } from './tracked-calls';
 import { createLogger } from '@/lib/logger';
+import * as eventService from '@/lib/services/event.service';
 import type { PipelineContext, RefinedIdea } from '../types';
 
 const log = createLogger('OnboardingRefineIdea');
@@ -195,6 +196,20 @@ Return a JSON object with these exact keys:
   await emitActivity(ctx, `Refined: "${ctx.refinedIdea.refined_idea.slice(0, 100)}"`, 'llm');
   if (ctx.refinedIdea.changes_made) {
     await emitActivity(ctx, `Changes: ${ctx.refinedIdea.changes_made.slice(0, 120)}`, 'llm');
+  }
+
+  // Surface idea-transformation to the founder as a dedicated banner event.
+  // Fires only when the input was meaningfully transformed (not just scope-trimmed).
+  // The frontend listens for type='transformation' and renders a highlighted card.
+  const originalTrimmed = (ctx.input ?? '').trim().slice(0, 200);
+  const refinedShort = ctx.refinedIdea.refined_idea.slice(0, 200);
+  const wasTransformed = originalTrimmed.toLowerCase() !== refinedShort.toLowerCase();
+  if (wasTransformed) {
+    await eventService.emit(ctx.companyId, 'onboarding_transformation', {
+      original: originalTrimmed,
+      refined: refinedShort,
+      changes_made: ctx.refinedIdea.changes_made.slice(0, 200),
+    });
   }
 
   const memoryLines: string[] = [

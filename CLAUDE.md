@@ -77,12 +77,12 @@ The tables below remain as a map of what reference material exists.
 | Platform DB | Neon PostgreSQL + Drizzle ORM | Serverless Postgres, code-first schema, type-safe queries |
 | Founder Company DBs | Neon (1 per company) | Programmatic provisioning via API, scale-to-zero |
 | Auth | Custom JWT (jose) + magic link + Google OAuth | Full control over session management |
-| Hosting | Render | Long-running agent execution (4hr), background workers, cron |
+| Hosting | Cloudflare Workers (primary) + Render (legacy fallback) | See ADR-002. CF Workers serve API + agent execution + scheduled tasks; Render kept for environments without CF creds |
 | Queue/Events | Upstash Redis | Serverless pub/sub for event bus, task queue |
 | LLM (Agents) | Claude Sonnet 4 (`claude-sonnet-4-20250514`) | Best cost/quality for agent execution |
 | LLM (Governance) | Claude Haiku 4.5 (`claude-haiku-4-5-20251001`) | Fast/cheap for routing, classification, credit quoting |
 | Payments | Stripe | Subscriptions, credit purchases, billing portal |
-| Code Hosting | GitHub (platform-owned org) | Founder app repos managed by platform |
+| Code Hosting | GitHub (platform-owned org) | Platform code; per-founder repos used only by Render legacy deploy path (CF deploys static landing directly to R2) |
 | Browser Automation | Browserbase | Cloud Playwright for Browser agent |
 | Email | Postmark (transactional) | SPF/DKIM/DMARC, deliverability |
 | Email Verification | Hunter.io | find_email, verify_email |
@@ -92,6 +92,48 @@ The tables below remain as a map of what reference material exists.
 | Monitoring | Sentry | Error tracking, performance monitoring |
 | Validation | Zod | Runtime input validation on all API boundaries |
 | Testing | Vitest | Unit and integration tests |
+
+## Hosting Architecture (ADR-002 Split Hosting)
+
+Two-tier hosting: **Cloudflare Workers as primary, Render as legacy fallback**. Tier dispatch happens at runtime — services check `isCloudflareDeployConfigured()` and route accordingly. Lets dev/CI environments without CF creds keep working.
+
+| Concern | Cloudflare path (primary) | Render path (legacy fallback) |
+|---|---|---|
+| API + Next.js app | CF Worker via `@opennextjs/cloudflare` (`wrangler.toml`) | Render web service (`render.yaml`) |
+| Scheduled tasks | CF Cron Triggers / Workflows | Render cron jobs |
+| Founder landing pages | R2 upload to `founder-apps/{slug}/index.html`, served by CF Worker via wildcard `*.baljia.app` route | GitHub repo + Render static site + per-subdomain DNS |
+| Founder DBs | Neon (unchanged across both paths) | Neon (unchanged) |
+
+### Founder landing page deploy flow (CF primary path)
+
+1. `generateLandingPage(ctx)` produces structured 8-field JSON via LLM (design_intent + 7 content sections — see canonical format below)
+2. Renderer turns JSON → HTML with design tokens (per-company palette / font / density)
+3. `publishLandingToSubdomain(ctx, html)` calls `deployLandingPage()` which dispatches to CF
+4. CF path uploads HTML to R2 at deterministic key `founder-apps/{slug}/index.html`
+5. CF Worker on `*.baljia.app` wildcard route reads R2 by hostname slug, serves HTML
+6. **HTML is NOT stored in `documents` table** — the deployed URL is the source of truth
+
+### Landing page canonical format (7 sections)
+
+After 32-Polsia-site research, the Day-0 landing page has exactly these sections — no FAQ, no waitlist, no SEO bloat, no city mentions:
+
+```
+brand header → hero (headline + subhead) → what it does (3-4 cards) →
+how it works (3 steps) → what makes it different (3 bullets) →
+closing (headline + body) → footer
+```
+
+Country may appear ONCE in closing or tagline as PROVENANCE only ("Built in India") — never as market scope ("for Indian businesses").
+
+### Code locations
+
+- `src/lib/services/landing-deploy.service.ts` — tier dispatcher (CF / Render)
+- `src/lib/services/cf-deploy.service.ts` — R2 upload + idempotency
+- `src/lib/services/onboarding/shared/landing.ts` — structured-JSON generator + renderer + `publishLandingToSubdomain`
+- `src/lib/services/onboarding/shared/landing-design-tokens.ts` — palette × mood, font pairings, density resolver
+- `src/lib/services/domain.service.ts` — `provisionWildcardSubdomain` (DB-only, no DNS call since `*.baljia.app` is wildcard)
+- `founder-app-worker/` — CF Worker source serving `*.baljia.app`
+- See `docs/adr-002-split-hosting-strategy.md` for the decision record and `docs/cf-founder-app-runbook.md` for ops
 
 ## 9 Agents
 
@@ -354,7 +396,7 @@ The codebase has substantial implementation across all major areas. This section
 | Content safety | Prompt injection defense, output moderation | `src/lib/content-safety.ts` |
 | LLM provider | Anthropic primary, Gemini fallback | `src/lib/llm-provider.ts` |
 | Validation | Zod schemas for all API inputs | `src/lib/validations/index.ts` |
-| Deployment | Render config with 4 cron jobs | `render.yaml` |
+| Deployment | Cloudflare Worker primary (`wrangler.toml`); Render legacy fallback with cron jobs (`render.yaml`) | See ADR-002 |
 | Monitoring | Sentry integration | `src/instrumentation.ts` |
 
 ### Agent System — BUILT
@@ -420,7 +462,7 @@ These areas have code but may not fully match the depth of the finalized specs:
 | **Rate limiting escalation** | 6-step: observe → soft-limit → degrade → cooldown → flag → suspend | Rate limiter does basic throttling | Add escalation ladder logic |
 | **Stage-aware gap planning** | Night shift picks strongest gap between ideal and current | Stage service exists, night-shift service exists | Verify gap analysis matches spec depth |
 | **One-slot concurrency** | Night shift and manual share one slot, no parallel runs | Worker launcher has double-execution prevention | Verify it blocks night-shift vs manual conflicts |
-| **Founder app provisioning** | Neon DB + GitHub repo + Render deploy per founder company | neon.service.ts exists for DB provisioning | GitHub repo creation + Render deploy not wired end-to-end |
+| **Founder app provisioning** | Neon DB + landing page deployed to Cloudflare R2 (or Render legacy) per founder company | Wired end-to-end: `neon.service.ts` (DB), `landing-deploy.service.ts` (tier-dispatching: CF R2 primary, Render legacy fallback). CF Worker serves `*.baljia.app` reading R2 at `founder-apps/{slug}/index.html`. Per-founder GitHub repos only created on Render path. | Verify production CF Worker deployed, R2 bucket configured, `*.baljia.app` wildcard DNS routed to Worker |
 | **Live vendor integrations** | Browserbase, Meta Marketing API, Twitter API wired to real APIs | Tool files exist with API shapes defined | Verify credentials flow and live API connectivity |
 
 ### Commands

@@ -6,8 +6,8 @@
 //   ceo-framework module so onboarding and the runtime CEO stay in lockstep.
 //   When the framework evolves, both consumers update together.
 // - Per-slot CAN/CANNOT declarations (capability boundaries)
-// - Per-journey engineering spec: Build/Surprise = 5-section product spec;
-//   Grow = 5-section optimization spec
+// - Per-journey engineering spec: Build/Surprise = 4-field thin-slice product
+//   spec (250-400 chars, no jargon); Grow = 4-field optimization spec.
 // - Polsia field values: priority 100/70/70, complexity 8/3/4, hours 3/1/1
 // - Operational-voiced reasoning (different from market-research rationale)
 // - Consumes market_research.first_priorities as strategic seed
@@ -18,9 +18,21 @@
 import * as taskService from '@/lib/services/task.service';
 import { getCapabilitiesBulletsOnly } from '@/lib/platform-capabilities';
 import { CEO_TEN_SKILLS, TASK_SCOPING_RULES } from '@/lib/agents/ceo/ceo-framework';
+import { createLogger } from '@/lib/logger';
 import { callSmallLLMJson } from './json-mode';
 import { emitActivity } from '../stage-runner';
 import type { PipelineContext, FirstPriority } from '../types';
+
+const log = createLogger('OnboardingStarterTasks');
+
+type StarterSlot = 'engineering' | 'research' | 'outreach';
+
+interface StarterTaskShape {
+  title: string;
+  description: string;
+  reasoning: string;
+  complexity?: number;
+}
 
 interface StarterTasksResult {
   engineering: { title: string; description: string; reasoning: string; complexity?: number };
@@ -63,7 +75,10 @@ export async function createStarterTasks(ctx: PipelineContext): Promise<void> {
 
   const capabilities = getCapabilitiesBulletsOnly();
 
-  const engineeringSpec = isGrow ? GROW_ENG_SPEC : BUILD_ENG_SPEC;
+  // Interpolate the actual slug into the engineering spec so the LLM sees the
+  // real subdomain (e.g. acme.baljia.app) instead of the literal "{slug}".
+  const slugForSpec = ctx.slug || '{slug}';
+  const engineeringSpec = (isGrow ? GROW_ENG_SPEC : BUILD_ENG_SPEC).replaceAll('{slug}', slugForSpec);
   const engineeringLabel = isGrow ? 'OPTIMIZATION task for the existing product' : 'NEW MVP slice to build';
 
   // Structured JSON handoff — pass the parsed market-research object so the
@@ -143,28 +158,6 @@ BEFORE WRITING, reason through these silently (do not include in output):
   3. RETENTION OVERRIDE (GROW only): if retention_check.signal from the structured research is "warning", the engineering task MUST be a retention fix, not a growth/acquisition feature. Do NOT pour gas on a leaky bucket.
 
 ═══════════════════════════════════════════════════════
-ALREADY PROVISIONED DURING ONBOARDING (do NOT build again):
-═══════════════════════════════════════════════════════
-
-The following artifacts ALREADY exist. The engineering task must NOT recreate them.
-
-- **Landing page** — a marketing / waitlist landing page is already live at
-  \`${ctx.slug || '{slug}'}.baljia.app\`. The engineering task must NOT build "a landing
-  page", "a marketing site", or "a waitlist capture page" — those already work. If an
-  SEO-focused landing page refresh is genuinely needed, that's a SECOND-cycle task.
-- **Company email** — \`${ctx.slug || '{slug}'}@baljia.app\` is active and forwards to the founder.
-- **Backend infrastructure** — a per-company database and code repository are already
-  provisioned and empty. Engineering should push product code and create schema here —
-  do NOT include setup of a new database or repository in the task scope.
-- **Mission document** — written and saved.
-- **Market research report** — saved (you're consuming it above).
-- **Launch tweet** — already posted or queued (do NOT make the engineering task create tweets).
-
-The ENGINEERING task's job is to build **the actual product** — the thing the founder's
-customers will use to receive value. Not the marketing landing page. Not the waitlist.
-Not the tweet. The PRODUCT itself (the tool / platform / app described in the idea + mission).
-
-═══════════════════════════════════════════════════════
 PLATFORM CAPABILITIES (what the platform can and cannot do):
 ═══════════════════════════════════════════════════════
 
@@ -192,7 +185,7 @@ Engineering work CANNOT: browse web, send emails, post tweets, run ads, do web r
 
 TITLE: action verb + specific ${engineeringLabel}. Max 12 words.
 
-DESCRIPTION: 5-section spec (self-contained). If idea complexity is simple, describe a broader MVP; if complex, describe a NARROW first slice with explicit out-of-scope boundaries:
+DESCRIPTION: thin-slice spec (self-contained). 4 fields, 250-400 chars total, no section headers in output, no implementation jargon. Aggressively narrow the scope — this is the FIRST shippable + payable thing, not a full product:
 ${engineeringSpec}
 
 Return your complexity assessment (integer 5-9) as a "complexity" field alongside title/description/reasoning. This scales the saved task metadata to the actual scope.
@@ -226,7 +219,7 @@ HARD RULES:
 
 1. Each task description is SELF-CONTAINED — embed competitor names, audience details, infra assumptions inline. Never say "see other task" or "see report".
 2. Each task respects its agent's CAN/CANNOT capability boundaries declared above.
-3. Engineering DESCRIPTION must contain all 5 sections and be >= 6 sentences.
+3. Engineering DESCRIPTION is 250-400 chars total, has all 4 fields (sign-up, the one feature, what they get, why they pay for Build / current state, the one change, expected lift, rollback for Grow), NO section headers in output, NO library names, NO numbered sub-steps inside any field. Founder reads this verbatim — keep implementation jargon out.
 4. Engineering task must build the PRODUCT (the thing the founder's customers use), NOT:
    - a landing page / marketing site / SEO page / waitlist capture  ← already provisioned
    - a homepage / hero page / "coming soon" page                     ← already provisioned
@@ -252,13 +245,46 @@ Note: the JSON key is always "outreach" regardless of journey — the routing la
 
   await emitActivity(ctx, 'Generating 3 starter tasks', 'llm');
 
-  const result = await callSmallLLMJson<StarterTasksResult>(prompt, { maxTokens: 3000, retryOnce: true });
+  // The LLM call is wrapped in retryOnce inside callSmallLLMJson; if it
+  // STILL returns a malformed object after that, we don't want to crash
+  // the pipeline. Day-0 starter tasks are recoverable — every slot has
+  // a journey-aware deterministic fallback below. We only apply the
+  // fallback for fields that are actually missing, so a partially-good
+  // LLM response is preserved as-is.
+  let raw: Partial<StarterTasksResult> = {};
+  try {
+    raw = await callSmallLLMJson<StarterTasksResult>(prompt, { maxTokens: 3000, retryOnce: true });
+  } catch (err) {
+    log.error('createStarterTasks LLM call failed after retry — falling back to journey-aware defaults', {
+      companyId: ctx.companyId,
+      journey: ctx.journey,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    await emitActivity(ctx, 'LLM unavailable — using journey-aware defaults for starter tasks', 'llm');
+  }
 
+  const result: StarterTasksResult = {
+    engineering: ensureSlot(raw.engineering, 'engineering', ctx),
+    research: ensureSlot(raw.research, 'research', ctx),
+    outreach: ensureSlot(raw.outreach, 'outreach', ctx),
+  };
+
+  // Soft-validate the LLM output — log if engineering description blew the
+  // length budget or leaked implementation jargon. Soft-fail (no throw) so a
+  // single overlong description doesn't kill the pipeline; we'll tighten via
+  // re-prompt in a later pass.
   validateTask(result.engineering, 'engineering');
   validateTask(result.research, 'research');
   validateTask(result.outreach, 'outreach');
 
   // Parallel task creation — Polsia fires all 3 in rapid succession (~600ms total)
+  // Day-0 starters are auto-authorized at insert time so the CF queue-tick cron
+  // (and Render's worker-boot, which doesn't filter on authorization) can pick
+  // them up immediately without requiring founder approval. The Approve button
+  // remains the path for any other CEO-proposed task that lands without
+  // pre-authorization. Schema has authorized_by + authorization_reason; no
+  // authorized_at column today, so we record the timestamp inline in the reason.
+  const starterAuthReason = `Day-0 onboarding (auto-authorized at ${new Date().toISOString()})`;
   await Promise.all([
     taskService.createTask({
       company_id: ctx.companyId,
@@ -276,6 +302,8 @@ Note: the JSON key is always "outreach" regardless of journey — the routing la
       estimated_hours: '3',
       estimated_credits: 1,
       suggestion_reasoning: result.engineering.reasoning || ENGINEERING_FALLBACK_REASONING,
+      authorized_by: 'system',
+      authorization_reason: starterAuthReason,
     }),
     taskService.createTask({
       company_id: ctx.companyId,
@@ -290,6 +318,8 @@ Note: the JSON key is always "outreach" regardless of journey — the routing la
       estimated_hours: '1',
       estimated_credits: 1,
       suggestion_reasoning: result.research.reasoning || RESEARCH_FALLBACK_REASONING,
+      authorized_by: 'system',
+      authorization_reason: starterAuthReason,
     }),
     taskService.createTask({
       company_id: ctx.companyId,
@@ -304,6 +334,8 @@ Note: the JSON key is always "outreach" regardless of journey — the routing la
       estimated_hours: '1',
       estimated_credits: 1,
       suggestion_reasoning: result.outreach.reasoning || OUTREACH_FALLBACK_REASONING,
+      authorized_by: 'system',
+      authorization_reason: starterAuthReason,
     }),
   ]);
 
@@ -318,6 +350,171 @@ function clampComplexity(value: unknown): number {
   return n;
 }
 
+/**
+ * Take whatever (possibly malformed) shape the LLM returned for a slot and
+ * patch only the fields that are missing/empty with journey-aware fallbacks.
+ *
+ * Day-0 starter tasks are part of a recoverable surface — we'd rather ship a
+ * generic-but-useful task than fail the entire onboarding pipeline because
+ * one field came back blank. We log loudly per missing field so a flaky LLM
+ * shows up in Sentry/log dashboards instead of being silently masked.
+ */
+function ensureSlot(
+  task: Partial<StarterTaskShape> | undefined,
+  slot: StarterSlot,
+  ctx: PipelineContext,
+): StarterTaskShape {
+  const fallback = buildSlotFallback(slot, ctx);
+  const incoming = task ?? {};
+  const missing: string[] = [];
+
+  const title = incoming.title?.trim() || (missing.push('title'), fallback.title);
+  const description = incoming.description?.trim() || (missing.push('description'), fallback.description);
+  const reasoning = incoming.reasoning?.trim() || (missing.push('reasoning'), fallback.reasoning);
+
+  if (missing.length > 0) {
+    log.warn(`createStarterTasks: ${slot} slot LLM response missing fields — applied fallback`, {
+      companyId: ctx.companyId,
+      slot,
+      missingFields: missing,
+      // Truncate so we don't dump giant objects into logs but still give
+      // operators a fingerprint of what the LLM actually returned.
+      receivedShape: JSON.stringify({
+        title: typeof incoming.title === 'string' ? incoming.title.slice(0, 80) : incoming.title,
+        description_len: typeof incoming.description === 'string' ? incoming.description.length : null,
+        reasoning_len: typeof incoming.reasoning === 'string' ? incoming.reasoning.length : null,
+      }).slice(0, 300),
+    });
+  }
+
+  return {
+    title,
+    description,
+    reasoning,
+    complexity: incoming.complexity,
+  };
+}
+
+/**
+ * Journey-aware fallback content for each slot. Mirrors the prompt's
+ * task3Block framing so a fallback outreach task still respects the
+ * sales/discovery/validation distinction.
+ */
+function buildSlotFallback(slot: StarterSlot, ctx: PipelineContext): StarterTaskShape {
+  const companyName = ctx.companyName || 'your company';
+  const isGrow = ctx.journey === 'grow_my_company';
+  const isBuild = ctx.journey === 'build_my_idea';
+  const isSurprise = ctx.journey === 'surprise_me';
+  const inboxLabel = ctx.slug ? `${ctx.slug}@baljia.app` : 'your company inbox';
+
+  const geo = ctx.founderEnrichment?.geo;
+  const geoLine = geo?.country
+    ? [geo.city, geo.country].filter(Boolean).join(', ')
+    : '(audience-matched)';
+
+  if (slot === 'engineering') {
+    const ideaText =
+      ctx.refinedIdea?.refined_idea
+      ?? ctx.inventedIdea?.invented_idea
+      ?? ctx.businessProfile?.description
+      ?? ctx.input
+      ?? ctx.oneLiner
+      ?? '';
+    const scope = ideaText ? ideaText.slice(0, 100) : 'the core slice the founder described';
+    return isGrow
+      ? {
+          // 4-field thin-slice fallback — kept under ~400 chars to match the new spec.
+          title: `Optimize the weakest funnel step for ${companyName}`,
+          description:
+            `Current state: the funnel step with the lowest pass-through today (baseline TBD on instrument). ` +
+            `The one change: ship a single concrete edit to that step (copy, layout, or removed friction). ` +
+            `Expected lift: +10-20% on the chosen step's pass-through rate. ` +
+            `Rollback: keep the change behind a feature flag so we can revert within an hour if it regresses.`,
+          reasoning: ENGINEERING_FALLBACK_REASONING,
+          complexity: 6,
+        }
+      : {
+          // 4-field thin-slice fallback — sign-up + one feature + output + reason to pay.
+          title: `Ship the MVP slice for ${companyName}`,
+          description:
+            `Sign up: magic-link email signup. The one feature: ${scope}. ` +
+            `What they get: the user-visible output of that single workflow, end-to-end. ` +
+            `Why they pay: it replaces a manual step they'd otherwise spend hours on. Second feature is the next cycle's task.`,
+          reasoning: ENGINEERING_FALLBACK_REASONING,
+          complexity: 7,
+        };
+  }
+
+  if (slot === 'research') {
+    // No category field exists on idea shapes today — derive a short label
+    // from whatever idea text we have so the title isn't generic. Falls
+    // back to the company name if all idea fields are empty.
+    const ideaText =
+      ctx.refinedIdea?.refined_idea
+      ?? ctx.inventedIdea?.invented_idea
+      ?? ctx.businessProfile?.description
+      ?? ctx.oneLiner
+      ?? '';
+    const categoryLabel = ideaText
+      ? ideaText.slice(0, 60).replace(/[\n\r]+/g, ' ').trim()
+      : `${companyName}'s`;
+    return {
+      title: `Scout the ${categoryLabel} competitive landscape`,
+      description:
+        `Identify and profile 3-5 direct competitors operating in the same space as ${companyName}. For each, capture: positioning one-liner, ` +
+        `target customer, pricing model, weakest documented gap (from public reviews or docs), and one differentiator we could press on. ` +
+        `Deliverable: a competitive comparison saved as a research document. Decision this informs: positioning copy on the landing ` +
+        `page and feature priority for the next engineering cycle.`,
+      reasoning: RESEARCH_FALLBACK_REASONING,
+    };
+  }
+
+  // outreach
+  if (isGrow) {
+    return {
+      title: `Cold outreach: Find 20 prospects who match our ICP`,
+      description:
+        `Identify 20 buyers in our ICP for ${companyName}. Channel selection: match to target customer geography (${geoLine}) or ` +
+        `the audience's known professional network if geography is irrelevant — never hardcode a country. ` +
+        `First message: 1-line value prop tied to a measurable pain + 1 qualifying question (e.g. "are you currently spending on X?"). ` +
+        `Send from ${inboxLabel}. Track response signals that indicate buying intent: asks about pricing, asks about timeline, ` +
+        `requests a demo. Anything else is filed as "not yet" not "no".`,
+      reasoning: OUTREACH_FALLBACK_REASONING,
+    };
+  }
+  if (isBuild) {
+    return {
+      title: `User discovery: Find 15 prospects to interview`,
+      description:
+        `Identify 15 people who match the target user description from the mission. Channel selection: match to audience geography ` +
+        `(${geoLine}) or audience-defined networks if geo is irrelevant — never hardcode a country. Reach out from ${inboxLabel} ` +
+        `with a short interview ask (15 minutes), not a pitch. Questions to cover: "What do you use today for X?", "What's broken ` +
+        `about it?", "What would make you switch?", "What would you pay?". Validation signals: specific complaints about current ` +
+        `tools, stated workarounds, willingness to try a prototype. Capture quotes verbatim.`,
+      reasoning: OUTREACH_FALLBACK_REASONING,
+    };
+  }
+  // surprise_me
+  void isSurprise;
+  return {
+    title: `Validation outreach: Gauge interest from 15 likely users`,
+    description:
+      `Reach 15 people who match the audience the system inferred for ${companyName}. Channel selection: match to audience ` +
+      `geography (${geoLine}) or audience-defined networks — never hardcode a country. From ${inboxLabel} ask a single lightweight ` +
+      `interest check: "Does this problem resonate?", "Would you try a solution if it existed?", "What's the #1 frustration around ` +
+      `X today?". Validation signals: expressed pain, described workaround, asked when it's launching. If <30% positive, the ` +
+      `engineering scope should be revisited before more product work.`,
+    reasoning: OUTREACH_FALLBACK_REASONING,
+  };
+}
+
+/**
+ * Soft validator for LLM-generated starter tasks. Logs warnings (does NOT
+ * throw) when the engineering description exceeds the thin-slice length
+ * budget or leaks implementation jargon. Hard-failing here would crash
+ * onboarding for a single oversized description; we prefer to ship the
+ * task and surface the regression in logs/Sentry.
+ */
 function validateTask(
   task: { title: string; description: string; reasoning: string },
   slot: string,
@@ -325,31 +522,62 @@ function validateTask(
   if (!task?.title?.trim() || !task.description?.trim()) {
     throw new Error(`createStarterTasks: ${slot} task missing title or description`);
   }
-  const text = `${task.title} ${task.description}`.toLowerCase();
-  for (const filler of FILLER_VERBS) {
-    if (text.includes(filler)) {
-      // Soft fail — log but don't block (LLM compliance isn't perfect and a filler
-      // verb is better than failing the whole pipeline). Phase 3b could harden this
-      // to re-prompt if we want strict enforcement.
-      break;
-    }
+  // Enforce thin-slice length on engineering descriptions.
+  if (slot === 'engineering' && task.description.length > 500) {
+    log.warn(
+      `[createStarterTasks] engineering description ${task.description.length} chars (target <500)`,
+      { slot, length: task.description.length, titleSnippet: task.title.slice(0, 80) },
+    );
+  }
+  // Strip implementation jargon from any task description. We only log —
+  // any heavy rewriting belongs in a re-prompt loop.
+  const jargonPatterns = /\b(openai|cheerio|zod|drizzle|neon|tavily|stripe sdk|webhook handler|api endpoint|database migration)\b/gi;
+  const jargonHits = task.description.match(jargonPatterns);
+  if (jargonHits && jargonHits.length > 0) {
+    log.warn(
+      `[createStarterTasks] ${slot} description leaked implementation jargon`,
+      { slot, hits: jargonHits, titleSnippet: task.title.slice(0, 80) },
+    );
   }
 }
 
 const BUILD_ENG_SPEC = `
-1. Core flow (3-6 numbered user-system steps)
-2. Key features (3-5 features, named specifically)
-3. Critical libraries (list 1-3 libraries the feature genuinely needs — or "none" if vanilla)
-4. Success criteria (measurable definition of "done")
-5. Out of scope for v1 (what we're NOT building yet — manage scope explicitly)
+The MVP = the THINNEST billable slice. The landing page is ALREADY live at {slug}.baljia.app —
+you are building the APP at {slug}.baljia.app/app.
+
+Description has EXACTLY these 4 fields. No section headers in output. No numbered lists. No
+bullet sub-steps. Founder reads this — implementation jargon stays out.
+
+1. SIGN UP: how does a user create an account? (1 sentence — magic link / email signup / Google OAuth)
+2. THE ONE FEATURE: the single workflow a user pays to do. ONE workflow, named specifically. (2 sentences max)
+3. WHAT THEY GET: the user-visible output of that one workflow. (1 sentence)
+4. WHY THEY PAY: what makes this credit-card-worthy? (1 sentence)
+
+DO NOT INCLUDE: dashboards, admin panels, settings pages, "key features" lists, library
+names (no "openai, cheerio, zod"), success criteria, out-of-scope sections, numbered
+sub-steps inside any field, multiple features, integrations not strictly needed for the
+one feature.
+
+A second feature is the second cycle's task. This task is the FIRST shippable + payable thing.
+
+Total target length: 250-400 characters. If you wrote more than 500 chars, you wrote
+the wrong task.
 `;
 
 const GROW_ENG_SPEC = `
-1. Current state (what exists today, the metric we're improving, baseline number if known)
-2. Hypothesis (what's the bottleneck, what change should help, why)
-3. Specific changes (3-5 concrete edits to the existing product/code/UI — named specifically)
-4. Measurement (what metric improves and by how much as a target %)
-5. Rollback plan (how we revert if the change makes things worse)
+This is an OPTIMIZATION task on an existing product, not a new build.
+
+Description has EXACTLY these 4 fields. No section headers in output. No numbered lists.
+
+1. CURRENT STATE: what's the metric we're improving + the baseline number if known. (1 sentence)
+2. THE ONE CHANGE: ONE concrete edit to the existing product. Named specifically. (2 sentences max)
+3. EXPECTED LIFT: what metric improves and target % delta. (1 sentence)
+4. ROLLBACK: how we revert if the change makes things worse. (1 sentence)
+
+DO NOT INCLUDE: library names, multiple changes, "phase 1 / phase 2" plans, success criteria
+sections, out-of-scope appendices, generic optimization advice.
+
+Total target length: 250-400 characters. If over 500, rewrite shorter.
 `;
 
 const ENGINEERING_FALLBACK_REASONING = 'Core product slice that unlocks first usable value. No downstream validation or sales possible until this ships.';

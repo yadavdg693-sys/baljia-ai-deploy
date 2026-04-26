@@ -102,6 +102,7 @@ export async function GET(request: NextRequest) {
               'onboarding_stage',
               'onboarding_activity',
               'onboarding_mood',
+              'onboarding_transformation',
               'onboarding_completed',
               'onboarding_failed',
             ]),
@@ -144,6 +145,13 @@ export async function GET(request: NextRequest) {
                 type: 'mood',
                 mood: payload.mood,
                 stage: payload.stage ?? null,
+              });
+            } else if (event.event_type === 'onboarding_transformation') {
+              send({
+                type: 'transformation',
+                original: payload.original,
+                refined: payload.refined,
+                changes_made: payload.changes_made ?? null,
               });
             } else if (event.event_type === 'onboarding_completed') {
               send({ type: 'completed', ...payload });

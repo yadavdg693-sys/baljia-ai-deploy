@@ -170,6 +170,51 @@ export async function claimSlotAndCharge(params: {
 }
 
 /**
+ * Atomic slot claim WITHOUT credit deduction.
+ *
+ * For work fueled by subscription allowance rather than founder credits —
+ * i.e. night-shift cycles. Caller is responsible for consuming the correct
+ * allowance (e.g. subscriptions.night_shifts_remaining) separately.
+ *
+ * Does the same slot-busy check + todo→in_progress transition as
+ * claimSlotAndCharge, just skips the balance/cap checks and the
+ * credit_ledger insert.
+ */
+export async function claimSlotOnly(params: {
+  companyId: string;
+  taskId: string;
+}): Promise<{ success: boolean; reason?: 'slot_occupied' | 'task_not_todo' }> {
+  const { companyId, taskId } = params;
+
+  const result = await db.execute(sql`
+    WITH slot_check AS (
+      SELECT id FROM tasks
+      WHERE company_id = ${companyId} AND status = 'in_progress'
+      LIMIT 1
+    ),
+    claim AS (
+      UPDATE tasks SET
+        status = 'in_progress',
+        started_at = NOW(),
+        updated_at = NOW()
+      WHERE id = ${taskId}
+        AND status = 'todo'
+        AND NOT EXISTS (SELECT 1 FROM slot_check)
+      RETURNING id
+    )
+    SELECT
+      (SELECT COUNT(*) FROM slot_check)::int AS slot_busy,
+      (SELECT COUNT(*) FROM claim)::int AS claimed
+  `);
+
+  const row = (result.rows ?? [])[0] as { slot_busy: number; claimed: number } | undefined;
+  if (!row) return { success: false, reason: 'task_not_todo' };
+  if (row.slot_busy > 0) return { success: false, reason: 'slot_occupied' };
+  if (row.claimed === 0) return { success: false, reason: 'task_not_todo' };
+  return { success: true };
+}
+
+/**
  * Deduct credits with per-plan daily spend cap enforcement.
  * Atomic: daily cap check + balance check + insert are in a single CTE.
  */

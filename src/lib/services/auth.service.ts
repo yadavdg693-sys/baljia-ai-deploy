@@ -17,7 +17,7 @@ function hashToken(token: string): string {
 
 // ── Magic Link ───────────────────────────────────
 
-export async function createMagicLink(email: string): Promise<{ success: boolean }> {
+export async function createMagicLink(email: string): Promise<{ success: boolean; magicLink?: string }> {
   const normalizedEmail = email.toLowerCase().trim();
 
   // Upsert user — only fill blank fields
@@ -59,19 +59,31 @@ export async function createMagicLink(email: string): Promise<{ success: boolean
   const forceEmailInDev = process.env.BALJIA_FORCE_EMAIL === 'true';
   if (process.env.NODE_ENV === 'development' && !forceEmailInDev) {
     log.info(`\n✉️  Magic link for ${normalizedEmail}:\n${verifyUrl}\n`);
+    log.info('Magic link sent', { email: normalizedEmail });
+    return { success: true, magicLink: verifyUrl };
   } else {
     // Sender must be a Postmark-verified address on a verified domain.
     // Platform sender = system@baljia.ai (the .ai apex — platform side).
     // Override with BALJIA_AUTH_FROM_EMAIL if running under a different sender.
     const fromAddress = process.env.BALJIA_AUTH_FROM_EMAIL || 'system@baljia.ai';
-    await sendEmail({
-      to: normalizedEmail,
-      from: fromAddress,
-      subject: 'Your Baljia login link',
-      textBody: `Click this link to sign in to Baljia:\n\n${verifyUrl}\n\nThis link expires in ${MAGIC_LINK_EXPIRY_MINUTES} minutes.\n\nIf you didn't request this, you can safely ignore this email.`,
-      tag: 'magic-link',
-      companyId: 'platform',
-    });
+    try {
+      await sendEmail({
+        to: normalizedEmail,
+        from: `Baljia <${fromAddress}>`,
+        subject: 'Your Baljia login link',
+        textBody: `Click this link to sign in to Baljia:\n\n${verifyUrl}\n\nThis link expires in ${MAGIC_LINK_EXPIRY_MINUTES} minutes.\n\nIf you didn't request this, you can safely ignore this email.`,
+        tag: 'magic-link',
+        companyId: 'platform',
+      });
+    } catch (err) {
+      if (process.env.NODE_ENV === 'development') {
+        log.warn('Email send failed in dev; falling back to local magic link', { email: normalizedEmail });
+        log.info(`\nMagic link for ${normalizedEmail}:\n${verifyUrl}\n`);
+        log.info('Magic link sent', { email: normalizedEmail });
+        return { success: true, magicLink: verifyUrl };
+      }
+      throw err;
+    }
   }
 
   log.info('Magic link sent', { email: normalizedEmail });

@@ -43,19 +43,29 @@ export async function runOnboardingPipeline(
   browserLocale: string | null = null,
   userAgent: string | null = null,
 ): Promise<void> {
-  // Idempotency guard: atomic CAS to prevent duplicate pipeline runs
+  // Idempotency guard: atomic CAS to prevent duplicate pipeline runs.
+  // We also pull back the row's current name + slug so a resume run can
+  // hydrate ctx with the values the prior run already committed (Bug 1
+  // — resume must NOT regenerate a new company name/slug).
   const [claimed] = await db.update(companies)
     .set({ onboarding_status: 'running' })
     .where(and(
       eq(companies.id, companyId),
       inArray(companies.onboarding_status, ['initializing', 'failed']),
     ))
-    .returning({ id: companies.id });
+    .returning({ id: companies.id, name: companies.name, slug: companies.slug });
 
   if (!claimed) {
     log.warn('Onboarding pipeline already running or completed', { companyId });
     return;
   }
+
+  // A "real" name/slug means the prior pipeline progressed past
+  // provision_infrastructure. The placeholder name written by createCompany
+  // is the literal string 'My Company'. Anything else is treated as the
+  // founder's locked identity and must be preserved across resumes.
+  const isResumeWithName =
+    !!claimed.name && claimed.name !== 'My Company' && !!claimed.slug;
 
   const ctx: PipelineContext = {
     companyId,
@@ -73,13 +83,21 @@ export async function runOnboardingPipeline(
     enrichedFounderSummary: null,
     founderAngle: null,
     strategy: journey,
-    companyName: 'My Company',
-    slug: '',
+    companyName: isResumeWithName ? claimed.name : 'My Company',
+    slug: isResumeWithName ? claimed.slug : '',
     oneLiner: '',
     mission: '',
     marketResearch: null,
     startedAt: Date.now(),
   };
+
+  if (isResumeWithName) {
+    log.info('Resume run — preserving existing company identity', {
+      companyId,
+      name: claimed.name,
+      slug: claimed.slug,
+    });
+  }
 
   initCosts(ctx);
 

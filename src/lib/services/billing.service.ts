@@ -99,26 +99,38 @@ export async function handleSubscriptionCreated(subscription: Stripe.Subscriptio
   const ownerId = companyRow?.owner_id;
   if (!ownerId) { log.error('handleSubscriptionCreated: company not found', { companyId }); return; }
 
-  // Upsert subscription
-  await db.insert(subscriptions).values({
-    user_id: ownerId,
-    company_id: companyId,
-    stripe_customer_id: subscription.customer as string,
-    stripe_subscription_id: subscription.id,
-    plan_type: planTier,
-    status: mapStripeStatus(subscription.status),
-    night_shifts_total: plan.nightShifts,
-    night_shifts_remaining: plan.nightShifts,
-    current_period_start: new Date(subscription.current_period_start * 1000),
-    current_period_end: new Date(subscription.current_period_end * 1000),
-  }).onConflictDoUpdate({
-    target: subscriptions.company_id,
-    set: {
+  // Upsert subscription. There's no DB-level unique constraint on company_id,
+  // so we manually check-then-update or insert (instead of onConflictDoUpdate).
+  // After company.service.createCompany provisions a trial row, the typical
+  // path here is UPDATE: promote the trial row into a paid subscription.
+  const [existing] = await db.select({ id: subscriptions.id })
+    .from(subscriptions).where(eq(subscriptions.company_id, companyId)).limit(1);
+
+  if (existing) {
+    await db.update(subscriptions).set({
+      stripe_customer_id: subscription.customer as string,
       stripe_subscription_id: subscription.id,
       plan_type: planTier,
       status: mapStripeStatus(subscription.status),
-    },
-  });
+      night_shifts_total: plan.nightShifts,
+      night_shifts_remaining: plan.nightShifts,
+      current_period_start: new Date(subscription.current_period_start * 1000),
+      current_period_end: new Date(subscription.current_period_end * 1000),
+    }).where(eq(subscriptions.id, existing.id));
+  } else {
+    await db.insert(subscriptions).values({
+      user_id: ownerId,
+      company_id: companyId,
+      stripe_customer_id: subscription.customer as string,
+      stripe_subscription_id: subscription.id,
+      plan_type: planTier,
+      status: mapStripeStatus(subscription.status),
+      night_shifts_total: plan.nightShifts,
+      night_shifts_remaining: plan.nightShifts,
+      current_period_start: new Date(subscription.current_period_start * 1000),
+      current_period_end: new Date(subscription.current_period_end * 1000),
+    });
+  }
 
   await db.update(companies).set({ plan_tier: planTier, lifecycle: 'full_active', billing_state: 'active' }).where(eq(companies.id, companyId));
   await creditService.addCredit(companyId, plan.monthlyCredits, 'monthly_grant', `${plan.name} plan — monthly credit grant`);
@@ -185,7 +197,13 @@ export async function handleInvoicePaymentFailed(invoice: Stripe.Invoice): Promi
 }
 
 async function getOrCreateCustomer(companyId: string, stripe: Stripe): Promise<string> {
-  const [sub] = await db.select({ stripe_customer_id: subscriptions.stripe_customer_id })
+  // After company.service.createCompany provisions a trial row, this query
+  // should always return an existing subscription. If no row exists (legacy
+  // companies created before that change), we INSERT a fresh trial row.
+  const [sub] = await db.select({
+    id: subscriptions.id,
+    stripe_customer_id: subscriptions.stripe_customer_id,
+  })
     .from(subscriptions).where(eq(subscriptions.company_id, companyId)).limit(1);
 
   if (sub?.stripe_customer_id) return sub.stripe_customer_id;
@@ -202,21 +220,24 @@ async function getOrCreateCustomer(companyId: string, stripe: Stripe): Promise<s
 
   const customer = await stripe.customers.create({ email, name: company?.name ?? undefined, metadata: { company_id: companyId } });
 
-  // Get the owner_id for subscription
-  const ownerId = company?.owner_id ?? companyId;
-
-  await db.insert(subscriptions).values({
-    user_id: ownerId,
-    company_id: companyId,
-    stripe_customer_id: customer.id,
-    plan_type: 'trial',
-    status: 'active',
-    night_shifts_total: 3,
-    night_shifts_remaining: 3,
-  }).onConflictDoUpdate({
-    target: subscriptions.company_id,
-    set: { stripe_customer_id: customer.id },
-  });
+  if (sub) {
+    // Trial row already exists — fill in the stripe_customer_id only.
+    await db.update(subscriptions)
+      .set({ stripe_customer_id: customer.id })
+      .where(eq(subscriptions.id, sub.id));
+  } else {
+    // Legacy fallback: no trial row exists — create a full trial record.
+    const ownerId = company?.owner_id ?? companyId;
+    await db.insert(subscriptions).values({
+      user_id: ownerId,
+      company_id: companyId,
+      stripe_customer_id: customer.id,
+      plan_type: 'trial',
+      status: 'active',
+      night_shifts_total: 3,
+      night_shifts_remaining: 3,
+    });
+  }
 
   return customer.id;
 }

@@ -1,7 +1,19 @@
 // Credential Crypto — AES-256-GCM encryption for stored OAuth tokens
 // Ported from App_mode/src/lib/credential-crypto.mjs
+//
+// CF Workers note: `node:crypto` is loaded lazily so that *importing* this
+// module is safe on Cloudflare Workers (which doesn't ship Node's full
+// `crypto` module even with `nodejs_compat`). Calling encrypt/decrypt on CF
+// will still fail — but only the call path that actually needs them does, and
+// Codex OAuth (the only consumer) is Node-only by design (token store on disk).
 
-import crypto from 'node:crypto';
+type NodeCryptoModule = typeof import('node:crypto');
+let _crypto: NodeCryptoModule | null = null;
+function getCrypto(): NodeCryptoModule {
+  if (_crypto) return _crypto;
+  _crypto = require('node:crypto') as NodeCryptoModule;
+  return _crypto;
+}
 
 const ALGORITHM = 'aes-256-gcm';
 
@@ -14,9 +26,9 @@ interface EncryptedPayload {
 export function encryptSecret(plaintext: string): string | null {
   if (!plaintext) return null;
 
-  const iv = crypto.randomBytes(12);
+  const iv = getCrypto().randomBytes(12);
   const key = getMasterKey();
-  const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
+  const cipher = getCrypto().createCipheriv(ALGORITHM, key, iv);
   const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
   const tag = cipher.getAuthTag();
 
@@ -55,7 +67,7 @@ export function decryptSecret(payload: string): string | null {
     tag = Buffer.from(parts[2], 'base64');
   }
 
-  const decipher = crypto.createDecipheriv(ALGORITHM, getMasterKey(), iv);
+  const decipher = getCrypto().createDecipheriv(ALGORITHM, getMasterKey(), iv);
   decipher.setAuthTag(tag);
   const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
   return decrypted.toString('utf8');
@@ -65,5 +77,5 @@ function getMasterKey(): Buffer {
   // Use AUTH_SECRET (already required by Baljia) as the master key seed
   const seed = process.env.AUTH_SECRET || process.env.BALJIA_MASTER_KEY;
   if (!seed) throw new Error('AUTH_SECRET is required for credential encryption');
-  return crypto.createHash('sha256').update(seed).digest();
+  return getCrypto().createHash('sha256').update(seed).digest();
 }

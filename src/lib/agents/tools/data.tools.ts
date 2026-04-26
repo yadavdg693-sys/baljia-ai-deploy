@@ -72,15 +72,27 @@ export function getDataTools() {
     // ── Infra Visibility (read-only, shared with Engineering) ──
     {
       name: 'get_company_tech',
-      description: 'Get current tech setup for this company: GitHub repo, Render service, Neon DB. Use to understand what infrastructure exists.',
+      description: 'Get current tech setup for this company: GitHub repo, Cloudflare Worker/R2, Neon DB. Use to understand what infrastructure exists.',
       input_schema: {
         type: 'object' as const,
         properties: {},
       },
     },
     {
-      name: 'render_get_logs',
-      description: 'Get runtime logs from the deployed Render service. Use to diagnose errors and understand real user behaviour patterns.',
+      name: 'cf_get_logs',
+      description: 'Get Cloudflare Worker invocation logs for THIS company\'s Tier 2/3 founder app. Returns minute-bucketed counts of requests grouped by HTTP status and outcome (ok/exception/exceededCpu/scriptThrew). Use to diagnose errors and understand real user behaviour. Only works for apps deployed via cf_deploy_app — Tier 1 landing pages do not have per-founder logs.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          since_minutes: { type: 'number' as const, description: 'Lookback window in minutes (default 60, max 1440 = 24h).' },
+          limit: { type: 'number' as const, description: 'Max rows returned (default 100, hard max 500).' },
+          errors_only: { type: 'boolean' as const, description: 'When true, only return buckets where outcome != ok or status >= 400.' },
+        },
+      },
+    },
+    {
+      name: 'platform_render_get_logs',
+      description: 'LEGACY / PLATFORM-ONLY: Get runtime logs from a Render service. Founder apps run on Cloudflare — for those use cf_get_logs. This tool only works for platform-owned Render services (baljia.ai itself). Returns empty for founder companies that don\'t have a Render service.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -331,7 +343,12 @@ ${Object.entries(eventCounts).map(([t, c]) => `- ${t}: ${c}`).join('\n') || 'No 
       return handleEngineeringTool('get_company_tech', {}, task);
     }
 
-    case 'render_get_logs': {
+    case 'cf_get_logs': {
+      const { handleEngineeringTool } = await import('./engineering.tools');
+      return handleEngineeringTool('cf_get_logs', input, task);
+    }
+
+    case 'platform_render_get_logs': {
       const { handleEngineeringTool } = await import('./engineering.tools');
       return handleEngineeringTool('render_get_logs', input, task);
     }
