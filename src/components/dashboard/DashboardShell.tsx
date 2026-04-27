@@ -10,7 +10,7 @@
 
 import { useState, useCallback, useEffect, useMemo } from 'react';
 import Link from 'next/link';
-import type { Company, Task, Document, Report, User } from '@/types';
+import type { Company, Task, Document, Report, User, ChatAction } from '@/types';
 import { TaskDetailDialog } from './TaskDetailDialog';
 import { DocumentDialog } from './DocumentDialog';
 import { PurchaseCreditsDialog } from './PurchaseCreditsDialog';
@@ -97,20 +97,37 @@ export function DashboardShell({
     ?? (company as unknown as { company_email?: string | null; email_identity?: string | null }).email_identity
     ?? null;
 
-  // FIX: Auto-refresh dashboard data every 30s
-  useEffect(() => {
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch(`/api/dashboard?company_id=${company.id}`);
-        if (!res.ok) return;
-        const data = await res.json();
-        if (data.tasks) setTasks(data.tasks);
-        if (data.emails) setEmails(data.emails);
-        if (data.credits?.balance !== undefined) setCreditBalance(data.credits.balance);
-      } catch { /* silent */ }
-    }, 30000);
-    return () => clearInterval(interval);
+  // Re-fetch dashboard from /api/dashboard. Used by both the 30s timer and
+  // the on-action refresh hook so chat-created tasks appear instantly.
+  const refreshDashboard = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/dashboard?company_id=${company.id}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.tasks) setTasks(data.tasks);
+      if (data.emails) setEmails(data.emails);
+      if (data.credits?.balance !== undefined) setCreditBalance(data.credits.balance);
+    } catch { /* silent */ }
   }, [company.id]);
+
+  // 30s safety-net poll. Most updates come via the chat onAction hook below.
+  useEffect(() => {
+    const interval = setInterval(refreshDashboard, 30000);
+    return () => clearInterval(interval);
+  }, [refreshDashboard]);
+
+  // CEO action → instant refresh. Closes the up-to-30s blind spot where a
+  // chat-created task sat in the DB but wasn't yet visible on the dashboard.
+  const handleChatAction = useCallback((action: ChatAction) => {
+    if (
+      action.type === 'task_proposal'
+      || action.type === 'task_approved'
+      || action.type === 'document_updated'
+      || action.type === 'credit_quote'
+    ) {
+      refreshDashboard();
+    }
+  }, [refreshDashboard]);
 
   // Celebration trigger — diff completed tasks against the last snapshot
   useEffect(() => {
@@ -188,7 +205,6 @@ export function DashboardShell({
   const sitePath = company.subdomain ? `https://${company.subdomain}.baljia.app` : '';
   const inboxAddress = companyEmailAddress ?? '';
 
-  const founderGridStyle = { ['--chat-pane-width' as string]: '300px' } as React.CSSProperties;
 
   const onboardingFailed = company.onboarding_status === 'failed';
 
@@ -259,7 +275,8 @@ export function DashboardShell({
         </div>
       </header>
 
-      <div className="dashboard-grid dashboard-grid--founder" style={founderGridStyle}>
+      <div className="dashboard-layout-flex">
+      <div className="dashboard-grid dashboard-grid--founder">
         {/* ── Left column ── */}
         <section className="dashboard-column dashboard-column--left">
           <div className="panel-title"><span className="serif">Baljia</span></div>
@@ -324,7 +341,7 @@ export function DashboardShell({
             <div className="task-preview-list">
               {previewTasks.length === 0 ? (
                 <p style={{ fontSize: 12, color: 'var(--dash-muted, #6f6f6f)', padding: '10px 0' }}>
-                  No tasks yet. Chat with the CEO to get started.
+                  Message Baljia to set up your first company.
                 </p>
               ) : previewTasks.map((task) => (
                 <div
@@ -450,7 +467,7 @@ export function DashboardShell({
                   <p style={{ fontSize: 12, color: 'var(--dash-muted, #6f6f6f)' }}>No emails yet.</p>
                   {/* FIX: Helpful CTA when no emails */}
                   <p style={{ fontSize: 11, color: 'var(--dash-faint, #8a8a8a)', marginTop: 4 }}>
-                    Ask the CEO to run a cold outreach task to start sending emails.
+                    Ask Baljia to run a cold outreach task to start sending emails.
                   </p>
                 </div>
               ) : emails.slice(0, 3).map((e) => (
@@ -487,9 +504,10 @@ export function DashboardShell({
             </p>
           )}
         </section>
+      </div>
 
-        {/* ── CEO chat rail ── */}
-        <FounderChatRail companyId={company.id} warnings={chatWarnings} />
+        {/* ── Baljia chat sidebar (docked right) ── */}
+        <FounderChatRail companyId={company.id} warnings={chatWarnings} onAction={handleChatAction} />
       </div>
 
       {/* ── Email viewer dialog ── */}

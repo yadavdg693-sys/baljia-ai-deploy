@@ -1,34 +1,48 @@
-// FounderChatRail — CEO chat column (FIXED).
-// FIXES: Corrected "How It Works" copy to describe Baljia, not browser agent.
+// FounderChatRail — Baljia chat panel (DOCKED SIDEBAR).
+// Resizable sidebar docked to the right of the dashboard grid.
+// Drag handle on left edge lets the user widen or narrow it.
+// Always visible — no overlay, no blur, no slide-in animation.
 
 'use client';
 
-import { useState, useRef, useEffect, useCallback, type FormEvent } from 'react';
+import { useState, useRef, useEffect, useCallback, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import type { ChatMessage as ChatMessageType, ChatAction, CEOStreamEvent } from '@/types';
 
 interface FounderChatRailProps {
   companyId: string;
   warnings?: string[];
+  /** Fired for every CEO action event (task_proposal, task_approved, etc.) so
+   *  the dashboard can refresh immediately rather than wait for the 30s poll. */
+  onAction?: (action: ChatAction) => void;
 }
 
-// FIX: Correct How It Works to describe Baljia, not browser sessions
 const HOW_IT_WORKS_STEPS = [
   'Tell Baljia what you want — a task, a question, or a strategy discussion',
-  'Your AI CEO scopes the work and estimates credits',
+  'Baljia scopes the work and estimates credits',
   'Approve the task — Baljia assigns the right AI agent',
   'The agent executes autonomously (up to 4 hours per task)',
   'A verifier checks the output before marking it complete',
   'Results appear as reports, documents, or deployed code',
 ];
 
-export function FounderChatRail({ companyId, warnings = [] }: FounderChatRailProps) {
+const MIN_WIDTH = 260;
+const MAX_WIDTH = 640;
+const DEFAULT_WIDTH = 320;
+
+export function FounderChatRail({ companyId, warnings = [], onAction }: FounderChatRailProps) {
   const [messages, setMessages] = useState<ChatMessageType[]>([]);
   const [draft, setDraft] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingText, setStreamingText] = useState('');
-  const [collapsed, setCollapsed] = useState(false);
+  const [panelWidth, setPanelWidth] = useState(DEFAULT_WIDTH);
+  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
+  const startXRef = useRef(0);
+  const startWidthRef = useRef(DEFAULT_WIDTH);
 
+  // Load chat history
   useEffect(() => {
     let cancelled = false;
     async function loadHistory() {
@@ -46,11 +60,41 @@ export function FounderChatRail({ companyId, warnings = [] }: FounderChatRailPro
     return () => { cancelled = true; };
   }, [companyId]);
 
+  // Auto-scroll on new messages
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages, streamingText]);
 
+  // Drag-to-resize handler
+  const handleDragStart = useCallback((e: ReactPointerEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    setIsDragging(true);
+    startXRef.current = e.clientX;
+    startWidthRef.current = panelWidth;
+
+    const handleMove = (ev: globalThis.PointerEvent) => {
+      // Dragging left → wider (since panel is on the right)
+      const delta = startXRef.current - ev.clientX;
+      const newWidth = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, startWidthRef.current + delta));
+      setPanelWidth(newWidth);
+    };
+
+    const handleUp = () => {
+      setIsDragging(false);
+      document.removeEventListener('pointermove', handleMove);
+      document.removeEventListener('pointerup', handleUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+
+    document.body.style.cursor = 'ew-resize';
+    document.body.style.userSelect = 'none';
+    document.addEventListener('pointermove', handleMove);
+    document.addEventListener('pointerup', handleUp);
+  }, [panelWidth]);
+
+  // Send message
   const handleSend = useCallback(async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const message = draft.trim();
@@ -91,7 +135,10 @@ export function FounderChatRail({ companyId, warnings = [] }: FounderChatRailPro
           try {
             const ev: CEOStreamEvent = JSON.parse(data);
             if (ev.type === 'text') { fullText += ev.content; setStreamingText(fullText); }
-            else if (ev.type === 'action') actions.push(ev.action);
+            else if (ev.type === 'action') {
+              actions.push(ev.action);
+              onAction?.(ev.action);
+            }
           } catch { /* ignore */ }
         }
       }
@@ -112,56 +159,77 @@ export function FounderChatRail({ companyId, warnings = [] }: FounderChatRailPro
       setIsStreaming(false);
       setStreamingText('');
     }
-  }, [companyId, draft, isStreaming]);
+  }, [companyId, draft, isStreaming, onAction]);
 
-  if (collapsed) {
+  const isEmpty = messages.length === 0 && !isStreaming;
+
+  // Collapsed state: just show a thin bar with a toggle
+  if (isCollapsed) {
     return (
-      <section className="dashboard-column dashboard-column--chat dashboard-column--chat-collapsed">
+      <section
+        className="chat-sidebar chat-sidebar--collapsed"
+        aria-label="Baljia Chat (collapsed)"
+      >
         <button
-          className="chat-reopen-tab"
-          onClick={() => setCollapsed(false)}
+          className="chat-sidebar__expand-btn"
+          onClick={() => setIsCollapsed(false)}
           type="button"
+          aria-label="Expand chat"
         >
-          CEO Chat
+          <span className="chat-sidebar__expand-icon">💬</span>
+          <span className="chat-sidebar__expand-label">Chat</span>
         </button>
       </section>
     );
   }
 
-  const isEmpty = messages.length === 0 && !isStreaming;
-
   return (
-    <section className="dashboard-column dashboard-column--chat">
-      <div className="chat-pane">
-        <div className="chat-pane__header">
-          <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+    <section
+      ref={panelRef}
+      className={`chat-sidebar ${isDragging ? 'is-dragging' : ''}`}
+      style={{ width: panelWidth, minWidth: MIN_WIDTH, maxWidth: MAX_WIDTH }}
+      aria-label="Baljia Chat"
+    >
+      {/* Drag handle on left edge */}
+      <button
+        className="chat-sidebar__drag-handle"
+        onPointerDown={handleDragStart}
+        type="button"
+        aria-label="Resize chat panel"
+      >
+        <span className="chat-sidebar__drag-dots" />
+      </button>
+
+      <div className="chat-sidebar__inner">
+        {/* Header */}
+        <div className="chat-sidebar__header">
+          <span className="chat-sidebar__title-group">
             <img
               src="/mascot.png"
               alt=""
-              style={{
-                width: 20, height: 20, objectFit: 'contain',
-                filter: 'drop-shadow(0 0 4px rgba(225,177,44,0.3))',
-              }}
+              className="chat-sidebar__mascot"
             />
-            <span style={{ fontWeight: 700, fontSize: 13, letterSpacing: '.3px', textTransform: 'uppercase' as const }}>CEO Chat</span>
+            <span className="chat-sidebar__title">Baljia Chat</span>
           </span>
-          <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600, color: '#16A34A' }}>
-              <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#16A34A', boxShadow: '0 0 6px #16A34A', display: 'inline-block' }} />
+          <span className="chat-sidebar__header-right">
+            <span className="chat-sidebar__status">
+              <span className="chat-sidebar__status-dot" />
               ONLINE
             </span>
             <button
-              className="chat-pane__close"
-              onClick={() => setCollapsed(true)}
+              className="chat-sidebar__collapse-btn"
+              onClick={() => setIsCollapsed(true)}
               type="button"
-              aria-label="Collapse chat"
+              aria-label="Collapse chat panel"
+              title="Collapse"
             >
-              ×
+              ⟫
             </button>
           </span>
         </div>
 
-        <div className="chat-pane__scroll" ref={scrollRef}>
+        {/* Scrollable message area */}
+        <div className="chat-sidebar__messages" ref={scrollRef}>
           {warnings.length > 0 && (
             <div className="warning-list">
               {warnings.map((w) => (
@@ -174,17 +242,17 @@ export function FounderChatRail({ companyId, warnings = [] }: FounderChatRailPro
           )}
 
           {isEmpty && (
-            <div className="how-it-works">
+            <div className="chat-sidebar__empty">
               <h3 className="serif">How It Works</h3>
-              <p style={{ fontSize: 13, color: 'var(--dash-muted, #6f6f6f)', marginBottom: 8 }}>
-                Chat with your AI CEO to manage your company.
+              <p className="chat-sidebar__subtitle">
+                Message Baljia to manage your company.
               </p>
-              <ol>
+              <ol className="chat-sidebar__steps">
                 {HOW_IT_WORKS_STEPS.map((step) => (
                   <li key={step}>{step}</li>
                 ))}
               </ol>
-              <p>Each task = 1 credit, max 4 hours per session.</p>
+              <p className="chat-sidebar__credit-note">Each task = 1 credit, max 4 hours per session.</p>
             </div>
           )}
 
@@ -204,7 +272,7 @@ export function FounderChatRail({ companyId, warnings = [] }: FounderChatRailPro
                           filter: 'drop-shadow(0 0 3px rgba(225,177,44,0.2))',
                         }}
                       />
-                      CEO
+                      Baljia
                     </small>
                     <p>{msg.content}</p>
                   </div>
@@ -212,13 +280,13 @@ export function FounderChatRail({ companyId, warnings = [] }: FounderChatRailPro
               ))}
               {isStreaming && streamingText && (
                 <div className="thought-row">
-                  <small>CEO</small>
+                  <small>Baljia</small>
                   <p>{streamingText}</p>
                 </div>
               )}
               {isStreaming && !streamingText && (
                 <div className="thought-row">
-                  <small>CEO</small>
+                  <small>Baljia</small>
                   <p style={{ opacity: 0.6, fontStyle: 'italic' }}>thinking...</p>
                 </div>
               )}
@@ -226,16 +294,17 @@ export function FounderChatRail({ companyId, warnings = [] }: FounderChatRailPro
           )}
         </div>
 
-        <form className="chat-composer" onSubmit={handleSend}>
-          <span className="chat-composer__icon">💬</span>
+        {/* Composer */}
+        <form className="chat-sidebar__composer" onSubmit={handleSend}>
+          <span className="chat-sidebar__composer-icon">💬</span>
           <input
-            className="chat-composer__input"
+            className="chat-sidebar__input"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             placeholder="Ask Baljia anything..."
             disabled={isStreaming}
           />
-          <button className="chat-composer__send" type="submit" aria-label="Send">
+          <button className="chat-sidebar__send" type="submit" aria-label="Send">
             →
           </button>
         </form>

@@ -287,7 +287,10 @@ async function* streamWithOpenAI(input: {
       });
 
       let fullContent = '';
-      const toolCallAccumulator: Record<number, { id: string; function: { name: string; arguments: string } }> = {};
+      // Keyed by string so we can fall back to tc.id when tc.index is missing
+      // (some proxies / OpenRouter forks strip index, which would otherwise
+      // collide every undefined-index delta into a single bucket).
+      const toolCallAccumulator: Record<string, { id: string; function: { name: string; arguments: string } }> = {};
 
       for await (const chunk of stream) {
         const delta = chunk.choices[0]?.delta;
@@ -300,7 +303,9 @@ async function* streamWithOpenAI(input: {
 
         if (delta.tool_calls) {
           for (const tc of delta.tool_calls) {
-            const idx = tc.index;
+            const rawIdx = typeof tc.index === 'number' ? tc.index : tc.id;
+            if (rawIdx === undefined || rawIdx === null) continue;
+            const idx = String(rawIdx);
             if (!toolCallAccumulator[idx]) {
               toolCallAccumulator[idx] = { id: tc.id ?? '', function: { name: '', arguments: '' } };
             }
@@ -492,8 +497,10 @@ async function* streamWithOpenRouter(input: {
 
       let fullContent = '';
       let toolCalls: Array<{ id: string; function: { name: string; arguments: string } }> = [];
-      // Track tool call assembly from streaming chunks
-      const toolCallAccumulator: Record<number, { id: string; function: { name: string; arguments: string } }> = {};
+      // Keyed by string with fallback to tc.id when tc.index is absent
+      // (OpenRouter and some proxies strip index — without the fallback,
+      // every undefined-index fragment collides into a single bucket).
+      const toolCallAccumulator: Record<string, { id: string; function: { name: string; arguments: string } }> = {};
 
       for await (const chunk of stream) {
         const delta = chunk.choices[0]?.delta;
@@ -508,7 +515,9 @@ async function* streamWithOpenRouter(input: {
         // Accumulate tool calls from streamed deltas
         if (delta.tool_calls) {
           for (const tc of delta.tool_calls) {
-            const idx = tc.index;
+            const rawIdx = typeof tc.index === 'number' ? tc.index : tc.id;
+            if (rawIdx === undefined || rawIdx === null) continue;
+            const idx = String(rawIdx);
             if (!toolCallAccumulator[idx]) {
               toolCallAccumulator[idx] = { id: tc.id ?? '', function: { name: '', arguments: '' } };
             }

@@ -10,16 +10,21 @@ import { BaljiaMascot } from '@/components/mascot/BaljiaMascot';
 interface ChatPanelProps {
   companyId: string;
   warnings?: string[];
+  /** Fired for every CEO action event so a parent (e.g. DashboardShell) can
+   *  refresh in response to a task being created/approved/etc. */
+  onAction?: (action: ChatAction) => void;
 }
 
 const HOW_IT_WORKS_STEPS = [
-  'Tell the CEO what you want done — in plain English.',
-  'The CEO scopes it, quotes credits, and proposes a task.',
-  'You approve — workers execute, verify, and report back.',
-  'Chat is always free. Only task execution costs credits.',
+  'Tell Baljia what you want — a task, a question, or a strategy discussion',
+  'Baljia scopes the work and estimates credits',
+  'Approve the task — Baljia assigns the right AI agent',
+  'The agent executes autonomously (up to 4 hours per task)',
+  'A verifier checks the output before marking it complete',
+  'Results appear as reports, documents, or deployed code',
 ];
 
-export function ChatPanel({ companyId, warnings = [] }: ChatPanelProps) {
+export function ChatPanel({ companyId, warnings = [], onAction }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessageType[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingText, setStreamingText] = useState('');
@@ -111,6 +116,7 @@ export function ChatPanel({ companyId, warnings = [] }: ChatPanelProps) {
               setStreamingText(fullText);
             } else if (event.type === 'action') {
               actions.push(event.action);
+              onAction?.(event.action);
             }
           } catch {
             // Ignore malformed events
@@ -144,7 +150,7 @@ export function ChatPanel({ companyId, warnings = [] }: ChatPanelProps) {
       setIsStreaming(false);
       setStreamingText('');
     }
-  }, [companyId]);
+  }, [companyId, onAction]);
 
   const isEmpty = messages.length === 0 && !isStreaming && historyLoaded;
 
@@ -153,7 +159,7 @@ export function ChatPanel({ companyId, warnings = [] }: ChatPanelProps) {
       {/* Header */}
       <div className="px-4 py-3 border-b border-border-default flex items-center gap-2">
         <div className={`w-2 h-2 rounded-full ${isStreaming ? 'bg-baljia-gold animate-pulse' : 'bg-green-500'}`} />
-        <h2 className="font-semibold text-sm">CEO Chat</h2>
+        <h2 className="font-semibold text-sm">Baljia Chat</h2>
         <span className="text-xs text-text-muted ml-auto">Free</span>
       </div>
 
