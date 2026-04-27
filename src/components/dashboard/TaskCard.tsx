@@ -25,16 +25,23 @@ interface TaskCardProps {
   task: Task;
   onApprove?: (taskId: string) => void;
   onReject?: (taskId: string) => void;
+  onReorder?: (taskId: string, queue_order: number) => void;
   onClick?: () => void;
 }
 
-export function TaskCard({ task, onApprove, onReject, onClick }: TaskCardProps) {
+export function TaskCard({ task, onApprove, onReject, onReorder, onClick }: TaskCardProps) {
   const [approving, setApproving] = useState(false);
   const [rejecting, setRejecting] = useState(false);
+  const [runningNow, setRunningNow] = useState(false);
+  const [movingTop, setMovingTop] = useState(false);
+  const [movingUp, setMovingUp] = useState(false);
+  const [movingDown, setMovingDown] = useState(false);
 
   const agentName = task.assigned_to_agent_id !== null
     ? FOUNDER_AGENT_LABELS[task.assigned_to_agent_id] ?? 'AI Team'
     : null;
+
+  const currentOrder = task.queue_order ?? 0;
 
   const handleApprove = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -48,6 +55,49 @@ export function TaskCard({ task, onApprove, onReject, onClick }: TaskCardProps) 
     if (!onReject) return;
     setRejecting(true);
     try { onReject(task.id); } finally { setRejecting(false); }
+  };
+
+  const handleRunNow = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!onApprove) return;
+    setRunningNow(true);
+    try {
+      const res = await fetch(`/api/tasks/${task.id}/approve`, { method: 'POST' });
+      if (res.ok) {
+        onApprove(task.id);
+      }
+    } finally {
+      setRunningNow(false);
+    }
+  };
+
+  const patchQueueOrder = async (nextOrder: number) => {
+    const res = await fetch(`/api/tasks/${task.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ queue_order: nextOrder }),
+    });
+    if (res.ok && onReorder) {
+      onReorder(task.id, nextOrder);
+    }
+  };
+
+  const handleMoveToTop = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setMovingTop(true);
+    try { await patchQueueOrder(0); } finally { setMovingTop(false); }
+  };
+
+  const handleMoveUp = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setMovingUp(true);
+    try { await patchQueueOrder(Math.max(0, currentOrder - 1)); } finally { setMovingUp(false); }
+  };
+
+  const handleMoveDown = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setMovingDown(true);
+    try { await patchQueueOrder(currentOrder + 1); } finally { setMovingDown(false); }
   };
 
   return (
@@ -112,9 +162,9 @@ export function TaskCard({ task, onApprove, onReject, onClick }: TaskCardProps) 
         </span>
       </div>
 
-      {/* Approve/Reject buttons for tasks awaiting founder decision */}
-      {task.status === 'todo' && (onApprove || onReject) && (
-        <div className="flex items-center gap-2 mt-3 pt-3 border-t border-border-subtle">
+      {/* Approve/Reject/Reorder/RunNow buttons for tasks awaiting founder decision */}
+      {task.status === 'todo' && (onApprove || onReject || onReorder) && (
+        <div className="flex items-center gap-1 mt-3 pt-3 border-t border-border-subtle">
           {onReject && (
             <Button
               variant="ghost"
@@ -126,13 +176,65 @@ export function TaskCard({ task, onApprove, onReject, onClick }: TaskCardProps) 
               ✕ Reject
             </Button>
           )}
+
+          {/* Reorder controls — pushed to the right edge */}
+          {onReorder && (
+            <div className="ml-auto flex items-center gap-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                isLoading={movingTop}
+                onClick={handleMoveToTop}
+                title="Move to top of queue"
+                aria-label="Move to top of queue"
+                className="!px-2 text-xs text-text-muted hover:text-baljia-gold"
+              >
+                ▲
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                isLoading={movingUp}
+                onClick={handleMoveUp}
+                title="Move up in queue"
+                aria-label="Move up in queue"
+                className="!px-2 text-xs text-text-muted hover:text-baljia-gold"
+              >
+                ↑
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                isLoading={movingDown}
+                onClick={handleMoveDown}
+                title="Move down in queue"
+                aria-label="Move down in queue"
+                className="!px-2 text-xs text-text-muted hover:text-baljia-gold"
+              >
+                ↓
+              </Button>
+            </div>
+          )}
+
           {onApprove && (
             <Button
               variant="primary"
               size="sm"
+              isLoading={runningNow}
+              onClick={handleRunNow}
+              title="Run this task immediately"
+              className={`text-xs ${onReorder ? '' : 'ml-auto'}`}
+            >
+              ▶ Run Now
+            </Button>
+          )}
+          {onApprove && (
+            <Button
+              variant="secondary"
+              size="sm"
               isLoading={approving}
               onClick={handleApprove}
-              className="text-xs ml-auto"
+              className="text-xs"
             >
               ✓ Approve
             </Button>

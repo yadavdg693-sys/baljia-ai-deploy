@@ -3,13 +3,20 @@
 import { useState } from 'react';
 import type { Task } from '@/types';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/Tabs';
+import { Button } from '@/components/ui/Button';
 import { TaskCard } from './TaskCard';
+import { NewTaskDialog } from './NewTaskDialog';
 
 interface TaskBoardProps {
   tasks: Task[];
+  companyId: string;
   onTaskClick?: (task: Task) => void;
   onApprove?: (taskId: string) => void;
   onReject?: (taskId: string) => void;
+  /** Called after edit_task / reorder / move_to_top / Run Now actions so the parent can refetch. */
+  onReorder?: (taskId: string, queue_order: number) => void;
+  /** Called after a successful task create so the parent can refetch tasks. */
+  onTaskCreated?: () => void;
 }
 
 // Audit #16: Expose all founder-visible task states
@@ -37,8 +44,9 @@ const EMPTY_STATES: Record<string, { icon: string; message: string }> = {
   repair: { icon: '🔧', message: 'No tasks being repaired.' },
 };
 
-export function TaskBoard({ tasks, onTaskClick, onApprove, onReject }: TaskBoardProps) {
+export function TaskBoard({ tasks, companyId, onTaskClick, onApprove, onReject, onReorder, onTaskCreated }: TaskBoardProps) {
   const [activeTab, setActiveTab] = useState('all');
+  const [newTaskOpen, setNewTaskOpen] = useState(false);
 
   const filterTasks = (status: string) => {
     if (status === 'all') return tasks;
@@ -75,9 +83,19 @@ export function TaskBoard({ tasks, onTaskClick, onApprove, onReject }: TaskBoard
           </div>
         )}
         <span className="flex-1" />
-        <div className="flex items-center gap-1.5">
-          <span className="text-xs text-text-muted">Credits used</span>
-          <span className="text-sm font-semibold text-baljia-gold">{totalCreditsUsed}</span>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-text-muted">Credits used</span>
+            <span className="text-sm font-semibold text-baljia-gold">{totalCreditsUsed}</span>
+          </div>
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={() => setNewTaskOpen(true)}
+            className="text-xs"
+          >
+            + New Task
+          </Button>
         </div>
       </div>
 
@@ -117,6 +135,7 @@ export function TaskBoard({ tasks, onTaskClick, onApprove, onReject }: TaskBoard
                     onClick={() => onTaskClick?.(task)}
                     onApprove={task.status === 'todo' ? onApprove : undefined}
                     onReject={task.status === 'todo' ? onReject : undefined}
+                    onReorder={task.status === 'todo' ? onReorder : undefined}
                   />
                 ))
               )}
@@ -124,6 +143,13 @@ export function TaskBoard({ tasks, onTaskClick, onApprove, onReject }: TaskBoard
           </TabsContent>
         ))}
       </Tabs>
+
+      <NewTaskDialog
+        open={newTaskOpen}
+        onOpenChange={setNewTaskOpen}
+        companyId={companyId}
+        onCreated={() => onTaskCreated?.()}
+      />
     </div>
   );
 }

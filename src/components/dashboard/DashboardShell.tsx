@@ -19,6 +19,9 @@ import { DashboardMenu } from './DashboardMenu';
 import { LiveBanner } from './LiveBanner';
 import { CelebrationOverlay } from './CelebrationOverlay';
 import { DocumentSuggestionPanel } from './DocumentSuggestionPanel';
+import { NewTaskDialog } from './NewTaskDialog';
+import { RecurringTasksDialog } from './RecurringTasksDialog';
+import { AddLinkDialog } from './AddLinkDialog';
 import { FounderChatRail } from '@/components/chat/FounderChatRail';
 
 interface DocumentSuggestion {
@@ -40,6 +43,12 @@ interface EmailRow {
   created_at: string;
 }
 
+interface DashboardLinkRow {
+  id: string;
+  label: string;
+  url: string;
+}
+
 interface DashboardShellProps {
   company: Company;
   tasks: Task[];
@@ -49,6 +58,8 @@ interface DashboardShellProps {
   recentUsage: number[];
   pendingSuggestions: DocumentSuggestion[];
   emails: EmailRow[];
+  /** Founder-managed dashboard quick links (from `dashboard_links` table). */
+  links?: DashboardLinkRow[];
   user: User;
   liveCompanyCount: number;
 }
@@ -77,6 +88,7 @@ export function DashboardShell({
   recentUsage: _recentUsage,
   pendingSuggestions: _pendingSuggestions,
   emails: initialEmails,
+  links: initialLinks,
   user,
   liveCompanyCount,
 }: DashboardShellProps) {
@@ -89,7 +101,13 @@ export function DashboardShell({
   const [tasks, setTasks] = useState(initialTasks);
   const [emails, setEmails] = useState(initialEmails);
   const [creditBalance, setCreditBalance] = useState(initialCreditBalance);
+  const [links, setLinks] = useState<DashboardLinkRow[]>(initialLinks ?? []);
   const [celebrateTask, setCelebrateTask] = useState<{ id: string; title: string } | null>(null);
+  // Founder-side parity dialogs (mirror Baljia's chat tools)
+  const [newTaskOpen, setNewTaskOpen] = useState(false);
+  const [recurringOpen, setRecurringOpen] = useState(false);
+  const [addLinkOpen, setAddLinkOpen] = useState(false);
+  const [editingLink, setEditingLink] = useState<DashboardLinkRow | null>(null);
 
   const latestEmail = emails[0] ?? null;
   const companyEmailAddress =
@@ -107,8 +125,31 @@ export function DashboardShell({
       if (data.tasks) setTasks(data.tasks);
       if (data.emails) setEmails(data.emails);
       if (data.credits?.balance !== undefined) setCreditBalance(data.credits.balance);
+      if (Array.isArray(data.links)) setLinks(data.links);
     } catch { /* silent */ }
   }, [company.id]);
+
+  // Reorder / run-now / move-to-top — mirrors Baljia's edit_task / approve_task / move_task_to_top tools.
+  const handleReorder = useCallback(async (taskId: string, queue_order: number) => {
+    try {
+      const res = await fetch(`/api/tasks/${taskId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ queue_order }),
+      });
+      if (res.ok) await refreshDashboard();
+    } catch { /* silent */ }
+  }, [refreshDashboard]);
+
+  const handleRunNow = useCallback(async (taskId: string) => {
+    try {
+      const res = await fetch(`/api/tasks/${taskId}/approve`, { method: 'POST' });
+      if (res.ok || res.status === 409) {
+        setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, status: 'in_progress' as const } : t)));
+        await refreshDashboard();
+      }
+    } catch { /* silent */ }
+  }, [refreshDashboard]);
 
   // 30s safety-net poll. Most updates come via the chat onAction hook below.
   useEffect(() => {
@@ -337,7 +378,27 @@ export function DashboardShell({
         {/* ── Main column: tasks / documents / suggestions / links ── */}
         <section className="dashboard-column dashboard-column--main">
           <div className="dashboard-section">
-            <div className="panel-title"><span className="serif">Tasks</span></div>
+            <div className="panel-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+              <span className="serif">Tasks</span>
+              <span style={{ display: 'flex', gap: 6 }}>
+                <button
+                  type="button"
+                  onClick={() => setRecurringOpen(true)}
+                  className="chrome-button chrome-button--small"
+                  style={{ fontSize: 11 }}
+                >
+                  ↻ Recurring
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setNewTaskOpen(true)}
+                  className="chrome-button chrome-button--small chrome-button--primary"
+                  style={{ fontSize: 11 }}
+                >
+                  + New Task
+                </button>
+              </span>
+            </div>
             <div className="task-preview-list">
               {previewTasks.length === 0 ? (
                 <p style={{ fontSize: 12, color: 'var(--dash-muted, #6f6f6f)', padding: '10px 0' }}>
@@ -363,12 +424,33 @@ export function DashboardShell({
                       <span className="micro-pill micro-pill--dark">Awaiting approval</span>
                     )}
                   </div>
-                  {/* Inline approve/reject for todo tasks — matches prototype */}
+                  {/* Inline controls for todo tasks — full parity with Baljia's
+                       reject_task / approve_task / move_task_to_top / reorder_task / get_task_run_link tools. */}
                   {task.status === 'todo' && (
                     <div
                       className="task-preview-card__actions"
                       onClick={(e) => e.stopPropagation()}
+                      style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}
                     >
+                      <button
+                        className="task-action-btn"
+                        type="button"
+                        title="Move to top"
+                        onClick={(e) => { e.stopPropagation(); handleReorder(task.id, 0); }}
+                      >▲</button>
+                      <button
+                        className="task-action-btn"
+                        type="button"
+                        title="Move up"
+                        onClick={(e) => { e.stopPropagation(); handleReorder(task.id, Math.max(0, (task.queue_order ?? 1) - 1)); }}
+                      >↑</button>
+                      <button
+                        className="task-action-btn"
+                        type="button"
+                        title="Move down"
+                        onClick={(e) => { e.stopPropagation(); handleReorder(task.id, (task.queue_order ?? 0) + 1); }}
+                      >↓</button>
+                      <span style={{ flex: 1 }} />
                       <button
                         className="task-action-btn task-action-btn--reject"
                         type="button"
@@ -379,9 +461,18 @@ export function DashboardShell({
                       <button
                         className="task-action-btn task-action-btn--approve"
                         type="button"
+                        title="Approve and queue"
                         onClick={(e) => { e.stopPropagation(); handleApprove(task.id); }}
                       >
                         ✓ Approve
+                      </button>
+                      <button
+                        className="task-action-btn task-action-btn--approve"
+                        type="button"
+                        title="Run immediately"
+                        onClick={(e) => { e.stopPropagation(); handleRunNow(task.id); }}
+                      >
+                        ▶ Run Now
                       </button>
                     </div>
                   )}
@@ -421,7 +512,17 @@ export function DashboardShell({
           </div>
 
           <div className="dashboard-section">
-            <div className="panel-title"><span className="serif">Links</span></div>
+            <div className="panel-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+              <span className="serif">Links</span>
+              <button
+                type="button"
+                onClick={() => { setEditingLink(null); setAddLinkOpen(true); }}
+                className="chrome-button chrome-button--small"
+                style={{ fontSize: 11 }}
+              >
+                + Add link
+              </button>
+            </div>
             <div className="links-list">
               {sitePath && (
                 <a className="link-item" href={sitePath} target="_blank" rel="noopener noreferrer">
@@ -441,6 +542,20 @@ export function DashboardShell({
                   <span>{sitePath.replace(/^https?:\/\//, '')}/trial/{company.slug}</span>
                 </a>
               )}
+              {/* Founder-managed quick links — written via "+ Add link" or Baljia's update_link tool */}
+              {links.map((link) => (
+                <button
+                  className="link-item"
+                  key={link.id}
+                  onClick={() => { setEditingLink(link); setAddLinkOpen(true); }}
+                  type="button"
+                  title="Click to edit"
+                  style={{ textAlign: 'left', cursor: 'pointer', background: 'transparent', border: 0 }}
+                >
+                  <strong>{link.label}</strong>
+                  <span>{link.url.replace(/^https?:\/\//, '')}</span>
+                </button>
+              ))}
             </div>
           </div>
         </section>
@@ -596,6 +711,29 @@ export function DashboardShell({
         open={upgradeOpen}
         onOpenChange={setUpgradeOpen}
         companyId={company.id}
+      />
+
+      {/* Founder-side parity dialogs (mirror Baljia's chat tools) */}
+      <NewTaskDialog
+        open={newTaskOpen}
+        onOpenChange={setNewTaskOpen}
+        companyId={company.id}
+        onCreated={() => { void refreshDashboard(); }}
+      />
+
+      <RecurringTasksDialog
+        open={recurringOpen}
+        onOpenChange={setRecurringOpen}
+        companyId={company.id}
+      />
+
+      <AddLinkDialog
+        open={addLinkOpen}
+        onOpenChange={(o) => { setAddLinkOpen(o); if (!o) setEditingLink(null); }}
+        companyId={company.id}
+        initialLabel={editingLink?.label}
+        initialUrl={editingLink?.url}
+        onSaved={() => { void refreshDashboard(); }}
       />
 
       {celebrateTask && (

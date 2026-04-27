@@ -40,6 +40,24 @@ export const updateTaskSchema = z.object({
   title: z.string().min(1).max(500).optional(),
   description: z.string().max(5000).optional(),
   priority: z.number().int().min(0).max(100).optional(),
+  tag: z.string().min(1).max(100).optional(),
+  queue_order: z.number().int().min(0).optional(),
+});
+
+// Update payload for recurring tasks — title/description/cadence/is_active.
+// id and company_id are not editable; cadence change recomputes monthly_credits_estimate.
+export const updateRecurringTaskSchema = z.object({
+  title: z.string().min(1).max(500).optional(),
+  description: z.string().max(5000).optional(),
+  tag: z.string().min(1).max(100).optional(),
+  cadence: z.enum(['daily', 'weekly', 'biweekly', 'monthly']).optional(),
+  is_active: z.boolean().optional(),
+});
+
+// Dashboard link create/upsert payload (label is unique per company).
+export const upsertLinkSchema = z.object({
+  label: z.string().min(1).max(100),
+  url: z.string().url().max(500),
 });
 
 export const chatMessageSchema = z.object({

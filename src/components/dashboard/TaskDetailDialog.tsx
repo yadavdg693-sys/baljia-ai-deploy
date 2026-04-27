@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import type { Task } from '@/types';
 import {
   Dialog,
@@ -53,15 +53,144 @@ const STATUS_ORDER: Record<string, number> = {
   repair: 1, blocked_pre_start: 0, blocked_in_run: 1,
 };
 
+// ── Execution-log payload shape (matches /api/tasks/[taskId]/logs) ──
+interface LogEvent {
+  idx: number;
+  event: string;
+  timestamp: string | null;
+  message: string | null;
+}
+
+interface LogsResponse {
+  task_id: string;
+  status: string;
+  agent_name?: string | null;
+  turn_count?: number;
+  started_at?: string | null;
+  completed_at?: string | null;
+  events: LogEvent[];
+  summary?: string;
+}
+
+// Reusable input class — mirrors ChatInput.tsx styling
+const inputClass =
+  'w-full bg-surface-secondary rounded-lg px-3 py-2 text-sm text-text-primary placeholder:text-text-muted border border-border-default focus:outline-none focus:border-border-active transition-colors disabled:opacity-50';
+
 export function TaskDetailDialog({ task, open, onOpenChange, onApprove, onReject }: TaskDetailDialogProps) {
-  const [loading, setLoading] = useState<'approve' | 'reject' | 'retry' | null>(null);
+  const [loading, setLoading] = useState<'approve' | 'reject' | 'retry' | 'save' | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // ── Edit mode state ──
+  const [isEditing, setIsEditing] = useState(false);
+  const [editTitle, setEditTitle] = useState('');
+  const [editDescription, setEditDescription] = useState('');
+  const [editTag, setEditTag] = useState('');
+  const [editPriority, setEditPriority] = useState<number>(50);
+
+  // ── Execution log state ──
+  const [logs, setLogs] = useState<LogsResponse | null>(null);
+  const [logsLoading, setLogsLoading] = useState(false);
+  const [logsError, setLogsError] = useState<string | null>(null);
+  const [logsRequested, setLogsRequested] = useState(false);
+
+  const fetchLogs = useCallback(async (taskId: string) => {
+    setLogsLoading(true);
+    setLogsError(null);
+    try {
+      const res = await fetch(`/api/tasks/${taskId}/logs`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: 'Could not load logs' }));
+        setLogsError(body.error ?? 'Could not load logs');
+        setLogs(null);
+      } else {
+        const data: LogsResponse = await res.json();
+        setLogs(data);
+      }
+    } catch {
+      setLogsError('Network error — could not load logs');
+      setLogs(null);
+    } finally {
+      setLogsLoading(false);
+    }
+  }, []);
+
+  // Auto-load logs when dialog opens for a task that has executed; otherwise wait
+  // for an explicit "Load logs" click. Resets edit mode + log state on task change.
+  useEffect(() => {
+    if (!task || !open) return;
+    setIsEditing(false);
+    setError(null);
+    setLogs(null);
+    setLogsError(null);
+    setLogsRequested(false);
+    if (task.started_at) {
+      setLogsRequested(true);
+      void fetchLogs(task.id);
+    }
+  }, [task, open, fetchLogs]);
 
   if (!task) return null;
 
   const currentStep = STATUS_ORDER[task.status] ?? 0;
   const isFailed = task.status === 'failed';
   const isRejected = task.status === 'rejected';
+  const canEdit = task.status === 'todo';
+
+  const enterEditMode = () => {
+    setEditTitle(task.title);
+    setEditDescription(task.description ?? '');
+    setEditTag(task.tag);
+    setEditPriority(task.priority);
+    setError(null);
+    setIsEditing(true);
+  };
+
+  const cancelEdit = () => {
+    setIsEditing(false);
+    setError(null);
+  };
+
+  const handleSave = async () => {
+    setLoading('save');
+    setError(null);
+    // Build a diff payload of changed fields only
+    const payload: Record<string, unknown> = {};
+    if (editTitle.trim() && editTitle !== task.title) payload.title = editTitle.trim();
+    if (editDescription !== (task.description ?? '')) payload.description = editDescription;
+    if (editTag.trim() && editTag !== task.tag) payload.tag = editTag.trim();
+    if (Number.isFinite(editPriority) && editPriority !== task.priority) {
+      payload.priority = editPriority;
+    }
+
+    if (Object.keys(payload).length === 0) {
+      setIsEditing(false);
+      setLoading(null);
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/tasks/${task.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) {
+        onApprove?.(task.id); // reuses dashboard refresh hook
+        setIsEditing(false);
+      } else {
+        const body = await res.json().catch(() => ({ error: 'Could not save changes' }));
+        const errMsg =
+          typeof body.error === 'string'
+            ? body.error
+            : body?.error?.formErrors?.[0] ?? 'Could not save changes';
+        setError(errMsg);
+      }
+    } catch {
+      setError('Network error — please try again');
+    } finally {
+      setLoading(null);
+    }
+  };
 
   const handleApprove = async () => {
     setLoading('approve');
@@ -132,13 +261,47 @@ export function TaskDetailDialog({ task, open, onOpenChange, onApprove, onReject
         <DialogHeader>
           <div className="flex items-start justify-between gap-3">
             <div className="flex-1">
-              <h2 className="text-lg font-semibold">{task.title}</h2>
+              {isEditing ? (
+                <input
+                  type="text"
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
+                  maxLength={500}
+                  className={inputClass}
+                  aria-label="Edit task title"
+                />
+              ) : (
+                <h2 className="text-lg font-semibold">{task.title}</h2>
+              )}
               <p className="text-sm text-text-muted mt-1">{formatRelativeTime(task.created_at)}</p>
             </div>
             <div className="flex items-center gap-2">
               <Badge variant={statusVariants[task.status] ?? 'default'} size="sm">
                 {task.status.replace(/_/g, ' ')}
               </Badge>
+              {/* Edit toggle (only visible when status === 'todo') */}
+              {canEdit && !isEditing && (
+                <button
+                  type="button"
+                  onClick={enterEditMode}
+                  className="text-text-muted hover:text-text-primary transition-colors p-1 rounded-md hover:bg-surface-hover"
+                  aria-label="Edit task"
+                  title="Edit task"
+                >
+                  {/* Pencil icon */}
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 20h9" />
+                    <path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4Z" />
+                  </svg>
+                </button>
+              )}
+              {!canEdit && task.status !== 'rejected' && (
+                <span
+                  className="text-text-muted/40 p-1 cursor-not-allowed"
+                  title="Edit unavailable once a task is running"
+                  aria-hidden="true"
+                />
+              )}
               <DialogClose className="text-text-muted hover:text-text-primary transition-colors text-lg leading-none">
                 ✕
               </DialogClose>
@@ -149,7 +312,7 @@ export function TaskDetailDialog({ task, open, onOpenChange, onApprove, onReject
         <DialogBody>
           <div className="space-y-5">
             {/* ── Execution Timeline ── */}
-            {!isRejected && (
+            {!isRejected && !isEditing && (
               <div className="flex items-center gap-0 py-2">
                 {TIMELINE_STEPS.map((step, i) => {
                   const isCompleted = currentStep > i;
@@ -195,26 +358,196 @@ export function TaskDetailDialog({ task, open, onOpenChange, onApprove, onReject
             )}
 
             {/* ── Description ── */}
-            {task.description && (
+            {(isEditing || task.description) && (
               <div>
                 <h3 className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-2">Description</h3>
-                <p className="text-sm text-text-primary leading-relaxed">{task.description}</p>
+                {isEditing ? (
+                  <textarea
+                    value={editDescription}
+                    onChange={(e) => setEditDescription(e.target.value)}
+                    maxLength={5000}
+                    rows={4}
+                    className={`${inputClass} resize-y`}
+                    aria-label="Edit task description"
+                  />
+                ) : (
+                  <p className="text-sm text-text-primary leading-relaxed">{task.description}</p>
+                )}
               </div>
             )}
 
             {/* ── Metadata Grid ── */}
             <div className="grid grid-cols-2 gap-3">
-              {[
-                { label: 'Tag', value: task.tag },
-                { label: 'Assigned To', value: task.assigned_to_agent_id !== null ? FOUNDER_AGENT_LABELS[task.assigned_to_agent_id] ?? 'AI Team' : '—' },
-                { label: 'Credits', value: task.actual_credits_charged > 0 ? `${task.actual_credits_charged} used` : `${task.estimated_credits} estimated` },
-                { label: 'Source', value: FOUNDER_SOURCE_LABELS[task.source] ?? task.source.replace(/_/g, ' ') },
-              ].map(({ label, value }) => (
-                <div key={label} className="rounded-lg bg-surface-secondary p-3">
-                  <p className="text-xs text-text-muted mb-1">{label}</p>
-                  <p className="text-sm font-medium capitalize">{value}</p>
+              {/* Tag */}
+              <div className="rounded-lg bg-surface-secondary p-3">
+                <p className="text-xs text-text-muted mb-1">Tag</p>
+                {isEditing ? (
+                  <input
+                    type="text"
+                    value={editTag}
+                    onChange={(e) => setEditTag(e.target.value)}
+                    maxLength={100}
+                    className={inputClass}
+                    aria-label="Edit task tag"
+                  />
+                ) : (
+                  <p className="text-sm font-medium capitalize">{task.tag}</p>
+                )}
+              </div>
+
+              {/* Priority (editable) or Assigned To (view) */}
+              {isEditing ? (
+                <div className="rounded-lg bg-surface-secondary p-3">
+                  <p className="text-xs text-text-muted mb-1">Priority (0-100)</p>
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={editPriority}
+                    onChange={(e) => setEditPriority(Number(e.target.value))}
+                    className={inputClass}
+                    aria-label="Edit task priority"
+                  />
                 </div>
-              ))}
+              ) : (
+                <div className="rounded-lg bg-surface-secondary p-3">
+                  <p className="text-xs text-text-muted mb-1">Assigned To</p>
+                  <p className="text-sm font-medium capitalize">
+                    {task.assigned_to_agent_id !== null
+                      ? FOUNDER_AGENT_LABELS[task.assigned_to_agent_id] ?? 'AI Team'
+                      : '—'}
+                  </p>
+                </div>
+              )}
+
+              {/* Credits (read-only) */}
+              <div className="rounded-lg bg-surface-secondary p-3">
+                <p className="text-xs text-text-muted mb-1">Credits</p>
+                <p className="text-sm font-medium capitalize">
+                  {task.actual_credits_charged > 0
+                    ? `${task.actual_credits_charged} used`
+                    : `${task.estimated_credits} estimated`}
+                </p>
+              </div>
+
+              {/* Source (read-only) */}
+              <div className="rounded-lg bg-surface-secondary p-3">
+                <p className="text-xs text-text-muted mb-1">Source</p>
+                <p className="text-sm font-medium capitalize">
+                  {FOUNDER_SOURCE_LABELS[task.source] ?? task.source.replace(/_/g, ' ')}
+                </p>
+              </div>
+            </div>
+
+            {/* ── Execution Log ── */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-xs font-semibold text-text-secondary uppercase tracking-wider">
+                  Execution Log
+                </h3>
+                {(logsRequested || task.started_at) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLogsRequested(true);
+                      void fetchLogs(task.id);
+                    }}
+                    disabled={logsLoading}
+                    className="text-xs text-baljia-gold hover:text-baljia-gold-light transition-colors disabled:opacity-50"
+                  >
+                    {logsLoading ? 'Loading…' : 'Reload'}
+                  </button>
+                )}
+              </div>
+
+              {!logsRequested && !task.started_at && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLogsRequested(true);
+                    void fetchLogs(task.id);
+                  }}
+                  className="text-xs text-baljia-gold hover:text-baljia-gold-light transition-colors"
+                >
+                  Load logs
+                </button>
+              )}
+
+              {logsError && (
+                <p className="text-xs text-status-error mt-1">{logsError}</p>
+              )}
+
+              {logsRequested && !logsError && (
+                <>
+                  {/* Header row with run metadata */}
+                  {logs && (logs.agent_name || logs.turn_count || logs.started_at) && (
+                    <div className="rounded-lg bg-surface-secondary p-3 mb-2 grid grid-cols-2 gap-3 text-xs">
+                      {logs.agent_name && (
+                        <div>
+                          <p className="text-text-muted mb-0.5">Agent</p>
+                          <p className="text-text-primary font-medium">{logs.agent_name}</p>
+                        </div>
+                      )}
+                      {typeof logs.turn_count === 'number' && (
+                        <div>
+                          <p className="text-text-muted mb-0.5">Turns</p>
+                          <p className="text-text-primary font-medium">{logs.turn_count}</p>
+                        </div>
+                      )}
+                      {logs.started_at && (
+                        <div>
+                          <p className="text-text-muted mb-0.5">Started</p>
+                          <p className="text-text-primary font-medium">{formatRelativeTime(logs.started_at)}</p>
+                        </div>
+                      )}
+                      {logs.completed_at && (
+                        <div>
+                          <p className="text-text-muted mb-0.5">Completed</p>
+                          <p className="text-text-primary font-medium">{formatRelativeTime(logs.completed_at)}</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {logsLoading && !logs && (
+                    <p className="text-xs text-text-muted italic">Loading logs…</p>
+                  )}
+
+                  {logs && logs.events.length === 0 && (
+                    <p className="text-xs text-text-muted italic">
+                      No execution logs yet — they&apos;ll appear after the task runs.
+                    </p>
+                  )}
+
+                  {logs && logs.events.length > 0 && (
+                    <ol className="space-y-1.5 text-xs">
+                      {logs.events.map((evt) => (
+                        <li
+                          key={evt.idx}
+                          className="rounded-md bg-surface-secondary px-3 py-2 flex gap-3"
+                        >
+                          <span className="text-text-muted font-mono shrink-0">{evt.idx + 1}.</span>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-text-primary font-medium capitalize">
+                                {evt.event.replace(/_/g, ' ')}
+                              </span>
+                              {evt.timestamp && (
+                                <span className="text-text-muted shrink-0">
+                                  {formatRelativeTime(evt.timestamp)}
+                                </span>
+                              )}
+                            </div>
+                            {evt.message && (
+                              <p className="text-text-secondary mt-0.5 break-words">{evt.message}</p>
+                            )}
+                          </div>
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                </>
+              )}
             </div>
 
             {/* ── Refund / Failure info ── */}
@@ -226,7 +559,7 @@ export function TaskDetailDialog({ task, open, onOpenChange, onApprove, onReject
             )}
 
             {/* ── Suggestion reasoning ── */}
-            {task.suggestion_reasoning && (
+            {task.suggestion_reasoning && !isEditing && (
               <div>
                 <h3 className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-2">Why This Task</h3>
                 <p className="text-sm text-text-primary">{task.suggestion_reasoning}</p>
@@ -234,7 +567,7 @@ export function TaskDetailDialog({ task, open, onOpenChange, onApprove, onReject
             )}
 
             {/* ── Timing ── */}
-            {task.started_at && (
+            {task.started_at && !isEditing && (
               <div className="rounded-lg bg-surface-secondary p-3">
                 <p className="text-xs text-text-muted mb-1">Timing</p>
                 <p className="text-sm">
@@ -258,10 +591,32 @@ export function TaskDetailDialog({ task, open, onOpenChange, onApprove, onReject
           </div>
         )}
 
-        {/* ── Actions ── */}
+        {/* ── Actions (footer states: todo+view, todo+edit, failed, all-other) ── */}
         <DialogFooter>
-          {/* Approve/reject for created tasks */}
-          {task.status === 'todo' && (
+          {/* State 2: todo + edit mode → Cancel + Save */}
+          {isEditing && task.status === 'todo' && (
+            <>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={cancelEdit}
+                disabled={loading === 'save'}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                isLoading={loading === 'save'}
+                onClick={handleSave}
+              >
+                Save
+              </Button>
+            </>
+          )}
+
+          {/* State 1: todo + view mode → Reject + Approve */}
+          {!isEditing && task.status === 'todo' && (
             <>
               <Button
                 variant="ghost"
@@ -282,8 +637,8 @@ export function TaskDetailDialog({ task, open, onOpenChange, onApprove, onReject
             </>
           )}
 
-          {/* Retry for failed tasks */}
-          {task.status === 'failed' && (
+          {/* State 3: failed → Retry */}
+          {!isEditing && task.status === 'failed' && (
             <Button
               variant="primary"
               size="sm"
@@ -293,6 +648,8 @@ export function TaskDetailDialog({ task, open, onOpenChange, onApprove, onReject
               ↻ Retry Task
             </Button>
           )}
+
+          {/* State 4: in_progress / verifying / completed / rejected / etc. → no buttons */}
         </DialogFooter>
       </DialogContent>
     </Dialog>

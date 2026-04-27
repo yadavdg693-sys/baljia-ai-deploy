@@ -1,6 +1,6 @@
 import { getSessionFromCookies } from '@/lib/auth';
 import { redirect } from 'next/navigation';
-import { db, companies, tasks, documents, reports, creditLedger, documentSuggestions, emailThreads } from '@/lib/db';
+import { db, companies, tasks, documents, reports, creditLedger, documentSuggestions, emailThreads, dashboardLinks } from '@/lib/db';
 import { eq, desc, asc, sql, and, gte, inArray } from 'drizzle-orm';
 import { DashboardShell } from '@/components/dashboard/DashboardShell';
 
@@ -62,7 +62,7 @@ export default async function CompanyDashboard({ params }: Props) {
   const sevenDaysAgo = new Date();
   sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
 
-  const [taskList, docList, reportList, balanceResult, usageResult, pendingSuggestions, emailList, liveCountResult] = await Promise.all([
+  const [taskList, docList, reportList, balanceResult, usageResult, pendingSuggestions, emailList, liveCountResult, linkList] = await Promise.all([
     db.select()
       .from(tasks)
       .where(eq(tasks.company_id, companyId))
@@ -126,6 +126,15 @@ export default async function CompanyDashboard({ params }: Props) {
     db.select({ count: sql<number>`count(*)::int` })
       .from(companies)
       .where(inArray(companies.lifecycle, ['trial_active', 'full_active'])),
+
+    // Founder-managed quick links (rendered in the dashboard Links section)
+    db.select({
+      id: dashboardLinks.id,
+      label: dashboardLinks.label,
+      url: dashboardLinks.url,
+    })
+      .from(dashboardLinks)
+      .where(eq(dashboardLinks.company_id, companyId)),
   ]);
 
   const creditBalance = Number(balanceResult[0]?.total ?? 0);
@@ -153,6 +162,7 @@ export default async function CompanyDashboard({ params }: Props) {
       recentUsage={recentUsage}
       pendingSuggestions={pendingSuggestions as unknown as Parameters<typeof DashboardShell>[0]['pendingSuggestions']}
       emails={emailList as unknown as Parameters<typeof DashboardShell>[0]['emails']}
+      links={linkList}
       user={user as unknown as Parameters<typeof DashboardShell>[0]['user']}
       liveCompanyCount={liveCompanyCount}
     />
