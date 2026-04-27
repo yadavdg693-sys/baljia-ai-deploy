@@ -13,6 +13,8 @@
 import type { Task } from '@/types';
 import { db, companies } from '@/lib/db';
 import { eq } from 'drizzle-orm';
+import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import { provisionSubdomain, attachCustomDomain, verifyCustomDomain } from '@/lib/services/domain.service';
 import { provisionCompanyDatabase, getCompanyDatabase, createBranch, deleteBranch } from '@/lib/services/neon.service';
 import {
@@ -42,6 +44,28 @@ const RENDER_API = 'https://api.render.com/v1';
 
 export function getEngineeringTools() {
   return [
+    {
+      name: 'list_skills',
+      description: 'List the skill files available in .claude/skills/. Returns one line per skill with a 1-sentence summary. Read the relevant skill via read_skill BEFORE writing code in that domain — the skills capture stack-specific patterns and anti-patterns the LLM\'s training data is missing or wrong about.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {},
+      },
+    },
+    {
+      name: 'read_skill',
+      description: 'Read the full SKILL.md for a named skill. MANDATORY before writing code that touches the skill\'s domain. Skill files describe what works on Cloudflare Workers, what frameworks DON\'T work, code shapes you should match, and anti-patterns the LLM\'s training data tends to suggest but break in production.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          skill: {
+            type: 'string' as const,
+            description: 'Skill name (kebab-case directory under .claude/skills/). E.g. "cloudflare-workers", "neon-postgres", "frontend-design", "stripe-payments", "r2-storage", "email-postmark"',
+          },
+        },
+        required: ['skill'],
+      },
+    },
     {
       name: 'github_create_repo',
       description: 'Create a new GitHub repository in the platform org for a founder company.',
@@ -433,6 +457,13 @@ export async function handleEngineeringTool(
   task: Task,
 ): Promise<string> {
   switch (toolName) {
+    // ── Skills (Polsia-style knowledge layer) ──
+    case 'list_skills':
+      return handleListSkills();
+
+    case 'read_skill':
+      return handleReadSkill(input);
+
     case 'get_company_tech':
       return getCompanyTech(task.company_id);
 
@@ -2004,5 +2035,80 @@ async function cfGetLogs(input: Record<string, unknown>, companyId: string): Pro
     ].filter(Boolean).join('\n');
   } catch (err) {
     return `cf_get_logs error: ${err instanceof Error ? err.message : 'Unknown error'}`;
+  }
+}
+
+// ══════════════════════════════════════════════
+// SKILLS — read .claude/skills/<name>/SKILL.md
+// Polsia-style knowledge layer the agent loads BEFORE writing domain code.
+// Skills capture stack-specific patterns + anti-patterns the LLM's training
+// data is missing or wrong about (e.g. "you can't use pg on Cloudflare Workers").
+// ══════════════════════════════════════════════
+
+const SKILLS_ROOT = join(process.cwd(), '.claude', 'skills');
+
+/** Hard-coded one-line summaries — keeps `list_skills` fast (no file reads)
+ *  and gives the agent a stable index it can scan. Update if a SKILL.md file
+ *  is renamed; the SKILL.md content itself doesn't need to be touched. */
+const SKILL_SUMMARIES: Record<string, string> = {
+  'cloudflare-workers':
+    'Founder-app deploy target. Runtime constraints (30s CPU, 128 MB, 10 MB bundle), code shape (ES module + default fetch handler), and frameworks that work (Hono) vs ones that don\'t (Express, pg, ioredis).',
+  'neon-postgres':
+    'Database access from Workers. Use @neondatabase/serverless HTTP driver — pg/postgres packages don\'t work. Drizzle ORM patterns, migration approaches, query best practices.',
+  'frontend-design':
+    'UI patterns for founder apps. Tailwind via CDN, color system (gold #F5A623 on dark warm bg), component primitives, mobile-first layouts, accessibility minimums.',
+  'stripe-payments':
+    'Payment integration. When to use Payment Links vs Checkout Sessions vs full SDK. Critical Workers gotchas: Stripe.createFetchHttpClient() and createSubtleCryptoProvider() are required.',
+  'r2-storage':
+    'File uploads + asset serving via env.ASSETS binding. Upload patterns, Worker proxy serving, naming conventions, security (don\'t trust content-type from client).',
+  'email-postmark':
+    'Transactional email send + inbound. Domain-verified at baljia.app, any @baljia.app sender works. Inbound architecture has two paths (Cloudflare Email Routing vs Postmark Inbound) — Support agent needs Postmark Inbound.',
+};
+
+function handleListSkills(): string {
+  if (!existsSync(SKILLS_ROOT)) {
+    return 'Skills directory does not exist (.claude/skills). The agent has no curated knowledge layer — proceed with general LLM knowledge but expect more iterations.';
+  }
+  const dirs = readdirSync(SKILLS_ROOT)
+    .filter((name) => {
+      try {
+        return statSync(join(SKILLS_ROOT, name)).isDirectory()
+          && existsSync(join(SKILLS_ROOT, name, 'SKILL.md'));
+      } catch { return false; }
+    })
+    .sort();
+
+  if (dirs.length === 0) {
+    return '.claude/skills/ exists but contains no skill files. Create directories with SKILL.md to populate.';
+  }
+
+  const lines = ['## Available skills', '', 'Read the relevant one BEFORE writing code in that domain. Use `read_skill` with the name.', ''];
+  for (const dir of dirs) {
+    const summary = SKILL_SUMMARIES[dir] ?? '(no summary — read the file)';
+    lines.push(`- **${dir}** — ${summary}`);
+  }
+  return lines.join('\n');
+}
+
+function handleReadSkill(input: Record<string, unknown>): string {
+  const name = String(input.skill ?? '').trim();
+  if (!name) return 'Error: missing required argument "skill". Call list_skills to see available names.';
+
+  // Defense: only allow kebab-case alphanumeric. Blocks ../../etc/passwd shenanigans
+  // even though SKILLS_ROOT is a fixed prefix — belt + suspenders.
+  if (!/^[a-z0-9-]+$/.test(name)) {
+    return `Error: skill name "${name}" must be kebab-case alphanumeric. Call list_skills.`;
+  }
+
+  const filePath = join(SKILLS_ROOT, name, 'SKILL.md');
+  if (!existsSync(filePath)) {
+    return `Error: skill "${name}" not found. Run list_skills to see what's available.`;
+  }
+
+  try {
+    const content = readFileSync(filePath, 'utf8');
+    return content;
+  } catch (err) {
+    return `Error reading skill "${name}": ${err instanceof Error ? err.message : 'Unknown error'}`;
   }
 }

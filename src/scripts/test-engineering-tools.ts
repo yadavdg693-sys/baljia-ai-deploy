@@ -122,6 +122,22 @@ async function main() {
 
   // ── Read-only / safe tools ──────────────────────────────────────────────
   const cases: TestCase[] = [
+    // Skills (Polsia-style knowledge layer)
+    {
+      tool: 'list_skills',
+      input: {},
+      expect: (out) => /cloudflare-workers/i.test(out) && /neon-postgres/i.test(out)
+        ? null
+        : `expected skills index but got: ${out.slice(0, 80)}`,
+    },
+    {
+      tool: 'read_skill',
+      input: { skill: 'cloudflare-workers' },
+      expect: (out) => /Hono/i.test(out) && /nodejs_compat/i.test(out)
+        ? null
+        : `expected SKILL.md content but got: ${out.slice(0, 80)}`,
+    },
+
     { tool: 'get_company_tech', input: {} },
     { tool: 'check_url_health', input: { url: 'https://example.com' } },
 

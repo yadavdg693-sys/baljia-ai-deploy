@@ -49,8 +49,22 @@ next-env.d.ts
 # temp planning files
 implementation_plan_gap*
 
-# claude code
-.claude/
+# claude code — specific ignores only. .claude/skills/ is intentionally
+# tracked: it's the engineering agent's knowledge layer (SKILL.md files
+# loaded at runtime via read_skill).
+.claude/scheduled_tasks.lock
+.claude/settings.local.json
+.claude/agents/
+.claude/backups/
+.claude/cache/
+.claude/debug/
+.claude/file-history/
+.claude/history.jsonl
+.claude/ide/
+.claude/mcp-needs-auth-cache.json
+.claude/paste-cache/
+.claude/projects/
+.claude/todos/
 
 # archived non-core material (mockups, old specs, parked code)
 /excluded/
