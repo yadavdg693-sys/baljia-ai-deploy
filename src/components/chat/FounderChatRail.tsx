@@ -7,6 +7,7 @@
 
 import { useState, useRef, useEffect, useCallback, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import type { ChatMessage as ChatMessageType, ChatAction, CEOStreamEvent } from '@/types';
+import { MarkdownBody } from '@/components/ui/MarkdownBody';
 
 interface FounderChatRailProps {
   companyId: string;
@@ -274,14 +275,15 @@ export function FounderChatRail({ companyId, warnings = [], onAction }: FounderC
                       />
                       Baljia
                     </small>
-                    <p>{msg.content}</p>
+                    {/* Markdown render — was raw <p>{content}</p> which left ** literal */}
+                    <MarkdownBody size="sm">{msg.content}</MarkdownBody>
                   </div>
                 )
               ))}
               {isStreaming && streamingText && (
                 <div className="thought-row">
                   <small>Baljia</small>
-                  <p>{streamingText}</p>
+                  <MarkdownBody size="sm">{streamingText}</MarkdownBody>
                 </div>
               )}
               {isStreaming && !streamingText && (
