@@ -87,6 +87,8 @@ const TAG_ROUTES: Record<string, number> = {
   'trend': 29,
 
   // ── Data (ID: 33) ──
+  // Bare 'data' tag was falling through to default (Engineering) — Aug 2026
+  'data': 33,
   // Source: Domain 2.4 "SQL, metrics, logs, analysis"
   // Day 21+: "Campaign analytics (open rate, reply rate, meeting rate)"
   'analytics': 33,

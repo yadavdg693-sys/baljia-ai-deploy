@@ -1730,13 +1730,29 @@ async function runWithGemini(
   const { GoogleGenerativeAI } = await import('@google/generative-ai');
   const genAI = new GoogleGenerativeAI(apiKey);
 
+  // Gemini's function_declarations format rejects `additionalProperties`
+  // anywhere in the schema (it's valid JSON Schema and works for OpenAI/Anthropic
+  // but not Gemini). Strip it recursively before sending. Properties whose
+  // schema had additionalProperties become free-form objects in Gemini's view —
+  // the agent can still populate them, just without structural hints.
+  function sanitizeForGemini(schema: unknown): unknown {
+    if (!schema || typeof schema !== 'object') return schema;
+    if (Array.isArray(schema)) return schema.map(sanitizeForGemini);
+    const cleaned: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(schema as Record<string, unknown>)) {
+      if (key === 'additionalProperties') continue;
+      cleaned[key] = sanitizeForGemini(value);
+    }
+    return cleaned;
+  }
+
   const model = genAI.getGenerativeModel({
     model: modelId,
     systemInstruction: systemPrompt,
     tools: [{ functionDeclarations: tools.map((t) => ({
       name: t.name,
       description: t.description,
-      parameters: t.input_schema,
+      parameters: sanitizeForGemini(t.input_schema),
     })) as any }],
   });
 

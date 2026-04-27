@@ -587,13 +587,26 @@ async function* streamWithOpenRouter(input: {
 // No streaming tool use — single-turn with function calling
 // ══════════════════════════════════════════════
 
-// Convert CEO_TOOLS from Anthropic format to Gemini function declarations
-// Anthropic schemas already have { type: 'object', properties: {...} } which is compatible
+// Convert CEO_TOOLS from Anthropic format to Gemini function declarations.
+// Anthropic schemas use { type: 'object', properties: {...}, additionalProperties: ... }
+// which OpenAI accepts but Gemini rejects with "Unknown name additionalProperties".
+// Strip it recursively before sending to Gemini.
+function sanitizeForGemini(schema: unknown): unknown {
+  if (!schema || typeof schema !== 'object') return schema;
+  if (Array.isArray(schema)) return schema.map(sanitizeForGemini);
+  const cleaned: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(schema as Record<string, unknown>)) {
+    if (key === 'additionalProperties') continue;
+    cleaned[key] = sanitizeForGemini(value);
+  }
+  return cleaned;
+}
+
 function buildGeminiTools(): any[] {
   return CEO_TOOLS.map((tool) => ({
     name: tool.name,
     description: tool.description,
-    parameters: tool.input_schema,
+    parameters: sanitizeForGemini(tool.input_schema),
   }));
 }
 
