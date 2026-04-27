@@ -76,11 +76,14 @@ The tables below remain as a map of what reference material exists.
 | Framework | Next.js 15 (App Router) + TypeScript | SSR for public pages, API routes, single deployment |
 | Platform DB | Neon PostgreSQL + Drizzle ORM | Serverless Postgres, code-first schema, type-safe queries |
 | Founder Company DBs | Neon (1 per company) | Programmatic provisioning via API, scale-to-zero |
-| Auth | Custom JWT (jose) + magic link + Google OAuth | Full control over session management |
+| Auth (founder) | Custom JWT (jose) + magic link + Google OAuth | Full control over session management |
+| Auth (LLM provider) | **Claude Code OAuth** (`~/.claude/.credentials.json`) → ANTHROPIC_API_KEY → Bedrock | Piggybacks on operator's Pro/Max subscription; no extra creds. See `src/lib/anthropic-oauth.ts`. |
 | Hosting | Cloudflare Workers (primary) + Render (legacy fallback) | See ADR-002. CF Workers serve API + agent execution + scheduled tasks; Render kept for environments without CF creds |
 | Queue/Events | Upstash Redis | Serverless pub/sub for event bus, task queue |
-| LLM (Agents) | Claude Sonnet 4 (`claude-sonnet-4-20250514`) | Best cost/quality for agent execution |
+| LLM (CEO chat) | **Claude Opus 4.6** (`claude-opus-4-6`) | Strategic, multi-tool orchestration, founder-facing. Override via `CEO_CLAUDE_MODEL`. |
+| LLM (Worker agents) | **Claude Sonnet 4.6** (`claude-sonnet-4-6`) | Engineering / Research / Data / Browser / etc. Strong on code + tool use, cheaper than Opus. Override via `WORKER_CLAUDE_MODEL`. |
 | LLM (Governance) | Claude Haiku 4.5 (`claude-haiku-4-5-20251001`) | Fast/cheap for routing, classification, credit quoting |
+| LLM provider chain (per call) | OpenAI Codex JWT → Claude (OAuth/API/Bedrock) → OpenRouter → Gemini Flash | Each fails over to the next. See `src/lib/agents/agent-factory.ts` and `ceo.agent.ts` |
 | Payments | Stripe | Subscriptions, credit purchases, billing portal |
 | Code Hosting | GitHub (platform-owned org) | Platform code; per-founder repos used only by Render legacy deploy path (CF deploys static landing directly to R2) |
 | Browser Automation | Browserbase | Cloud Playwright for Browser agent |
@@ -379,6 +382,67 @@ These are NON-NEGOTIABLE architectural choices. Do not deviate:
 - Right-side chat panel is resizable/expandable
 - Task board has 6 tabs: To Do, Recurring, In Progress, Completed, Rejected, Failed
 
+## Claude Code OAuth Integration
+
+The platform uses the operator's local Claude Code OAuth credentials (`~/.claude/.credentials.json`) as the **primary** Anthropic auth path. This means in dev — and any environment where the operator has run `claude login` — no `ANTHROPIC_API_KEY` env var is needed; calls go through their Pro/Max subscription.
+
+**Key file:** `src/lib/anthropic-oauth.ts`
+- `isAnthropicOAuthAvailable()` — sync check (file present + has token + has `user:inference` scope)
+- `getAnthropicOAuthToken()` — async, refreshes via `pi-ai`'s `refreshAnthropicToken` when expiry < 5 min
+- `createAnthropicWithOAuth()` — returns `{ client, isOAuth }` with the right SDK options (`apiKey: null`, `authToken: <token>`, `dangerouslyAllowBrowser: true`, full headers)
+- `withClaudeCodeIdentity(prompt, isOAuth)` — wraps system prompt to satisfy server-side check (API rejects OAuth requests whose first system text block isn't `"You are Claude Code, Anthropic's official CLI for Claude."`)
+
+**Provider chain (Anthropic):**
+1. Claude Code OAuth — preferred
+2. Direct `ANTHROPIC_API_KEY` (sk-ant-…)
+3. Bedrock long-term API key (`ABSK…`)
+4. Bedrock IAM (AWS env vars)
+
+Wired into: `ceo.agent.ts` (CEO chat), `agent-factory.ts` (worker agents), `governance.service.ts` (Haiku classifier), `services/onboarding/llm/small-llm.ts`.
+
+**Important: every callsite that builds a system prompt must call `withClaudeCodeIdentity(prompt, isOAuth)` — Anthropic rejects OAuth requests missing the identity prefix.**
+
+Smoke test: `npx tsx --env-file=.env.local src/scripts/test-anthropic-oauth.ts`
+
+## Founder UI parity (Tier 1 + Tier 2 shipped)
+
+Anything Baljia can do via chat tools, the founder can now do via dashboard buttons (and vice versa). Both paths share the same APIs and DB writes.
+
+| Action | Baljia (chat tool) | Founder (UI) |
+|---|---|---|
+| Create task | `create_task` | "+ New Task" button → `NewTaskDialog` |
+| Edit task | `edit_task` | Pencil icon in `TaskDetailDialog` |
+| Reject task | `reject_task` | Reject button on task card / dialog |
+| Approve + run | `approve_task` | "▶ Run Now" / "Approve" button |
+| Reorder / move-to-top | `reorder_task` / `move_task_to_top` | ▲ ↑ ↓ buttons on todo cards |
+| Execution logs | `get_task_execution_logs` | Logs panel inside `TaskDetailDialog` |
+| Recurring tasks (CRUD) | `get/create/update/delete_recurring_task` | "↻ Recurring" → `RecurringTasksDialog` |
+| Edit document | `update_document` | Pencil in `DocumentDialog` |
+| Add link | `update_link` | "+ Add link" → `AddLinkDialog` |
+| All read-only tools | many | Chat panel responses |
+
+**APIs added:** `POST/DELETE /api/links`, `PATCH/DELETE /api/recurring/[id]`, `GET /api/tasks/[taskId]/logs`. `updateTaskSchema` now also accepts `tag` + `queue_order`.
+
+**Approve flow:** `/api/tasks/:id/approve` now calls `launchTask` directly (fire-and-forget) instead of relying on a separate Render BG worker process. This means tasks actually run in dev — and in prod both launch paths coexist safely (atomic `WHERE status='todo'` claim ensures only one wins).
+
+## Chat → Dashboard refresh hook (the original "create task in chat" bug)
+
+`DashboardShell` exposes `refreshDashboard()` and `handleChatAction(action)`. The chat (`FounderChatRail` / `ChatPanel`) accepts an `onAction` prop and fires it for every `task_proposal` / `task_approved` / `document_updated` / `credit_quote` action. This drops update latency from up-to-30s (poll fallback) to ~20ms (verified at 17–88ms).
+
+**State-changing tools that don't yet emit ChatActions** (still rely on 30s poll OR page reload): `edit_task`, `reject_task`, `reorder_task`, `move_task_to_top`, `update_link`, recurring CRUD. Adding action emission to these = next "Tier 3" work.
+
+## Tests
+
+Three layers, all green as of this session:
+
+| Layer | What it covers | Run command |
+|---|---|---|
+| Unit (Vitest, 96 tests) | All 40 CEO tool handlers, mocked services | `npm test` |
+| Direct-API regression (Node script) | All 40 tools against real DB, fixture cleanup | `npx tsx --env-file=.env.local src/scripts/test-all-ceo-tools.ts` |
+| Frontend E2E (Playwright) | Chat → LLM → tool → DB → frontend (12 tests) + founder UI parity (5 tests) | `npx playwright test ceo-tools` and `npx playwright test founder-ui-parity` |
+| OAuth smoke test | Real Anthropic call via `~/.claude/.credentials.json` | `npx tsx --env-file=.env.local src/scripts/test-anthropic-oauth.ts` |
+| 3-agent test runner | Creates + approves tasks tagged engineering/research/data, polls execution | `npx tsx --env-file=.env.local src/scripts/test-3-agent-tasks.ts` |
+
 ## Current Build Status (spec vs code)
 
 The codebase has substantial implementation across all major areas. This section maps spec requirements to what exists and what still needs work.
@@ -517,3 +581,13 @@ npx tsx src/scripts/seed-db.ts  # Seed 9 agents into DB
 12. **Governance is hidden.** Founders never see governance decisions, execution modes, or verification levels. CEO translates everything into founder-safe language.
 
 13. **Platform ops is invisible.** The 9 platform-side agents are never exposed to founders. Founders see improved reliability, not the machinery.
+
+14. **Claude OAuth requires identity prefix in system prompt.** Any code that constructs an Anthropic client with `authToken` (the OAuth path) MUST prepend the Claude Code identity block (`"You are Claude Code, Anthropic's official CLI for Claude."`) as the first system text block, otherwise the API rejects the request. Use `withClaudeCodeIdentity(prompt, isOAuth)` from `@/lib/anthropic-oauth`. Bedrock and direct-API-key paths skip this step.
+
+15. **`update_link` and recurring task tools don't reflect in the UI yet for some surfaces.** `update_link` writes to `dashboard_links` but the dashboard's Links section also renders hardcoded company URLs (website / inbox / hosted-checkout). Recurring tasks are managed via `RecurringTasksDialog` but the main dashboard preview shows top-5 active tasks only — recurring lives on `/dashboard/[id]/tasks`. Both are existing product gaps, not regressions.
+
+16. **Approve route launches synchronously (in-process).** `/api/tasks/:id/approve` calls `launchTask(taskId)` fire-and-forget. In production the Render BG worker (`scripts/worker-boot.ts`) ALSO polls; both paths use atomic `WHERE status='todo'` claim so only one wins. Don't add a third launcher without thinking through the race.
+
+17. **CEO chat voice = Polsia-style terse.** The Communication Style section in `ceo.prompt.ts` enforces ≤ 2-sentence confirmations, no filler ("Here's…", "I'll go ahead and…"), no link summary in confirmations, no emoji default. If you find yourself writing a long reply: write it, then delete half. The chat rail renders markdown via `MarkdownBody` so `**bold**` formats correctly — don't over-bold.
+
+18. **Daily spend cap is enforced per plan.** Trial = 10 credits/day. Hitting the cap throws `"Daily spend cap reached"` from `creditService.claimSlotAndCharge` — surfaced as a launch failure in the worker log. Use `ensureCredits()` in test fixtures, OR upgrade the company's plan during dev.
