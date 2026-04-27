@@ -12,12 +12,16 @@
 import { createLogger } from '@/lib/logger';
 import { callSmallLLM } from '../llm/small-llm';
 import { sanitizeForFounder, type SanitizeViolation } from '@/lib/founder-safety/sanitize';
+import type { z } from 'zod';
 
 const log = createLogger('OnboardingJsonMode');
 
 export interface JsonModeOptions {
   maxTokens?: number;
   retryOnce?: boolean;
+  /** Runtime contract for model output. Parseable JSON is not enough for
+   * onboarding because missing keys can quietly corrupt later stages. */
+  schema?: z.ZodType<unknown>;
   /** Top-level string fields to scan for banned terms. Use for simple
    *  shapes like `{ refined_idea: string, changes_made: string }`. */
   sanitizeFields?: string[];
@@ -43,15 +47,17 @@ Respond with ONLY a valid JSON object. No prose before or after. No markdown cod
   try {
     const response = await callSmallLLM(jsonOnlyPrompt, maxTokens);
     parsed = parseJson<T>(response);
+    parsed = validateSchema<T>(parsed, opts.schema);
   } catch (err) {
     if (opts.retryOnce === false) throw err;
-    log.warn('JSON parse failed, retrying once', { error: err instanceof Error ? err.message : String(err) });
+    log.warn('JSON parse/validation failed, retrying once', { error: err instanceof Error ? err.message : String(err) });
 
     const retryPrompt = `${prompt}
 
-CRITICAL: Your previous response could not be parsed as JSON. Respond with ONLY a valid JSON object, starting with { and ending with }. No prose, no markdown, no commentary.`;
+CRITICAL: Your previous response could not be parsed or did not match the required schema. Respond with ONLY a valid JSON object, starting with { and ending with }. Include every required key exactly as requested. No prose, no markdown, no commentary.`;
     const response = await callSmallLLM(retryPrompt, maxTokens);
     parsed = parseJson<T>(response);
+    parsed = validateSchema<T>(parsed, opts.schema);
   }
 
   // Founder-safety screen — skip entirely if no fields declared
@@ -82,19 +88,20 @@ Respond with ONLY a valid JSON object, starting with { and ending with }.`;
   try {
     const retryResponse = await callSmallLLM(avoidancePrompt, maxTokens);
     const retryParsed = parseJson<T>(retryResponse);
+    const validatedRetryParsed = validateSchema<T>(retryParsed, opts.schema);
     const retryViolations = screenForBanned(
-      retryParsed,
+      validatedRetryParsed,
       opts.sanitizeFields ?? [],
       opts.sanitizeArrayOfObjects ?? [],
     );
     if (retryViolations.length === 0) {
-      return retryParsed;
+      return validatedRetryParsed;
     }
     // Still contaminated — redact and return
     log.error('LLM output still contaminated after avoidance retry — redacting in place', {
       remainingLabels: Array.from(new Set(retryViolations.map((v) => v.label))),
     });
-    return redactInPlace(retryParsed, opts.sanitizeFields ?? [], opts.sanitizeArrayOfObjects ?? []);
+    return redactInPlace(validatedRetryParsed, opts.sanitizeFields ?? [], opts.sanitizeArrayOfObjects ?? []);
   } catch (retryErr) {
     log.error('Avoidance retry failed — redacting first-pass output', {
       error: retryErr instanceof Error ? retryErr.message : String(retryErr),
@@ -190,4 +197,19 @@ function parseJson<T>(raw: string): T {
   }
   const jsonStr = cleaned.slice(firstBrace, lastBrace + 1);
   return JSON.parse(jsonStr) as T;
+}
+
+function validateSchema<T>(parsed: T, schema: z.ZodType<unknown> | undefined): T {
+  if (!schema) return parsed;
+  const result = schema.safeParse(parsed);
+  if (result.success) return result.data as T;
+
+  const issues = result.error.issues
+    .slice(0, 6)
+    .map((issue) => {
+      const path = issue.path.length ? issue.path.join('.') : '(root)';
+      return `${path}: ${issue.message}`;
+    })
+    .join('; ');
+  throw new Error(`JSON schema validation failed: ${issues}`);
 }

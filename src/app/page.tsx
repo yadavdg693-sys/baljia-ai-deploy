@@ -148,7 +148,7 @@ export default function LandingPage() {
             { icon: '⚡', title: 'Engineering', desc: 'Builds your full-stack product — landing pages, APIs, databases. Deploys automatically.' },
             { icon: '📣', title: 'Marketing', desc: 'Runs Twitter, cold outreach, and Meta ads. Writes copy, schedules posts, tracks performance.' },
             { icon: '🔍', title: 'Research', desc: 'Deep market analysis, competitor mapping, and demand signals. Cites real sources.' },
-            { icon: '🧠', title: 'CEO Chat', desc: 'Your AI co-founder. Discuss strategy, approve tasks, get updates — all in natural language.' },
+            { icon: '🧠', title: 'Baljia Chat', desc: 'Your AI co-founder. Discuss strategy, approve tasks, get updates — all in natural language.' },
           ].map((f, i) => (
             <div key={i} style={{
               background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 18, padding: 20,
@@ -174,7 +174,7 @@ export default function LandingPage() {
           {[
             { n: '01', title: 'Describe your vision', desc: 'Tell Baljia your idea — or let it surprise you with one based on your background.' },
             { n: '02', title: 'AI Angel builds', desc: 'Research, naming, landing page, market analysis, and starter tasks — all in 60 seconds.' },
-            { n: '03', title: 'Approve & grow', desc: 'Review tasks, chat with the CEO, and watch your company grow autonomously.' },
+            { n: '03', title: 'Approve & grow', desc: 'Review tasks, chat with Baljia, and watch your company grow autonomously.' },
           ].map((s, i) => (
             <div key={i} style={{ display: 'flex', gap: 20, alignItems: 'start' }}>
               <div style={{

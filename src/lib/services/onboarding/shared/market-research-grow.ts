@@ -8,6 +8,7 @@
 import { isTavilyAvailable } from '@/lib/tavily';
 import { trackedTavilySearch as tavilySearchText } from './tracked-calls';
 import { callSmallLLMJson } from './json-mode';
+import { GrowMarketResearchSchema } from './schemas';
 import { emitActivity } from '../stage-runner';
 import { persistMarketResearch, renderGrowMarkdown } from './market-research-render';
 import {
@@ -161,6 +162,7 @@ Rules — shape:
   const result = await callSmallLLMJson<GrowMarketResearch>(buildPrompt(initialRaw), {
     maxTokens: 3000,
     retryOnce: true,
+    schema: GrowMarketResearchSchema,
     sanitizeFields: ['business_overview', 'revenue_model', 'notable_validation', 'why_this_fits_you'],
     sanitizeArrayOfObjects: ['competitors', 'first_priorities'],
   });

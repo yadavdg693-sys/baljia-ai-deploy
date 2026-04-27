@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="generator" content="baljia-landing/editorial">
+<meta name="x-baljia-industry" content="micro_saas">
+<meta name="x-baljia-style" content="Flat Design">
+<meta name="x-baljia-pattern" content="Minimal Single Column">
+<title>Milesto — Shipment workspace for export coordination teams</title>
+<meta name="description" content="Milesto is a web workspace for export coordinators and owner-operators handling repeat shipments. It keeps milestones, supplier follow-ups, and export files in one current record.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700&family=Work+Sans:wght@400;500;600;700&display=swap">
+<style>
+:root {
+  --accent: #6366F1;
+  --accent-soft: hsl(239, 84%, 100%);
+  --accent-strong: #059669;
+  --ink: #1E1B4B;
+  --ink-soft: #64748B;
+  --bg: #F5F3FF;
+  --bg-elev: #EBEFF9;
+  --line: #E0E7FF;
+  --font-heading: "Outfit", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-body: "Work Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --heading-tt: none;
+  --heading-ls: -0.022em;
+  --heading-w: 800;
+  --section-py: 56px;
+  --hero-py: 64px 0 48px;
+  --card-p: 20px;
+  --card-gap: 16px;
+  --container-px: 24px;
+  --radius: 2px;
+  --shadow: none;
+  --transition: 150ms ease;
+  --border-w: 1px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --accent: hsl(239, 75%, 70%);
+    --accent-soft: hsl(220, 14%, 14%);
+    --ink: hsl(220, 10%, 92%);
+    --ink-soft: hsl(220, 8%, 65%);
+    --bg: hsl(220, 16%, 8%);
+    --bg-elev: hsl(220, 14%, 11%);
+    --line: hsl(220, 12%, 18%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation: none !important; }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: var(--font-body);
+  color: var(--ink);
+  background: var(--bg);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+.heading {
+  font-family: var(--font-heading);
+  font-weight: var(--heading-w);
+  letter-spacing: var(--heading-ls);
+  text-transform: var(--heading-tt);
+  margin: 0;
+}
+.brand { font-family: var(--font-heading); text-transform: var(--heading-tt); letter-spacing: var(--heading-ls); font-size: 22px; font-weight: var(--heading-w); }
+.brand-tag { font-size: 14px; color: var(--ink-soft); margin-top: 4px; }
+section h2, .closing h2 {
+  font-family: var(--font-heading); text-transform: var(--heading-tt); letter-spacing: var(--heading-ls);
+  font-weight: var(--heading-w);
+}
+footer {
+  padding: 32px 0 48px; font-size: 13px; color: var(--ink-soft);
+  border-top: var(--border-w) solid var(--line);
+  display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px;
+}
+footer a { color: var(--ink-soft); text-decoration: none; border-bottom: var(--border-w) solid transparent; }
+footer a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+.wrap { max-width: 720px; margin: 0 auto; padding: 0 var(--container-px); }
+header { padding: 56px 0 24px; border-bottom: var(--border-w) solid var(--line); }
+.hero { padding: 64px 0 32px; }
+.hero h1 { font-family: var(--font-heading); text-transform: var(--heading-tt); letter-spacing: var(--heading-ls); font-weight: var(--heading-w); font-size: clamp(40px, 7vw, 72px); line-height: 1.04; margin: 0 0 28px; max-width: 18ch; }
+.hero p { font-size: 20px; color: var(--ink); opacity: 0.78; margin: 0; max-width: 56ch; line-height: 1.5; }
+section { padding: var(--section-py) 0; border-top: var(--border-w) solid var(--line); }
+section h2 { font-size: clamp(18px, 2.2vw, 22px); margin: 0 0 28px; color: var(--ink-soft); }
+ol.ed-caps { list-style: none; padding: 0; margin: 0; display: grid; gap: 28px; }
+.ed-cap { display: grid; grid-template-columns: 60px 1fr; align-items: baseline; gap: 0; border-radius: var(--radius); padding: 4px 0; transition: background var(--transition); }
+.ed-cap-num { font-family: var(--font-heading); font-size: 14px; color: var(--accent); letter-spacing: 0.04em; }
+.ed-cap h3 { font-family: var(--font-heading); font-size: 22px; margin: 0 0 6px; font-weight: var(--heading-w); letter-spacing: var(--heading-ls); }
+.ed-cap p { margin: 0; font-size: 17px; line-height: 1.55; opacity: 0.8; }
+.ed-step { font-size: 17px; line-height: 1.6; margin: 0 0 14px; max-width: 60ch; }
+.ed-step strong { font-family: var(--font-heading); font-weight: var(--heading-w); color: var(--accent); }
+.ed-diff { font-size: 17px; line-height: 1.55; margin: 0 0 12px; max-width: 60ch; padding-left: 0; border-left: var(--border-w) solid var(--accent); padding: 4px 0 4px 18px; box-shadow: var(--shadow); border-radius: var(--radius); background: var(--bg-elev); }
+.closing { padding: 96px 0 64px; border-top: var(--border-w) solid var(--line); }
+.closing h2 { font-size: clamp(28px, 4.5vw, 44px); margin: 0 0 18px; max-width: 22ch; line-height: 1.12; color: var(--ink); }
+.closing p { font-size: 18px; opacity: 0.78; max-width: 56ch; margin: 0; line-height: 1.55; }
+@media (max-width: 600px) { .hero h1 { font-size: clamp(32px, 9vw, 48px); } .ed-cap { grid-template-columns: 44px 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">Milesto</div>
+    <div class="brand-tag">Shipment workspace for export coordination teams</div>
+  </header>
+  <div class="hero" id="hero">
+    <h1>Stop running shipments across scattered tools</h1>
+    <p>Milesto is a web workspace for export coordinators and owner-operators handling repeat shipments. It keeps milestones, supplier follow-ups, and export files in one current record.</p>
+  </div>
+  <section id="what">
+    <h2>What it does</h2>
+    <ol class="ed-caps">
+      <li class="ed-cap">
+        <span class="ed-cap-num">01</span>
+        <div><h3>Supplier PO follow-up</h3><p>Track each supplier purchase order against the shipment and record who is late, what changed, and what still needs confirmation.</p></div>
+      </li>
+      <li class="ed-cap">
+        <span class="ed-cap-num">02</span>
+        <div><h3>Shipment milestone timeline</h3><p>Update ETD, booking, cargo readiness, and document status on one timeline so the latest shipment picture lives in a single place.</p></div>
+      </li>
+      <li class="ed-cap">
+        <span class="ed-cap-num">03</span>
+        <div><h3>Document pack assembly</h3><p>Generate a shipment pack with the commercial invoice, packing list, booking details, and a ready-to-send customer email from the same record.</p></div>
+      </li>
+    </ol>
+  </section>
+  <section id="how">
+    <h2>How it works</h2>
+    <p class="ed-step"><strong>1. Create one shipment.</strong> Start a shipment record and attach the suppliers, booking details, dates, and document requirements tied to that export.</p><p class="ed-step"><strong>2. Update as replies arrive.</strong> Capture supplier, forwarder, and buyer updates directly on the shipment so ETD, readiness, and missing files stay visible.</p><p class="ed-step"><strong>3. Send the full pack.</strong> Compile the current shipment documents and customer update into one package instead of rebuilding the story across tabs and chats.</p>
+  </section>
+  <section id="diff">
+    <h2>What makes this different</h2>
+    <p class="ed-diff">— It replaces spreadsheet, email, and chat handoffs with one shipment record instead of asking teams to reconcile the same update in three places.</p><p class="ed-diff">— It gives exporters direct operational control without making a freight forwarder the place where shipment truth gets rebuilt.</p><p class="ed-diff">— It stays focused on export coordination work, rather than the broader setup and customization burden that can come with a full ERP like Odoo.</p>
+  </section>
+  <div class="closing" id="closing">
+    <h2>Export work should feel like a shipment desk you trust.</h2>
+    <p>Built in VN, Milesto is aimed at making every booking change, supplier delay, and document gap visible in one place. When the record stays current, customer updates become part of the workflow instead of extra work at the end of the day.</p>
+  </div>
+  <footer>
+    <div>© 2026 Milesto</div>
+    <div>Built and operated by <a href="https://baljia.ai">Baljia</a></div>
+  </footer>
+</div>
+</body>
+</html>

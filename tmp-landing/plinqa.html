@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="generator" content="baljia-landing/utility-cards">
+<meta name="x-baljia-industry" content="saas_general">
+<meta name="x-baljia-style" content="Glassmorphism">
+<meta name="x-baljia-pattern" content="Hero + Features + CTA">
+<title>Plinqa — Product work, planned and shipped in one place</title>
+<meta name="description" content="Plinqa is a product development system for product, design, and engineering teams. It keeps requests, priorities, and delivery in one place so work moves without constant manual coordination.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600;700&family=Open+Sans:wght@400;500;600;700&display=swap">
+<style>
+:root {
+  --accent: #2563EB;
+  --accent-soft: hsl(221, 83%, 93%);
+  --accent-strong: #EA580C;
+  --ink: #1E293B;
+  --ink-soft: #64748B;
+  --bg: #F8FAFC;
+  --bg-elev: #E9EFF8;
+  --line: #E2E8F0;
+  --font-heading: "Poppins", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-body: "Open Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --heading-tt: none;
+  --heading-ls: -0.022em;
+  --heading-w: 800;
+  --section-py: 56px;
+  --hero-py: 64px 0 48px;
+  --card-p: 20px;
+  --card-gap: 16px;
+  --container-px: 24px;
+  --radius: 16px;
+  --shadow: 0 10px 30px rgba(15,23,42,0.12);
+  --transition: 300ms ease;
+  --border-w: 1px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --accent: hsl(221, 75%, 68%);
+    --accent-soft: hsl(220, 14%, 14%);
+    --ink: hsl(220, 10%, 92%);
+    --ink-soft: hsl(220, 8%, 65%);
+    --bg: hsl(220, 16%, 8%);
+    --bg-elev: hsl(220, 14%, 11%);
+    --line: hsl(220, 12%, 18%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation: none !important; }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: var(--font-body);
+  color: var(--ink);
+  background: var(--bg);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+.heading {
+  font-family: var(--font-heading);
+  font-weight: var(--heading-w);
+  letter-spacing: var(--heading-ls);
+  text-transform: var(--heading-tt);
+  margin: 0;
+}
+.brand { font-family: var(--font-heading); text-transform: var(--heading-tt); letter-spacing: var(--heading-ls); font-size: 22px; font-weight: var(--heading-w); }
+.brand-tag { font-size: 14px; color: var(--ink-soft); margin-top: 4px; }
+section h2, .closing h2 {
+  font-family: var(--font-heading); text-transform: var(--heading-tt); letter-spacing: var(--heading-ls);
+  font-weight: var(--heading-w);
+}
+footer {
+  padding: 32px 0 48px; font-size: 13px; color: var(--ink-soft);
+  border-top: var(--border-w) solid var(--line);
+  display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px;
+}
+footer a { color: var(--ink-soft); text-decoration: none; border-bottom: var(--border-w) solid transparent; }
+footer a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+.wrap { max-width: 860px; margin: 0 auto; padding: 0 var(--container-px); }
+header { padding: 32px 0 16px; }
+.hero { padding: var(--hero-py); }
+.hero h1 { font-family: var(--font-heading); text-transform: var(--heading-tt); letter-spacing: var(--heading-ls); font-weight: var(--heading-w); font-size: clamp(34px, 5.4vw, 56px); line-height: 1.08; margin: 0 0 20px; }
+.hero p { font-size: 18px; color: var(--ink); opacity: 0.85; margin: 0; max-width: 640px; }
+section { padding: var(--section-py) 0; border-top: var(--border-w) solid var(--line); }
+section h2 { font-size: clamp(20px, 2.5vw, 26px); margin: 0 0 24px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--card-gap); }
+.card { padding: var(--card-p); border: var(--border-w) solid var(--line); border-radius: var(--radius); background: var(--bg-elev); box-shadow: var(--shadow); transition: border-color var(--transition), transform var(--transition); }
+.card:hover { border-color: var(--accent); transform: translateY(-1px); }
+.card h3 { font-family: var(--font-heading); text-transform: var(--heading-tt); letter-spacing: var(--heading-ls); font-size: 16px; margin: 0 0 8px; font-weight: var(--heading-w); }
+.card p { font-size: 14.5px; color: var(--ink); opacity: 0.85; margin: 0; line-height: 1.55; }
+ol.steps { list-style: none; padding: 0; margin: 0; display: grid; gap: 22px; }
+.step { display: flex; gap: 18px; align-items: flex-start; }
+.step-num { flex: 0 0 38px; width: 38px; height: 38px; border-radius: 50%; background: var(--accent); color: #fff; display: inline-flex; align-items: center; justify-content: center; font-family: var(--font-heading); font-weight: var(--heading-w); font-size: 15px; }
+.step h3 { font-family: var(--font-heading); text-transform: var(--heading-tt); letter-spacing: var(--heading-ls); font-size: 16px; margin: 7px 0 4px; font-weight: var(--heading-w); }
+.step p { font-size: 15px; color: var(--ink); opacity: 0.85; margin: 0; }
+ul.diff { list-style: none; padding: 0; margin: 0; display: grid; gap: 12px; }
+ul.diff li { padding: 14px 16px 14px 40px; border: var(--border-w) solid var(--line); border-radius: var(--radius); position: relative; font-size: 15px; background: var(--bg-elev); box-shadow: var(--shadow); }
+ul.diff li::before { content: ""; position: absolute; left: 16px; top: 50%; transform: translateY(-50%); width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.closing { padding: calc(var(--section-py) * 1.4) 0 var(--section-py); text-align: center; border-top: var(--border-w) solid var(--line); }
+.closing h2 { font-size: clamp(24px, 3.4vw, 32px); margin: 0 0 14px; }
+.closing p { font-size: 16px; color: var(--ink); opacity: 0.85; margin: 0 auto; max-width: 600px; }
+@media (max-width: 600px) { .hero { padding: 40px 0 32px; } .hero h1 { font-size: clamp(28px, 8vw, 40px); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">Plinqa</div>
+    <div class="brand-tag">Product work, planned and shipped in one place</div>
+  </header>
+  <div class="hero" id="hero">
+    <h1>Clear product work from request to release</h1>
+    <p>Plinqa is a product development system for product, design, and engineering teams. It keeps requests, priorities, and delivery in one place so work moves without constant manual coordination.</p>
+  </div>
+  <section id="what">
+    <h2>What it does</h2>
+    <div class="cards">
+        <div class="card">
+          <h3>Capture incoming work</h3>
+          <p>Collect customer feedback, bug reports, and internal requests in one system. Turn loose inputs into trackable items with ownership, status, and priority.</p>
+        </div>
+        <div class="card">
+          <h3>Organize delivery queues</h3>
+          <p>Triage issues, shape backlog items, and group related work into scoped projects. Teams can keep planning close to the work that is actually being built.</p>
+        </div>
+        <div class="card">
+          <h3>Connect execution tools</h3>
+          <p>Link product work to tools like GitHub and Slack so updates stay tied to the source task. That reduces handoff gaps between planning and delivery.</p>
+        </div>
+    </div>
+  </section>
+  <section id="how">
+    <h2>How it works</h2>
+    <ol class="steps">
+        <li class="step">
+          <span class="step-num">1</span>
+          <div><h3>Capture a request</h3><p>Start with feedback, a bug, or an internal ask and record it as a structured item.</p></div>
+        </li>
+        <li class="step">
+          <span class="step-num">2</span>
+          <div><h3>Triage and scope</h3><p>Assign priority, owner, and status, then group related tasks into backlog items or projects.</p></div>
+        </li>
+        <li class="step">
+          <span class="step-num">3</span>
+          <div><h3>Track to completion</h3><p>Move work through repeatable workflows while keeping updates connected across the tools your team already uses.</p></div>
+        </li>
+    </ol>
+  </section>
+  <section id="diff">
+    <h2>What makes this different</h2>
+    <ul class="diff"><li>Built to avoid the complexity and steep setup burden that often make Jira feel heavy for fast-moving teams.</li><li>Goes beyond GitHub Issues by giving product and design stakeholders a clearer place to work alongside engineering.</li><li>Designed as the system where humans and AI operate inside the same workflow, not as separate tools producing disconnected output.</li></ul>
+  </section>
+  <div class="closing" id="closing">
+    <h2>Product teams and AI should work from the same system.</h2>
+    <p>Plinqa is being shaped around a simple idea: planning, decisions, and execution belong in one place. The result should be a calmer way to decide what matters next and get it built.</p>
+  </div>
+  <footer>
+    <div>© 2026 Plinqa</div>
+    <div>Built and operated by <a href="https://baljia.ai">Baljia</a></div>
+  </footer>
+</div>
+</body>
+</html>

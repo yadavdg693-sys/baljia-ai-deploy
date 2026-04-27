@@ -7,11 +7,11 @@ import * as authService from '@/lib/services/auth.service';
 import { signJWT, setSessionCookie } from '@/lib/auth';
 
 function safeRedirectPath(raw: string | null): string {
-  if (!raw) return '/callback';
+  if (!raw) return '/portfolio';
   // Must be a relative path: starts with "/", not "//", not containing a scheme
-  if (!raw.startsWith('/')) return '/callback';
-  if (raw.startsWith('//')) return '/callback';
-  if (raw.includes(':')) return '/callback';
+  if (!raw.startsWith('/')) return '/portfolio';
+  if (raw.startsWith('//')) return '/portfolio';
+  if (raw.includes(':')) return '/portfolio';
   return raw;
 }
 

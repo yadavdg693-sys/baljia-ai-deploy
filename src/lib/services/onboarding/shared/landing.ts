@@ -50,6 +50,7 @@ import {
 import { provisionWildcardSubdomain } from '@/lib/services/domain.service';
 import { callSmallLLM } from '../llm/small-llm';
 import { callSmallLLMJson } from './json-mode';
+import { LandingContentSchema } from './schemas';
 import { emitActivity } from '../stage-runner';
 import {
   resolveDesignTokens,
@@ -469,12 +470,18 @@ ${facts.competitors.map((c) => `  - ${c.name}: gap — ${c.gap}`).join('\n')}`
 ${antiPatterns.map((a) => `  - ${a}`).join('\n')}`
     : '';
 
+  const onboardingBriefBlock = ctx.onboardingBrief
+    ? `CANONICAL ONBOARDING BRIEF:
+${JSON.stringify(ctx.onboardingBrief, null, 2)}`
+    : '';
+
   return `You are generating the Day-0 landing page CONTENT for ${ctx.companyName}, a business in PRE-LAUNCH / early-access state.
 
 INDUSTRY CLASSIFICATION (assigned by the system, NOT for you to override): ${industryRow.name}
 Industry-specific considerations: ${industryRow.considerations}
 
 WHAT YOU HAVE
+${onboardingBriefBlock}
 - Mission: ${mission}
 ${whatWereBuilding ? `- What we're building: ${whatWereBuilding}` : ''}
 ${whereWereHeaded ? `- Where we're headed: ${whereWereHeaded}` : ''}
@@ -1385,6 +1392,7 @@ export async function generateLandingPage(ctx: PipelineContext): Promise<void> {
     let content = await callSmallLLMJson<LandingContent>(prompt, {
       maxTokens: 2400,
       retryOnce: true,
+      schema: LandingContentSchema,
     });
     validateLandingContent(content);
 
@@ -1401,7 +1409,11 @@ export async function generateLandingPage(ctx: PipelineContext): Promise<void> {
 
 CRITICAL — your previous hero.headline contained the phrase "${check.phrase}". This is a hollow / generic-AI marker. Rewrite the entire JSON, but specifically craft a hero.headline that is concrete and specific to ${ctx.companyName} without using "${check.phrase}" or any other word in this list: ${HOLLOW_PHRASES.join(', ')}.`;
       try {
-        const retry = await callSmallLLMJson<LandingContent>(fixPrompt, { maxTokens: 2400, retryOnce: false });
+        const retry = await callSmallLLMJson<LandingContent>(fixPrompt, {
+          maxTokens: 2400,
+          retryOnce: false,
+          schema: LandingContentSchema,
+        });
         validateLandingContent(retry);
         content = retry;
       } catch (retryErr) {

@@ -74,7 +74,8 @@ function formatStructuredContent(docType: string, data: Record<string, unknown>)
 export function DocumentDialog({ doc, onClose, companySlug }: DocumentDialogProps) {
   if (!doc) return null;
 
-  const isLanding = doc.doc_type === 'landing_page';
+  const activeDoc = doc;
+  const isLanding = activeDoc.doc_type === 'landing_page';
   const liveUrl = isLanding && companySlug ? `https://${companySlug}.baljia.app` : null;
 
   // FIX: Detect JSON content and format it properly
@@ -83,31 +84,31 @@ export function DocumentDialog({ doc, onClose, companySlug }: DocumentDialogProp
       return (
         <details className="mb-2">
           <summary className="cursor-pointer text-sm text-text-secondary">
-            View HTML source ({doc.content?.length ?? 0} bytes)
+            View HTML source ({activeDoc.content?.length ?? 0} bytes)
           </summary>
           <pre className="mt-2 text-xs font-mono bg-surface-secondary rounded p-3 overflow-x-auto whitespace-pre-wrap break-all">
-            {doc.content ?? '(empty)'}
+            {activeDoc.content ?? '(empty)'}
           </pre>
         </details>
       );
     }
 
-    if (!doc.content || doc.content.trim().length === 0) {
+    if (!activeDoc.content || activeDoc.content.trim().length === 0) {
       return <p className="text-sm text-text-secondary italic">(empty)</p>;
     }
 
     // Try to parse as JSON — market research and mission docs are often stored as JSON
     try {
-      const parsed = JSON.parse(doc.content);
+      const parsed = JSON.parse(activeDoc.content);
       if (typeof parsed === 'object' && parsed !== null) {
-        const formatted = formatStructuredContent(doc.doc_type, parsed);
+        const formatted = formatStructuredContent(activeDoc.doc_type, parsed);
         return <MarkdownBody>{formatted}</MarkdownBody>;
       }
     } catch {
       // Not JSON — render as markdown
     }
 
-    return <MarkdownBody>{doc.content}</MarkdownBody>;
+    return <MarkdownBody>{activeDoc.content}</MarkdownBody>;
   }
 
   return (
@@ -124,13 +125,13 @@ export function DocumentDialog({ doc, onClose, companySlug }: DocumentDialogProp
         {/* Header */}
         <div className="flex items-center justify-between gap-3 px-5 py-3 border-b border-border-default">
           <div className="min-w-0">
-            <h2 className="text-base font-semibold truncate">{doc.title || doc.doc_type}</h2>
+            <h2 className="text-base font-semibold truncate">{activeDoc.title || activeDoc.doc_type}</h2>
             <div className="flex items-center gap-2 mt-0.5">
-              <Badge variant="default" size="sm">{doc.doc_type}</Badge>
-              <span className="text-xs text-text-muted">v{doc.version}</span>
-              {doc.updated_at && (
+              <Badge variant="default" size="sm">{activeDoc.doc_type}</Badge>
+              <span className="text-xs text-text-muted">v{activeDoc.version}</span>
+              {activeDoc.updated_at && (
                 <span className="text-xs text-text-muted">
-                  updated {new Date(doc.updated_at).toLocaleDateString()}
+                  updated {new Date(activeDoc.updated_at).toLocaleDateString()}
                 </span>
               )}
             </div>

@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Orderloom — Order coordination for lean export teams</title>
+<meta name="description" content="Orderloom is a web app for export sales coordinators and owner-operators handling cross-border orders. It keeps quotes, samples, documents, and payment follow-ups visible before delays compound.">
+
+<style>
+:root {
+  --accent: hsl(212, 50%, 42%);
+  --accent-soft: hsl(212, 30%, 96%);
+  --accent-strong: hsl(212, 50%, 32%);
+  --ink: hsl(220, 15%, 12%);
+  --ink-soft: hsl(220, 9%, 45%);
+  --bg: hsl(0, 0%, 100%);
+  --bg-elev: hsl(212, 30%, 98%);
+  --line: hsl(220, 13%, 91%);
+  --font-heading: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --heading-tt: none;
+  --heading-ls: -0.022em;
+  --heading-w: 800;
+  --section-py: 40px;
+  --hero-py: 48px 0 32px;
+  --card-p: 16px;
+  --card-gap: 12px;
+  --container-px: 20px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --accent: hsl(212, 55%, 60%);
+    --accent-soft: hsl(212, 25%, 14%);
+    --ink: hsl(220, 10%, 92%);
+    --ink-soft: hsl(220, 8%, 65%);
+    --bg: hsl(220, 16%, 8%);
+    --bg-elev: hsl(220, 14%, 11%);
+    --line: hsl(220, 12%, 18%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation: none !important; }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: var(--font-body);
+  color: var(--ink);
+  background: var(--bg);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+.wrap { max-width: 860px; margin: 0 auto; padding: 0 var(--container-px); }
+.heading {
+  font-family: var(--font-heading);
+  font-weight: var(--heading-w);
+  letter-spacing: var(--heading-ls);
+  text-transform: var(--heading-tt);
+  margin: 0;
+}
+header { padding: 32px 0 16px; }
+.brand { font-family: var(--font-heading); text-transform: var(--heading-tt); letter-spacing: var(--heading-ls); font-size: 22px; font-weight: var(--heading-w); }
+.brand-tag { font-size: 14px; color: var(--ink-soft); margin-top: 4px; }
+
+.hero { padding: var(--hero-py); }
+.hero h1 {
+  font-family: var(--font-heading);
+  text-transform: var(--heading-tt);
+  letter-spacing: var(--heading-ls);
+  font-weight: var(--heading-w);
+  font-size: clamp(34px, 5.4vw, 56px);
+  line-height: 1.08;
+  margin: 0 0 20px;
+}
+.hero p { font-size: 18px; color: var(--ink); opacity: 0.85; margin: 0; max-width: 640px; }
+
+section { padding: var(--section-py) 0; border-top: 1px solid var(--line); }
+section h2 {
+  font-family: var(--font-heading);
+  text-transform: var(--heading-tt);
+  letter-spacing: var(--heading-ls);
+  font-weight: var(--heading-w);
+  font-size: clamp(20px, 2.5vw, 26px);
+  margin: 0 0 24px;
+}
+
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--card-gap); }
+.card {
+  padding: var(--card-p); border: 1px solid var(--line); border-radius: 10px;
+  background: var(--bg-elev);
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+.card:hover { border-color: var(--accent); transform: translateY(-1px); }
+.card h3 {
+  font-family: var(--font-heading); text-transform: var(--heading-tt); letter-spacing: var(--heading-ls);
+  font-size: 16px; margin: 0 0 8px; font-weight: var(--heading-w);
+}
+.card p { font-size: 14.5px; color: var(--ink); opacity: 0.85; margin: 0; line-height: 1.55; }
+
+ol.steps { list-style: none; padding: 0; margin: 0; display: grid; gap: 22px; }
+.step { display: flex; gap: 18px; align-items: flex-start; }
+.step-num {
+  flex: 0 0 38px; width: 38px; height: 38px; border-radius: 50%;
+  background: var(--accent); color: #fff;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-family: var(--font-heading); font-weight: var(--heading-w); font-size: 15px;
+}
+.step h3 {
+  font-family: var(--font-heading); text-transform: var(--heading-tt); letter-spacing: var(--heading-ls);
+  font-size: 16px; margin: 7px 0 4px; font-weight: var(--heading-w);
+}
+.step p { font-size: 15px; color: var(--ink); opacity: 0.85; margin: 0; }
+
+ul.diff { list-style: none; padding: 0; margin: 0; display: grid; gap: 12px; }
+ul.diff li {
+  padding: 14px 16px 14px 40px; border: 1px solid var(--line); border-radius: 8px;
+  position: relative; font-size: 15px; background: var(--bg-elev);
+}
+ul.diff li::before {
+  content: ""; position: absolute; left: 16px; top: 50%; transform: translateY(-50%);
+  width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
+}
+
+.closing { padding: calc(var(--section-py) * 1.4) 0 var(--section-py); text-align: center; border-top: 1px solid var(--line); }
+.closing h2 {
+  font-family: var(--font-heading);
+  text-transform: var(--heading-tt);
+  letter-spacing: var(--heading-ls);
+  font-weight: var(--heading-w);
+  font-size: clamp(24px, 3.4vw, 32px);
+  margin: 0 0 14px;
+}
+.closing p { font-size: 16px; color: var(--ink); opacity: 0.85; margin: 0 auto; max-width: 600px; }
+
+footer {
+  padding: 32px 0 48px; font-size: 13px; color: var(--ink-soft);
+  border-top: 1px solid var(--line);
+  display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px;
+}
+footer a { color: var(--ink-soft); text-decoration: none; border-bottom: 1px solid transparent; }
+footer a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+
+@media (max-width: 600px) {
+  :root { --section-py: 28px; }
+  .hero { padding: 40px 0 32px; }
+  .hero h1 { font-size: clamp(28px, 8vw, 40px); }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">Orderloom</div>
+    <div class="brand-tag">Order coordination for lean export teams</div>
+  </header>
+
+  <div class="hero">
+    <h1>Every order, one dashboard</h1>
+    <p>Orderloom is a web app for export sales coordinators and owner-operators handling cross-border orders. It keeps quotes, samples, documents, and payment follow-ups visible before delays compound.</p>
+  </div>
+
+  <section>
+    <h2>What it does</h2>
+    <div class="cards">
+        <div class="card">
+          <h3>Order status hub</h3>
+          <p>Each customer order gets a single view that brings together RFQs, supplier quotes, sample approvals, production milestones, shipping paperwork, and payment follow-ups.</p>
+        </div>
+        <div class="card">
+          <h3>Deadline and blocker tracking</h3>
+          <p>Coordinators can see what is due, what is blocked, and who needs to act next without searching across inboxes, chat threads, and spreadsheets.</p>
+        </div>
+        <div class="card">
+          <h3>Reminder-driven follow-up</h3>
+          <p>Automated reminders flag late samples, missing documents, and overdue payments early, so issues surface before they turn into rushed calls and shipment delays.</p>
+        </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>How it works</h2>
+    <ol class="steps">
+        <li class="step">
+          <span class="step-num">1</span>
+          <div><h3>Open an order</h3><p>Create a customer order record and attach the incoming RFQ, quote requests, and key dates to one place.</p></div>
+        </li>
+        <li class="step">
+          <span class="step-num">2</span>
+          <div><h3>Track each milestone</h3><p>Update supplier quotes, sample approvals, production progress, shipping documents, and payment status as the order moves forward.</p></div>
+        </li>
+        <li class="step">
+          <span class="step-num">3</span>
+          <div><h3>Resolve what slips</h3><p>Use reminders and visible blockers to follow up on late items before they become missed commitments.</p></div>
+        </li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>What makes this different</h2>
+    <ul class="diff"><li>Unlike spreadsheets plus Zalo and email, it treats the order as the system of record instead of scattering updates across separate tools and memory.</li><li>Compared with Odoo Online, the focus is narrower: order coordination without the overhead and complexity of a full ERP.</li><li>Compared with PandaDoc AI, it goes past quoting into sample tracking, production milestones, shipping document checklists, and payment follow-ups.</li></ul>
+  </section>
+
+  <div class="closing">
+    <h2>Export coordination should end the day clear, not reconstructed.</h2>
+    <p>Orderloom is being built for lean teams that need every promise between RFQ and payment to stay visible in one workflow. Built in VN.</p>
+  </div>
+
+  <footer>
+    <div>© 2026 Orderloom</div>
+    <div>Built and operated by <a href="https://baljia.ai">Baljia</a></div>
+  </footer>
+</div>
+</body>
+</html>

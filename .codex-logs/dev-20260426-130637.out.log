@@ -1,0 +1,1175 @@
+
+> baljia-ai@0.1.0 dev
+> next dev -p 3000
+
+   ▲ Next.js 15.5.15
+   - Local:        http://localhost:3000
+   - Network:      http://10.64.7.184:3000
+   - Environments: .env.local
+   - Experiments (use with caution):
+     · serverActions
+
+ ✓ Starting...
+ ○ Compiling /instrumentation ...
+ ✓ Ready in 7.2s
+ GET /api/health 200 in 1584ms
+ GET /login 200 in 8791ms
+ GET /login 200 in 103ms
+[Redis] Redis connected 
+[Auth] 
+Magic link for test@example.com:
+http://localhost:3000/api/auth/verify?token=MA2q4pVCS_UODz8N7add1NL6cYJt5zcHfWCZnG2hrCk
+ 
+[Auth] Magic link sent  {"email":"test@example.com"}
+ POST /api/auth/magic-link 200 in 6437ms
+ GET /api/health 200 in 40ms
+ GET /login 200 in 1921ms
+[Email] Email sent via Postmark  {"to":"yadavdg4@gmail.com","messageId":"2451ec0a-3262-4df0-b37a-dc778159b93f"}
+[Auth] Magic link sent  {"email":"yadavdg4@gmail.com"}
+ POST /api/auth/magic-link 200 in 5541ms
+ GET /login 200 in 291ms
+[Auth] Magic link verified  {"userId":"eea8e30d-d3e8-45aa-b648-355cfca5fa19"}
+ GET /api/auth/verify?token=6fjR-wJoVVbxVWTr99xO_uatJsc-PrtrI09DGSBGu8c 307 in 8735ms
+ GET /login 200 in 267ms
+ GET /callback 307 in 3314ms
+ GET /login 200 in 605ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 16634ms
+ GET /login 200 in 363ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 6024ms
+ GET /api/chat?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 41885ms
+ GET /login 200 in 450ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1032ms
+ GET /onboarding 200 in 5121ms
+ GET /live 200 in 5457ms
+ GET /login 200 in 4958ms
+ GET /login 200 in 121ms
+ POST /api/tasks/9a36e013-6527-4c8d-84a4-8162a063cd26/approve 200 in 18640ms
+[Redis] Redis connected 
+ GET /login 200 in 4970ms
+ GET /live 200 in 4979ms
+ GET /live 200 in 413ms
+ GET /login 200 in 424ms
+ GET /live 200 in 282ms
+ GET /login 200 in 312ms
+ GET /live 200 in 274ms
+ GET /login 200 in 282ms
+ GET /live 200 in 238ms
+ GET /login 200 in 254ms
+ GET /live 200 in 252ms
+ GET /login 200 in 259ms
+ GET /live 200 in 568ms
+ GET /login 200 in 579ms
+ GET /live 200 in 467ms
+ GET /login 200 in 784ms
+ GET /live 200 in 232ms
+ GET /login 200 in 261ms
+ GET /live 200 in 251ms
+ GET /login 200 in 293ms
+ GET /live 200 in 274ms
+ GET /login 200 in 283ms
+ GET /live 200 in 549ms
+ GET /login 200 in 633ms
+ GET /live 200 in 237ms
+ GET /login 200 in 253ms
+ GET /live 200 in 273ms
+ GET /login 200 in 298ms
+ GET /live 200 in 257ms
+ GET /login 200 in 296ms
+ GET /live 200 in 224ms
+ GET /login 200 in 237ms
+ GET /api/health 200 in 5189ms
+ GET /api/events/stream?publicOnly=true 200 in 559923ms
+ GET /login 200 in 385ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 752ms
+ GET /api/chat?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 26378ms
+ GET /api/chat?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3898ms
+ POST /api/tasks/9a36e013-6527-4c8d-84a4-8162a063cd26/approve 200 in 16753ms
+[Redis] Redis connected 
+ GET /login 200 in 171ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 700ms
+ GET /login 200 in 136ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 780ms
+ GET /login 200 in 175ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 850ms
+ GET /login 200 in 191ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 721ms
+ GET /login 200 in 141ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 707ms
+ POST /api/tasks/6738aedd-817e-4524-b5ed-8708c84b476e/approve 200 in 4596ms
+ POST /api/tasks/6930083e-cde2-4243-8b53-716f36d53fb6/approve 200 in 4096ms
+ GET /login 200 in 724ms
+ GET /login 200 in 860ms
+ GET /login 200 in 465ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 932ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 571ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 626ms
+ GET /login 200 in 147ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 634ms
+ GET /login 200 in 138ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 630ms
+ GET /login 200 in 141ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 669ms
+ GET /login 200 in 166ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 698ms
+ GET /login 200 in 171ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 689ms
+ GET /login 200 in 560ms
+ GET /login 200 in 1076ms
+ GET /login 200 in 392ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1641ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 708ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 654ms
+ GET /login 200 in 127ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 722ms
+ GET /login 200 in 336ms
+ GET /login 200 in 105ms
+ GET /login 200 in 101ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 528ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 644ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 852ms
+ GET /login 200 in 369ms
+ GET /login 200 in 67ms
+ GET /login 200 in 98ms
+ GET /login 200 in 252ms
+ GET /login 200 in 199ms
+ GET /login 200 in 103ms
+ GET /login 200 in 493ms
+ GET /login 200 in 114ms
+ GET /login 200 in 501ms
+ GET /login 200 in 351ms
+ GET /login 200 in 106ms
+ GET /login 200 in 186ms
+ GET /login 200 in 157ms
+ GET /login 200 in 192ms
+ GET /login 200 in 261ms
+ GET /login 200 in 204ms
+ GET /login 200 in 218ms
+ GET /login 200 in 1487ms
+ GET /login 200 in 254ms
+ GET /login 200 in 186ms
+ GET /login 200 in 204ms
+ GET /login 200 in 190ms
+ GET /login 200 in 344ms
+ GET /login 200 in 101ms
+ GET /login 200 in 72ms
+ GET /login 200 in 237ms
+ GET /login 200 in 341ms
+ GET /login 200 in 226ms
+ GET /login 200 in 1009ms
+ GET /login 200 in 564ms
+ GET /login 200 in 241ms
+ GET /login 200 in 212ms
+ GET /login 200 in 463ms
+ GET /login 200 in 131ms
+ GET /login 200 in 213ms
+ GET /login 200 in 100ms
+ GET /login 200 in 453ms
+ GET /login 200 in 673ms
+ GET /login 200 in 137ms
+   ▲ Next.js 15.5.15
+   - Local:        http://localhost:3000
+   - Network:      http://10.64.7.184:3000
+   - Environments: .env.local
+   - Experiments (use with caution):
+     · serverActions
+
+ ✓ Starting...
+ ○ Compiling /instrumentation ...
+ ✓ Ready in 27s
+ GET / 200 in 27750ms
+ GET / 200 in 699ms
+ GET /live 200 in 4808ms
+ GET /live 200 in 149ms
+ GET /login 200 in 5090ms
+ GET /login 200 in 466ms
+ GET /api/events/stream?publicOnly=true 200 in 15365ms
+[Auth] Magic link verified  {"userId":"eea8e30d-d3e8-45aa-b648-355cfca5fa19"}
+ GET /api/auth/verify?token=FgQuAdal3DqcCFcugKiu6yn6TFTTKiWsCHt_T2a0jFw 307 in 4524ms
+ GET /callback 307 in 2743ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 22990ms
+[Redis] Redis connected 
+ GET /api/chat?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 36941ms
+ GET /api/document-suggestions?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 38227ms
+[CEO] Using AWS Bedrock API key  {"region":"us-east-1"}
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 10849ms
+ POST /api/tasks/9a36e013-6527-4c8d-84a4-8162a063cd26/approve 200 in 12151ms
+[Redis] Redis connected 
+ POST /api/tasks/9a36e013-6527-4c8d-84a4-8162a063cd26/approve 200 in 2680ms
+ POST /api/tasks/6930083e-cde2-4243-8b53-716f36d53fb6/approve 200 in 3307ms
+ POST /api/tasks/6738aedd-817e-4524-b5ed-8708c84b476e/approve 200 in 2719ms
+ POST /api/chat 200 in 44356ms
+ POST /api/tasks/6930083e-cde2-4243-8b53-716f36d53fb6/approve 200 in 2870ms
+ POST /api/tasks/6930083e-cde2-4243-8b53-716f36d53fb6/approve 200 in 2674ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2058ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2708ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2675ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2704ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3186ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3333ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3100ms
+ POST /api/tasks/6738aedd-817e-4524-b5ed-8708c84b476e/approve 200 in 5035ms
+ POST /api/tasks/6738aedd-817e-4524-b5ed-8708c84b476e/approve 200 in 4056ms
+ POST /api/tasks/9a36e013-6527-4c8d-84a4-8162a063cd26/approve 500 in 169090ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 500 in 152227ms
+ GET / 500 in 130763ms
+ GET /login 500 in 130760ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 500 in 129099ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 500 in 48629ms
+ GET / 500 in 101ms
+ GET /login 500 in 117ms
+ GET / 500 in 101ms
+ GET /login 500 in 132ms
+ GET / 500 in 166ms
+ GET /login 500 in 160ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 500 in 305ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 500 in 393ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 500 in 376ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 500 in 375ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 500 in 446ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 500 in 128ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 500 in 152ms
+[Redis] Redis connected 
+[Redis] Redis connected 
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 500 in 1469ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 500 in 429ms
+ GET /api/auth/verify?token=QT5gRr1NZ6s_6lahVfpCxXf46dwcnnivKbAm3faAt0I 500 in 12292ms
+ GET /api/auth/verify?token=QT5gRr1NZ6s_6lahVfpCxXf46dwcnnivKbAm3faAt0I 307 in 4375ms
+[Auth] Magic link verified  {"userId":"eea8e30d-d3e8-45aa-b648-355cfca5fa19"}
+ GET /login?error=invalid_link 200 in 2941ms
+ GET /login?error=invalid_link 200 in 522ms
+ GET /login?error=invalid_link 200 in 495ms
+ GET /api/auth/verify?token=zyekvXFWZnyoX75qHfHVqFYxQUf96_LSDrbWw53oTxs 200 in 6089ms
+ GET /api/auth/verify?token=zyekvXFWZnyoX75qHfHVqFYxQUf96_LSDrbWw53oTxs 307 in 1468ms
+ GET /login?error=invalid_link 200 in 2448ms
+ GET /login?error=invalid_link 200 in 487ms
+[Auth] Magic link verified  {"userId":"eea8e30d-d3e8-45aa-b648-355cfca5fa19"}
+ GET /api/auth/verify?token=49xzsC9eXRKBIhZp9M_Zw2_5cpRVkPfS35qI5rXdW1A 307 in 3901ms
+ GET /dashboard 404 in 5757ms
+ GET /dashboard 404 in 207ms
+ GET /api/auth/verify?token=49xzsC9eXRKBIhZp9M_Zw2_5cpRVkPfS35qI5rXdW1A 307 in 1493ms
+ GET /login?error=invalid_link 200 in 379ms
+[Auth] Magic link verified  {"userId":"47a5afa4-c924-4256-af9a-0f23976ac25e"}
+ GET /api/auth/verify?token=hpaTD7pWnNHU0f2uBAFCv1XTu6BjZcA82SLh6lUIHSs 307 in 5879ms
+ GET /dashboard 404 in 1271ms
+ GET /api/auth/verify?token=hpaTD7pWnNHU0f2uBAFCv1XTu6BjZcA82SLh6lUIHSs 307 in 1549ms
+ GET /api/auth/verify?token=hpaTD7pWnNHU0f2uBAFCv1XTu6BjZcA82SLh6lUIHSs 307 in 1490ms
+[Redis] Redis connected 
+ POST /api/auth/magic-link 500 in 12805ms
+[Auth] Magic link verified  {"userId":"47a5afa4-c924-4256-af9a-0f23976ac25e"}
+ GET /api/auth/verify?token=lqMOqi-CKXDYlBg2sxXe1cbFeDBcSItdSYzkq4CjNMs 307 in 8041ms
+ GET /portfolio 200 in 19339ms
+ GET /portfolio 200 in 13050ms
+ GET /portfolio 200 in 280ms
+ GET /icon.png 200 in 2188ms
+ GET /icon.png 200 in 89ms
+ GET /portfolio 200 in 754ms
+ GET /icon.png 200 in 147ms
+ GET /icon.png 200 in 105ms
+ GET /onboarding 200 in 6686ms
+ GET /onboarding 200 in 2916ms
+ GET /onboarding 200 in 28167ms
+[Auth] Magic link verified  {"userId":"eea8e30d-d3e8-45aa-b648-355cfca5fa19"}
+ GET /api/auth/verify?token=T96vrSvl2034v3l-yTa4Y3aC11ccwQd8N4yze_3s6xc 307 in 12756ms
+ GET /portfolio 200 in 3821ms
+ GET /icon.png 200 in 2407ms
+ GET /icon.png 200 in 89ms
+ GET /live 200 in 220ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 4746ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1968ms
+ GET /onboarding 200 in 242ms
+ GET /onboarding 200 in 747ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 939ms
+ POST /api/onboarding 201 in 96043ms
+[Redis] Redis connected 
+[OnboardingWatchdog] Watchdog started  {"companyId":"a7e330c0-7b6d-4a04-8860-ff2d36b10e2e","stallMs":60000,"maxDurationMs":600000,"tickMs":5000}
+[OnboardingStage] Stage: heartbeat  {"companyId":"a7e330c0-7b6d-4a04-8860-ff2d36b10e2e"}
+[OnboardingStage] Stage: enrich_geo  {"companyId":"a7e330c0-7b6d-4a04-8860-ff2d36b10e2e"}
+[OnboardingStage] Stage: persist_context  {"companyId":"a7e330c0-7b6d-4a04-8860-ff2d36b10e2e"}
+[OnboardingStage] Stage: fetch_business_url  {"companyId":"a7e330c0-7b6d-4a04-8860-ff2d36b10e2e"}
+[OnboardingStage] Stage: name_company  {"companyId":"a7e330c0-7b6d-4a04-8860-ff2d36b10e2e"}
+[OnboardingStage] Stage: generate_market_research  {"companyId":"a7e330c0-7b6d-4a04-8860-ff2d36b10e2e"}
+[Tavily] Tavily key pool initialized: 8 key(s) 
+[Tavily] Tavily cache SET  {"query":"Redreach is an AI-powered Reddit lead generation tool that helps companies find ","bytes":2500}
+[Tavily] Tavily cache SET  {"query":"Redreach is an AI-powered Reddit lead generation tool that helps companies find ","bytes":2500}
+[Tavily] Tavily cache SET  {"query":"Growing companies looking to acquire customers from Reddit, including SaaS, cons","bytes":2500}
+[Auth] Magic link verified  {"userId":"eea8e30d-d3e8-45aa-b648-355cfca5fa19"}
+ GET /api/auth/verify?token=mrVqkXSyIVV3SY-jG8qtD5X1ET0Fox0i4yStANdzNtQ 307 in 6523ms
+ GET /portfolio 200 in 4701ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 4028ms
+[OnboardingStage] Stage: provision_infrastructure  {"companyId":"a7e330c0-7b6d-4a04-8860-ff2d36b10e2e"}
+[CompanyEmail] Company email provisioned  {"companyId":"a7e330c0-7b6d-4a04-8860-ff2d36b10e2e","emailAddress":"threadmint@baljia.app","forwardsTo":"test@example.com"}
+[OnboardingInfra] Company email provisioned  {"email":"threadmint@baljia.app"}
+[OnboardingStage] Stage: provision_founder_app_kickoff  {"companyId":"a7e330c0-7b6d-4a04-8860-ff2d36b10e2e"}
+[GitHub] Provisioning GitHub repo  {"companyId":"a7e330c0-7b6d-4a04-8860-ff2d36b10e2e","companySlug":"threadmint","org":"BALAJIapps","personalAccount":false}
+[OnboardingStage] Stage: send_startup_email  {"companyId":"a7e330c0-7b6d-4a04-8860-ff2d36b10e2e"}
+[Neon] Neon org auto-resolved  {"orgId":"org-silent-base-00098413","name":"Digvijay"}
+[Neon] Provisioning Neon database  {"companyId":"a7e330c0-7b6d-4a04-8860-ff2d36b10e2e","companySlug":"threadmint","orgId":"org-silent-base-00098413"}
+[GitHub] GitHub repo created  {"companyId":"a7e330c0-7b6d-4a04-8860-ff2d36b10e2e","full_name":"BALAJIapps/threadmint","url":"https://github.com/BALAJIapps/threadmint"}
+[OnboardingFounderApp] GitHub repo provisioned (background)  {"companyId":"a7e330c0-7b6d-4a04-8860-ff2d36b10e2e","full_name":"BALAJIapps/threadmint"}
+[Neon] Neon database provisioned  {"companyId":"a7e330c0-7b6d-4a04-8860-ff2d36b10e2e","projectId":"empty-salad-05329332","host":"ep-curly-paper-an7b9b80.c-6.us-east-1.aws.neon.tech"}
+[OnboardingFounderApp] Neon DB provisioned (background)  {"companyId":"a7e330c0-7b6d-4a04-8860-ff2d36b10e2e","projectId":"empty-salad-05329332"}
+[OnboardingStage] Stage: save_mission  {"companyId":"a7e330c0-7b6d-4a04-8860-ff2d36b10e2e"}
+[OnboardingStage] Stage: create_starter_tasks  {"companyId":"a7e330c0-7b6d-4a04-8860-ff2d36b10e2e"}
+[OnboardingStage] Stage: generate_landing_page  {"companyId":"a7e330c0-7b6d-4a04-8860-ff2d36b10e2e"}
+[OnboardingLanding] Industry inferred deterministically  {"companyId":"a7e330c0-7b6d-4a04-8860-ff2d36b10e2e","industryId":"e_commerce"}
+[OnboardingLanding] Landing design selected  {"companyId":"a7e330c0-7b6d-4a04-8860-ff2d36b10e2e","industry":"e_commerce","style":"Vibrant & Block-based","pattern":"Interactive 3D Configurator","family":"utility-cards","paletteSource":"corpus"}
+ GET /api/document-suggestions?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 44630ms
+ GET /api/document-suggestions?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 24350ms
+ GET /api/onboarding/status?company_id=a7e330c0-7b6d-4a04-8860-ff2d36b10e2e 200 in 193819ms
+ GET /api/chat?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 36513ms
+ GET /api/chat?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 59034ms
+[OnboardingLanding] Landing page generated  {"companyId":"a7e330c0-7b6d-4a04-8860-ff2d36b10e2e","industry":"e_commerce","style":"Vibrant & Block-based","pattern":"Interactive 3D Configurator","family":"utility-cards","competitors":3,"bytes":9397}
+[OnboardingLanding] Publishing landing  {"companyId":"a7e330c0-7b6d-4a04-8860-ff2d36b10e2e","slug":"threadmint","target":"cloudflare"}
+[Domain] Wildcard subdomain provisioned  {"companyId":"a7e330c0-7b6d-4a04-8860-ff2d36b10e2e","domain":"threadmint.baljia.app"}
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 34489ms
+[CFDeploy] Landing HTML uploaded to R2  {"subdomain":"threadmint","key":"founder-apps/threadmint/index.html","bytes":9400}
+[LandingDeploy] CF landing deployed  {"companyId":"a7e330c0-7b6d-4a04-8860-ff2d36b10e2e","slug":"threadmint","url":"https://threadmint.baljia.app","r2Key":"founder-apps/threadmint/index.html","bytes":9397}
+[OnboardingLanding] Landing published  {"companyId":"a7e330c0-7b6d-4a04-8860-ff2d36b10e2e","slug":"threadmint","target":"cloudflare","url":"https://threadmint.baljia.app"}
+ POST /api/tasks/9a36e013-6527-4c8d-84a4-8162a063cd26/approve 200 in 52851ms
+[OnboardingStage] Stage: post_launch_tweet  {"companyId":"a7e330c0-7b6d-4a04-8860-ff2d36b10e2e"}
+[Redis] Redis connected 
+ POST /api/tasks/9a36e013-6527-4c8d-84a4-8162a063cd26/approve 200 in 35466ms
+[OnboardingTweet] Late.dev not configured — launch tweet skipped  {"companyId":"a7e330c0-7b6d-4a04-8860-ff2d36b10e2e"}
+[OnboardingStage] Stage: generate_ceo_summary  {"companyId":"a7e330c0-7b6d-4a04-8860-ff2d36b10e2e"}
+[OnboardingCeoSummary] CEO bootstrap summary posted  {"companyId":"a7e330c0-7b6d-4a04-8860-ff2d36b10e2e","sessionId":"19d176ff-1312-4ffa-b4ac-a6cb14432c0d"}
+[OnboardingStage] Stage: await_founder_app  {"companyId":"a7e330c0-7b6d-4a04-8860-ff2d36b10e2e"}
+ POST /api/onboarding 409 in 42804ms
+[OnboardingStage] Stage: generate_magic_link  {"companyId":"a7e330c0-7b6d-4a04-8860-ff2d36b10e2e"}
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 26091ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 9245ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2504ms
+[OnboardingStage] Stage: send_inbox_message  {"companyId":"a7e330c0-7b6d-4a04-8860-ff2d36b10e2e"}
+ GET /api/document-suggestions?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1515ms
+[OnboardingStage] Stage: send_completion_email  {"companyId":"a7e330c0-7b6d-4a04-8860-ff2d36b10e2e"}
+ GET /api/chat?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2145ms
+ GET /api/document-suggestions?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1385ms
+ GET /api/chat?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1718ms
+[OnboardingStage] Stage: flush_diagnostics  {"companyId":"a7e330c0-7b6d-4a04-8860-ff2d36b10e2e"}
+[OnboardingCelebrate] Onboarding complete  {"companyId":"a7e330c0-7b6d-4a04-8860-ff2d36b10e2e","journey":"grow_my_company","strategy":"Redreach | Redreach is an AI-powered Reddit lead generation tool that helps companies find ","companyName":"Threadmint","elapsedMs":258547}
+[OnboardingStage] Stage: celebrate  {"companyId":"a7e330c0-7b6d-4a04-8860-ff2d36b10e2e"}
+[OnboardingWatchdog] Watchdog stopped  {"companyId":"a7e330c0-7b6d-4a04-8860-ff2d36b10e2e"}
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2768ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2222ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2970ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2771ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3196ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3022ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2814ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2694ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3466ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2768ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3443ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2872ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3433ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2890ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3536ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2777ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2848ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2776ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2737ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2897ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2844ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2799ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2806ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2813ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2846ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2789ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2720ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2818ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2771ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3492ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3135ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3618ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 4717ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2808ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3506ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2782ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3550ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2765ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2799ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2916ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2886ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2814ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2828ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2799ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2755ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2926ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2837ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2714ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2770ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3006ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2859ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3633ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2763ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3660ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3040ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3512ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3015ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3498ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2940ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2832ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2070ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3679ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2155ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3092ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2328ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3080ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2349ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3013ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3013ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 4054ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3238ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3083ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3636ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2847ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2769ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2880ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2955ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2993ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2901ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2716ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3085ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2317ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2924ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2130ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2867ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2147ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2790ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2177ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 4747ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2829ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2698ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 4208ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2821ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2906ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2783ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2817ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2947ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2780ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2755ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2706ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3183ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2790ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3542ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2758ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3566ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2851ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3783ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2936ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3647ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2786ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3730ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 4343ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 8802ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 4363ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 4411ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 5803ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 6929ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 6334ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 5052ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3366ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2989ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2928ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3113ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3590ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 5108ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 6297ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 4436ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 8703ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 4600ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 5200ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 6196ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 4481ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2199ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3568ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2264ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2712ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2178ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2811ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2193ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2792ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3046ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3000ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2787ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2829ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2871ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2925ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2916ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2931ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2880ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2219ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2763ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2140ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2756ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2186ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 500 in 13422ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2812ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2737ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2750ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2875ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2779ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2866ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2809ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2851ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2739ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2964ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3524ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2859ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2877ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2767ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3778ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2805ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3648ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2785ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3864ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3031ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3804ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3081ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3885ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2190ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2864ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2238ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3011ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2415ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2820ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2225ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2985ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2861ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2941ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3046ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3183ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2936ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2916ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2993ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2976ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2867ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2926ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2898ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2999ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3101ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2797ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2874ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2210ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3010ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2189ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2913ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3582ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2796ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2799ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2830ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2941ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3410ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2775ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3799ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2826ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3679ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2790ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2862ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2827ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2810ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2856ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2972ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2790ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2985ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2939ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2848ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2812ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2771ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2835ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2959ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2944ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 4026ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3265ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3296ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3959ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3208ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3960ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3625ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 4137ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2605ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 5285ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 9341ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3890ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3803ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3334ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3330ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3393ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3176ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3139ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3350ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3409ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3331ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3283ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3353ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2764ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3195ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2885ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3338ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2533ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3333ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2162ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2873ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 4358ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2983ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2833ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2755ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2840ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2926ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2947ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2714ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2819ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2964ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2833ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3723ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2765ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3353ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2783ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3564ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2971ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2923ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2868ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3681ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2993ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3790ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3039ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2963ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3049ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2801ms
+[Redis] Redis connected 
+[CEO] Using AWS Bedrock API key  {"region":"us-east-1"}
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2756ms
+ POST /api/chat 200 in 20554ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2098ms
+ POST /api/tasks/9a36e013-6527-4c8d-84a4-8162a063cd26/approve 200 in 4107ms
+ POST /api/tasks/6930083e-cde2-4243-8b53-716f36d53fb6/approve 200 in 2615ms
+ POST /api/tasks/6738aedd-817e-4524-b5ed-8708c84b476e/approve 200 in 2758ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3025ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2828ms
+ POST /api/tasks/6738aedd-817e-4524-b5ed-8708c84b476e/approve 200 in 3450ms
+ POST /api/tasks/6930083e-cde2-4243-8b53-716f36d53fb6/approve 200 in 2762ms
+ POST /api/tasks/9a36e013-6527-4c8d-84a4-8162a063cd26/approve 200 in 2713ms
+ POST /api/tasks/9a36e013-6527-4c8d-84a4-8162a063cd26/approve 200 in 2730ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2763ms
+[CEO] Using AWS Bedrock API key  {"region":"us-east-1"}
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3005ms
+ POST /api/chat 200 in 18566ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2818ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2901ms
+[CEO] Using AWS Bedrock API key  {"region":"us-east-1"}
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2112ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2217ms
+ POST /api/chat 200 in 19028ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2965ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2116ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2864ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2186ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2747ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2386ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2785ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2763ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2723ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2909ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2739ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2691ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2810ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2729ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2781ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2900ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1029ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1090ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1226ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1083ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1060ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 620ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2088ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2868ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3370ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2937ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2820ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2119ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3759ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2149ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2961ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2189ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 11362ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 10074ms
+ GET /api/chat?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 21189ms
+ GET /api/chat?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1752ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 13864ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1593ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2885ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1258ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2064ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 24848ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1429ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1797ms
+ GET /api/chat?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 37975ms
+ GET /api/document-suggestions?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 15953ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 17156ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 17464ms
+ GET /api/document-suggestions?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 38788ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 17730ms
+ GET /api/document-suggestions?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1685ms
+ GET /api/document-suggestions?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1917ms
+ GET /api/chat?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2319ms
+ GET /api/chat?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2334ms
+ GET /api/chat?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2072ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 989ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1049ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 957ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 866ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2827ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2260ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 5638ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2989ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 4041ms
+[Auth] Magic link verified  {"userId":"eea8e30d-d3e8-45aa-b648-355cfca5fa19"}
+ GET /api/auth/verify?token=YGJ-xWmIOXNHKC3ho6PWZmSUXFoDTk1lSUg05CN7Rq0 307 in 31097ms
+ GET /api/auth/verify?token=YGJ-xWmIOXNHKC3ho6PWZmSUXFoDTk1lSUg05CN7Rq0 307 in 2866ms
+ GET /login?error=invalid_link 200 in 642ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 24029ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1508ms
+ GET /portfolio 200 in 5813ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2777ms
+ GET /portfolio 200 in 1862ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2139ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2648ms
+ GET /api/document-suggestions?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 13621ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2742ms
+ GET /api/chat?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 14696ms
+ GET /api/document-suggestions?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2297ms
+ GET /api/chat?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2552ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2303ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2897ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3089ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 4519ms
+[Redis] Redis connected 
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 24973ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 37888ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 8855ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 36464ms
+ POST /api/tasks/6738aedd-817e-4524-b5ed-8708c84b476e/approve 200 in 74134ms
+[CEO] Using AWS Bedrock API key  {"region":"us-east-1"}
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 6612ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 6932ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1794ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1492ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2166ms
+ POST /api/chat 200 in 57351ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 8008ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2350ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 4284ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2946ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3092ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 5135ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2848ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2783ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 7395ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 7748ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 11002ms
+ GET /portfolio 200 in 9296ms
+ GET /portfolio 200 in 307ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 9633ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 9653ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 9661ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1037ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1720ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 6517ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 768ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1718ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1577ms
+ GET /portfolio 200 in 618ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1100ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1173ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 917ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 9244ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1487ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2896ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3264ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 15804ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 39567ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 31791ms
+ GET /api/document-suggestions?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 85674ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 42078ms
+ GET /api/chat?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 81475ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 28594ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1961ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1913ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2615ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3698ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2164ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1888ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3635ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2959ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2887ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2885ms
+[Redis] Redis connected 
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 30132ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 20257ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 30508ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 39475ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 21311ms
+ GET /portfolio 200 in 2496ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 8616ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3590ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1791ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2111ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2927ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2538ms
+ GET /api/document-suggestions?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 57331ms
+ GET /api/chat?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 98460ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 88339ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 50030ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 54031ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 54956ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 69195ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 55865ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 32266ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 33756ms
+[Redis] Redis connected 
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 20471ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 5901ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1888ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 6124ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3608ms
+[CEO] Using AWS Bedrock API key  {"region":"us-east-1"}
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 6422ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 5988ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 11943ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2199ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1566ms
+ POST /api/chat 200 in 50465ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 4224ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2863ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2519ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2866ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1747ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 4638ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 4557ms
+ GET /api/chat?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2063ms
+ GET /api/document-suggestions?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2387ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3095ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 4640ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3182ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3574ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2890ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2967ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2815ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3572ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2974ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3661ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 4110ms
+ GET /api/document-suggestions?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1548ms
+ GET /api/chat?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1871ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2815ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2845ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2990ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3398ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 6134ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3394ms
+ GET /portfolio 200 in 545ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 918ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 816ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 6443ms
+ GET /portfolio 200 in 426ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 748ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 727ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 6854ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2997ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1057ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 4305ms
+[Redis] Redis connected 
+ GET /api/document-suggestions?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 49799ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 37782ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2125ms
+ GET /api/chat?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 52069ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1449ms
+[CEO] Using AWS Bedrock API key  {"region":"us-east-1"}
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2543ms
+ POST /api/chat 200 in 18758ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2833ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3152ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2924ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2872ms
+[CEO] Using AWS Bedrock API key  {"region":"us-east-1"}
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 15048ms
+ POST /api/tasks/9a36e013-6527-4c8d-84a4-8162a063cd26/approve 200 in 16219ms
+ POST /api/tasks/6738aedd-817e-4524-b5ed-8708c84b476e/approve 200 in 29352ms
+[Redis] Redis connected 
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1492ms
+ POST /api/chat 200 in 40166ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2129ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2961ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2803ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2823ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3258ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3045ms
+ GET /portfolio 200 in 734ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 853ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 758ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 9619ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2979ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2975ms
+ GET /dashboard/008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 6038ms
+ GET /icon.png 200 in 26448ms
+ GET /icon.png 200 in 8185ms
+ GET /api/chat?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 31491ms
+ GET /api/document-suggestions?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 33108ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 22893ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1761ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2072ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2809ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2883ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2809ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2766ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2819ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2818ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2953ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2871ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2843ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3441ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2831ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3384ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2435ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3416ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2091ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3004ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2217ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2864ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2863ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3835ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3142ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3264ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2901ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3053ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3168ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3102ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3241ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2866ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3113ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3154ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3346ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2928ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3412ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2893ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3237ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3166ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2972ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2977ms
+[Redis] Redis connected 
+[Redis] Redis connected 
+[Redis] Redis connected 
+[Redis] Redis connected 
+[Redis] Redis connected 
+[Redis] Redis connected 
+[Redis] Redis connected 
+[Redis] Redis connected 
+[Redis] Redis connected 
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3150ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1565ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2994ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1569ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2908ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1744ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2984ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1641ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2893ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1439ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3186ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1532ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3108ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1646ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3201ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1579ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3621ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1513ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3540ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1673ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2901ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1483ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2846ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1643ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3013ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1592ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2878ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1633ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2887ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1488ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2368ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1657ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2141ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1537ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3060ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1697ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3088ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1710ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3114ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1561ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2996ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1450ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3156ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1558ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2901ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1697ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3055ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1566ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3062ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1520ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2865ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2325ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3022ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2259ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3586ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2597ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3010ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1533ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3055ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1600ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2953ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1542ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2967ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3562ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2854ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1565ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2970ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1517ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2393ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1513ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2329ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3289ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2890ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1511ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3034ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1545ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 5804ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2115ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3093ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1546ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2846ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1665ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3026ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1620ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2843ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1432ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2951ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1651ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3585ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1609ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3692ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1574ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3514ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1560ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3774ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3568ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2923ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1630ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2886ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1608ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2956ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1449ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2925ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1641ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2425ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1508ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2518ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1665ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2574ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1416ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2928ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 4315ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3226ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1694ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3832ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1657ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3874ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1557ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3227ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1683ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3207ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1816ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2958ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1646ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2983ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1505ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3355ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1495ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3637ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1533ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2876ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1388ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2986ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1538ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2889ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1665ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2877ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3728ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 4751ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1674ms
+[Redis] Redis connected 
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2273ms
+[CEO] Using AWS Bedrock API key  {"region":"us-east-1"}
+ POST /api/chat 200 in 30409ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3107ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3506ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3058ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3923ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1814ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2343ms
+[CEO] Using AWS Bedrock API key  {"region":"us-east-1"}
+ POST /api/chat 200 in 26273ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 4184ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1676ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2367ms
+[CEO] Using AWS Bedrock API key  {"region":"us-east-1"}
+ POST /api/chat 200 in 29557ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2120ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1408ms
+[CEO] Using AWS Bedrock API key  {"region":"us-east-1"}
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2240ms
+ POST /api/chat 200 in 29378ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3679ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1557ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2939ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2943ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1461ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2927ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3522ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1589ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3650ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3595ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1463ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3774ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1491ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3077ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1463ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2898ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1493ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3948ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1640ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2983ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2677ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2226ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1509ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2376ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1508ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2300ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1555ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3166ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1504ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3060ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1507ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3256ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1795ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3136ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1590ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2884ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1745ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2908ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1596ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2982ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1622ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2919ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1553ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 3040ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 1604ms
+ GET /api/dashboard?company_id=008a48b8-f1d3-45c2-b812-acc46d693e3b 200 in 2994ms

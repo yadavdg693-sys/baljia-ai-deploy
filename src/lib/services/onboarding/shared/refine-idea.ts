@@ -17,8 +17,10 @@
 
 import { getCapabilityConstraint } from '@/lib/platform-capabilities';
 import { callSmallLLMJson } from './json-mode';
+import { RefinedIdeaSchema } from './schemas';
 import { emitActivity } from '../stage-runner';
 import { appendMemorySection } from './memory-sections';
+import { saveOnboardingBrief } from './onboarding-brief';
 import { isSafeUrl, extractMetadata } from './fetch-business-url';
 import { isTavilyAvailable } from '@/lib/tavily';
 import { trackedTavilySearch } from './tracked-calls';
@@ -177,6 +179,7 @@ Return a JSON object with these exact keys:
   const result = await callSmallLLMJson<RefinedIdea>(prompt, {
     maxTokens: 500,
     retryOnce: true,
+    schema: RefinedIdeaSchema,
     sanitizeFields: ['refined_idea', 'changes_made', 'rationale'],
   });
 
@@ -225,4 +228,5 @@ Return a JSON object with these exact keys:
     memoryLines.push(`Web scout: ran a broad search before refining (found adjacent products in this space).`);
   }
   await appendMemorySection(ctx.companyId, '## Idea (Refined)', memoryLines);
+  await saveOnboardingBrief(ctx);
 }

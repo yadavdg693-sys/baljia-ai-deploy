@@ -20,6 +20,7 @@ import { getCapabilitiesBulletsOnly } from '@/lib/platform-capabilities';
 import { CEO_TEN_SKILLS, TASK_SCOPING_RULES } from '@/lib/agents/ceo/ceo-framework';
 import { createLogger } from '@/lib/logger';
 import { callSmallLLMJson } from './json-mode';
+import { StarterTasksSchema } from './schemas';
 import { emitActivity } from '../stage-runner';
 import type { PipelineContext, FirstPriority } from '../types';
 
@@ -79,7 +80,6 @@ export async function createStarterTasks(ctx: PipelineContext): Promise<void> {
   // real subdomain (e.g. acme.baljia.app) instead of the literal "{slug}".
   const slugForSpec = ctx.slug || '{slug}';
   const engineeringSpec = (isGrow ? GROW_ENG_SPEC : BUILD_ENG_SPEC).replaceAll('{slug}', slugForSpec);
-  const engineeringLabel = isGrow ? 'OPTIMIZATION task for the existing product' : 'NEW MVP slice to build';
 
   // Structured JSON handoff — pass the parsed market-research object so the
   // LLM can reference named fields (competitors[].name, data_gaps[], retention
@@ -105,12 +105,17 @@ ${JSON.stringify({
   // Journey-aware Task 3 framing — pre-product journeys need interviews/validation,
   // post-product needs sales. The DB tag stays 'outreach' for all; only the prompt
   // instructions + title format + description vary by journey.
+  const onboardingBriefBlock = ctx.onboardingBrief
+    ? `Canonical onboarding brief:
+${JSON.stringify(ctx.onboardingBrief, null, 2)}`
+    : 'Canonical onboarding brief: unavailable';
+
   const task3Block = isGrow
     ? `TASK 3 — slot: sales outreach (GROW journey — founder has a product to sell)
   CAN: cold email from ${ctx.slug}@baljia.app, find and verify professional emails, web search for prospects.
   CANNOT: write code, post on social platforms, run ads.
   TITLE format: "Cold outreach: Find N <role> who <buying signal>". These are SALES prospects with qualifying signals.
-  DESCRIPTION (3-4 sentences, self-contained):
+  DESCRIPTION (1-2 short sentences, 120-260 chars, self-contained):
   - Channels: match to target customer geography (if known) OR founder location "${geoLine}" (fallback) OR omit if neither. Never hardcode a country.
   - First message structure: 1-line value prop + 1 qualifying question.
   - Response signals that indicate buying intent (e.g. "asks about pricing or timeline", not "shows interest").`
@@ -119,7 +124,7 @@ ${JSON.stringify({
   CAN: cold email from ${ctx.slug}@baljia.app, find and verify professional emails, web search for prospects.
   CANNOT: write code, post on social platforms, run ads.
   TITLE format: "User discovery: Find N <role> who <behavior>". Example: "User discovery: Find 15 indie authors who published 3+ books in 2024". These are INTERVIEW targets, not sales — the product doesn't exist yet.
-  DESCRIPTION (3-4 sentences, self-contained):
+  DESCRIPTION (1-2 short sentences, 120-260 chars, self-contained):
   - Channels: match to audience geography (if known) OR founder location "${geoLine}" (fallback) OR omit. Never hardcode a country.
   - Interview questions to ask: "What do you use today for X?", "What's broken about it?", "What would make you switch?", "What would you pay?"
   - Response signals that validate the problem: specific complaints about current tools, stated workarounds, willingness to try a prototype.`
@@ -127,7 +132,7 @@ ${JSON.stringify({
   CAN: cold email from ${ctx.slug}@baljia.app, find and verify professional emails, web search for prospects.
   CANNOT: write code, post on social platforms, run ads.
   TITLE format: "Validation outreach: Find N <role> in <space> to gauge interest". These are INTEREST checks, not sales.
-  DESCRIPTION (3-4 sentences, self-contained):
+  DESCRIPTION (1-2 short sentences, 120-260 chars, self-contained):
   - Channels: match to audience geography (if known) OR founder location "${geoLine}" (fallback) OR omit. Never hardcode a country.
   - Lightweight interest check: "Does this problem resonate?", "Would you try a solution if it existed?", "What's the #1 frustration you have today around X?"
   - Response signals that justify building: expressed pain, described current workaround, asked when it's launching.`;
@@ -141,6 +146,8 @@ INPUTS:
 - Founder angle: ${ctx.founderAngle ?? '(none)'}
 - Founder location: ${geoLine}
 - Idea / business: ${ideaText}
+
+${onboardingBriefBlock}
 
 ${structuredResearchBlock}
 
@@ -183,14 +190,16 @@ Complexity: scaled per Step 0 (5-9 — do NOT default to 7-9)
 Engineering work CAN: build full-stack web apps with a database, APIs, webhooks, dashboards, scheduled jobs, Stripe payments (subscriptions/one-time/Connect), deploy to the company subdomain.
 Engineering work CANNOT: browse web, send emails, post tweets, run ads, do web research.
 
-TITLE: action verb + specific ${engineeringLabel}. Max 12 words.
+TITLE: use one compact product-build format, max 10 words: "Build MVP: <core feature>", "Add auth: <why accounts are needed>", "Add payment: <paid action>", or "Improve funnel: <one fix>" for Grow.
 
 DESCRIPTION: thin-slice spec (self-contained). 4 fields, 250-400 chars total, no section headers in output, no implementation jargon. Aggressively narrow the scope — this is the FIRST shippable + payable thing, not a full product:
 ${engineeringSpec}
 
+Override any older field-count language above: the saved founder-facing description must be 1-2 sentences and under 260 characters.
+
 Return your complexity assessment (integer 5-9) as a "complexity" field alongside title/description/reasoning. This scales the saved task metadata to the actual scope.
 
-REASONING: 2 sentences, OPERATIONAL-VOICED (queue justification: "this task should run because..."). What's blocked without it. What revenue or validation signal it unlocks. NOT founder-facing strategic narrative.
+REASONING: 1 short operational sentence under 220 chars. Say what this unblocks. NOT founder-facing strategic narrative.
 
 ═══════════════════════════════════════════════════════
 TASK 2 — slot: research, priority: medium, hours: 1, complexity: 3-4
@@ -205,13 +214,13 @@ TITLE format varies by the biggest gap in the market research:
 - If channels are unclear: "Map acquisition channels: how <A>, <B>, <C> reach <audience>"
 - Otherwise default to the competitor scout format
 
-DESCRIPTION: 3-4 sentences, self-contained. Dimensions to compare / validate. Deliverable (comparison or demand report saved as document). Decision this informs (positioning, pricing, build scope, or kill decision).
+DESCRIPTION: 1-2 short sentences, 120-260 chars, self-contained. Name the comparison or validation deliverable and the decision it informs.
 
-REASONING: 2 sentences, OPERATIONAL-VOICED. Why this research now. How it sharpens the engineering task or unlocks a go/no-go decision.
+REASONING: 1 short operational sentence under 220 chars. Say what decision this unlocks.
 
 ═══════════════════════════════════════════════════════
 ${task3Block}
-REASONING: 2 sentences, OPERATIONAL-VOICED. Why these specific people. Why now, and what the response data will unblock.
+REASONING: 1 short operational sentence under 220 chars. Say what the responses unblock.
 
 ═══════════════════════════════════════════════════════
 HARD RULES:
@@ -220,7 +229,8 @@ HARD RULES:
 1. Each task description is SELF-CONTAINED — embed competitor names, audience details, infra assumptions inline. Never say "see other task" or "see report".
 2. Each task respects its agent's CAN/CANNOT capability boundaries declared above.
 3. Engineering DESCRIPTION is 250-400 chars total, has all 4 fields (sign-up, the one feature, what they get, why they pay for Build / current state, the one change, expected lift, rollback for Grow), NO section headers in output, NO library names, NO numbered sub-steps inside any field. Founder reads this verbatim — keep implementation jargon out.
-4. Engineering task must build the PRODUCT (the thing the founder's customers use), NOT:
+4. If any earlier instruction implies a longer engineering description, ignore it. The final engineering description must be compact: 1-2 sentences, under 260 characters.
+5. Engineering task must build the PRODUCT (the thing the founder's customers use), NOT:
    - a landing page / marketing site / SEO page / waitlist capture  ← already provisioned
    - a homepage / hero page / "coming soon" page                     ← already provisioned
    - the company email setup / DNS / infrastructure                  ← already provisioned
@@ -253,7 +263,11 @@ Note: the JSON key is always "outreach" regardless of journey — the routing la
   // LLM response is preserved as-is.
   let raw: Partial<StarterTasksResult> = {};
   try {
-    raw = await callSmallLLMJson<StarterTasksResult>(prompt, { maxTokens: 3000, retryOnce: true });
+    raw = await callSmallLLMJson<StarterTasksResult>(prompt, {
+      maxTokens: 3000,
+      retryOnce: true,
+      schema: StarterTasksSchema,
+    });
   } catch (err) {
     log.error('createStarterTasks LLM call failed after retry — falling back to journey-aware defaults', {
       companyId: ctx.companyId,
@@ -350,6 +364,16 @@ function clampComplexity(value: unknown): number {
   return n;
 }
 
+function compactTaskDescription(value: string): string {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= 320) return normalized;
+
+  const sentences = normalized.match(/[^.!?]+[.!?]+/g) ?? [];
+  const firstTwo = sentences.slice(0, 2).join(' ').trim();
+  const candidate = firstTwo.length >= 80 ? firstTwo : normalized;
+  return `${candidate.slice(0, 317).trimEnd()}...`;
+}
+
 /**
  * Take whatever (possibly malformed) shape the LLM returned for a slot and
  * patch only the fields that are missing/empty with journey-aware fallbacks.
@@ -369,7 +393,9 @@ function ensureSlot(
   const missing: string[] = [];
 
   const title = incoming.title?.trim() || (missing.push('title'), fallback.title);
-  const description = incoming.description?.trim() || (missing.push('description'), fallback.description);
+  const description = compactTaskDescription(
+    incoming.description?.trim() || (missing.push('description'), fallback.description),
+  );
   const reasoning = incoming.reasoning?.trim() || (missing.push('reasoning'), fallback.reasoning);
 
   if (missing.length > 0) {
@@ -424,22 +450,17 @@ function buildSlotFallback(slot: StarterSlot, ctx: PipelineContext): StarterTask
     return isGrow
       ? {
           // 4-field thin-slice fallback — kept under ~400 chars to match the new spec.
-          title: `Optimize the weakest funnel step for ${companyName}`,
+          title: `Improve funnel: weakest step`,
           description:
-            `Current state: the funnel step with the lowest pass-through today (baseline TBD on instrument). ` +
-            `The one change: ship a single concrete edit to that step (copy, layout, or removed friction). ` +
-            `Expected lift: +10-20% on the chosen step's pass-through rate. ` +
-            `Rollback: keep the change behind a feature flag so we can revert within an hour if it regresses.`,
+            `Ship one focused conversion or retention fix for the weakest funnel step. Track the before/after rate and keep the change reversible if it hurts activation.`,
           reasoning: ENGINEERING_FALLBACK_REASONING,
           complexity: 6,
         }
       : {
           // 4-field thin-slice fallback — sign-up + one feature + output + reason to pay.
-          title: `Ship the MVP slice for ${companyName}`,
+          title: `Build MVP: core feature`,
           description:
-            `Sign up: magic-link email signup. The one feature: ${scope}. ` +
-            `What they get: the user-visible output of that single workflow, end-to-end. ` +
-            `Why they pay: it replaces a manual step they'd otherwise spend hours on. Second feature is the next cycle's task.`,
+            `Build the first usable workflow for ${scope}. Include simple sign-in only if users need saved/private state; add payment only if it unlocks this first paid action.`,
           reasoning: ENGINEERING_FALLBACK_REASONING,
           complexity: 7,
         };
@@ -461,10 +482,7 @@ function buildSlotFallback(slot: StarterSlot, ctx: PipelineContext): StarterTask
     return {
       title: `Scout the ${categoryLabel} competitive landscape`,
       description:
-        `Identify and profile 3-5 direct competitors operating in the same space as ${companyName}. For each, capture: positioning one-liner, ` +
-        `target customer, pricing model, weakest documented gap (from public reviews or docs), and one differentiator we could press on. ` +
-        `Deliverable: a competitive comparison saved as a research document. Decision this informs: positioning copy on the landing ` +
-        `page and feature priority for the next engineering cycle.`,
+        `Profile 3-5 direct competitors for ${companyName}. Capture positioning, pricing, weakest gap, and the one decision this changes for the next product cycle.`,
       reasoning: RESEARCH_FALLBACK_REASONING,
     };
   }
@@ -523,9 +541,9 @@ function validateTask(
     throw new Error(`createStarterTasks: ${slot} task missing title or description`);
   }
   // Enforce thin-slice length on engineering descriptions.
-  if (slot === 'engineering' && task.description.length > 500) {
+  if (slot === 'engineering' && task.description.length > 320) {
     log.warn(
-      `[createStarterTasks] engineering description ${task.description.length} chars (target <500)`,
+      `[createStarterTasks] engineering description ${task.description.length} chars (target <320)`,
       { slot, length: task.description.length, titleSnippet: task.title.slice(0, 80) },
     );
   }
@@ -560,6 +578,8 @@ one feature.
 
 A second feature is the second cycle's task. This task is the FIRST shippable + payable thing.
 
+Current founder-facing style: ignore the old 4-field wording above. Write one compact product-build sentence: Build MVP, Add auth, or Add payment. Only include auth/payment when needed for the first paid workflow.
+
 Total target length: 250-400 characters. If you wrote more than 500 chars, you wrote
 the wrong task.
 `;
@@ -576,6 +596,8 @@ Description has EXACTLY these 4 fields. No section headers in output. No numbere
 
 DO NOT INCLUDE: library names, multiple changes, "phase 1 / phase 2" plans, success criteria
 sections, out-of-scope appendices, generic optimization advice.
+
+Current founder-facing style: ignore the old 4-field wording above. Write one compact optimization sentence focused on the single conversion or retention fix.
 
 Total target length: 250-400 characters. If over 500, rewrite shorter.
 `;

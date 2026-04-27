@@ -26,7 +26,7 @@ const STATUS_TABS = [
 ] as const;
 
 const EMPTY_STATES: Record<string, { icon: string; message: string }> = {
-  all: { icon: '📋', message: 'No tasks yet. Chat with the CEO to get started!' },
+  all: { icon: '📋', message: 'No tasks yet. Message Baljia to get started!' },
   todo: { icon: '📝', message: 'No tasks queued.' },
   recurring: { icon: '🔄', message: 'No recurring tasks set up yet.' },
   in_progress: { icon: '⚡', message: 'Nothing running right now.' },

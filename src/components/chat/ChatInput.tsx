@@ -44,7 +44,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
           value={message}
           onChange={(e) => setMessage(e.target.value.slice(0, MAX_CHARS))}
           onKeyDown={handleKeyDown}
-          placeholder={disabled ? 'CEO is thinking...' : 'Message your CEO...'}
+          placeholder={disabled ? 'Baljia is thinking...' : 'Message Baljia...'}
           disabled={disabled}
           rows={1}
           className="flex-1 bg-surface-secondary rounded-lg px-3 py-2 text-sm text-text-primary placeholder:text-text-muted border border-border-default focus:outline-none focus:border-border-active resize-none transition-colors disabled:opacity-50"

@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="generator" content="baljia-landing/utility-cards">
+<meta name="x-baljia-industry" content="saas_general">
+<meta name="x-baljia-style" content="Glassmorphism">
+<meta name="x-baljia-pattern" content="Hero + Features + CTA">
+<title>QueryForge — Search campaign drafting for developer-focused SaaS teams</title>
+<meta name="description" content="QueryForge is a pre-launch web app for developer-focused SaaS teams running Google Search. It matters because technical products need campaigns that match real use cases, not generic B2B copy.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600;700&family=Open+Sans:wght@400;500;600;700&display=swap">
+<style>
+:root {
+  --accent: #2563EB;
+  --accent-soft: hsl(221, 83%, 93%);
+  --accent-strong: #EA580C;
+  --ink: #1E293B;
+  --ink-soft: #64748B;
+  --bg: #F8FAFC;
+  --bg-elev: #E9EFF8;
+  --line: #E2E8F0;
+  --font-heading: "Poppins", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-body: "Open Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --heading-tt: none;
+  --heading-ls: -0.022em;
+  --heading-w: 800;
+  --section-py: 56px;
+  --hero-py: 64px 0 48px;
+  --card-p: 20px;
+  --card-gap: 16px;
+  --container-px: 24px;
+  --radius: 16px;
+  --shadow: 0 10px 30px rgba(15,23,42,0.12);
+  --transition: 300ms ease;
+  --border-w: 1px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --accent: hsl(221, 75%, 68%);
+    --accent-soft: hsl(220, 14%, 14%);
+    --ink: hsl(220, 10%, 92%);
+    --ink-soft: hsl(220, 8%, 65%);
+    --bg: hsl(220, 16%, 8%);
+    --bg-elev: hsl(220, 14%, 11%);
+    --line: hsl(220, 12%, 18%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation: none !important; }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: var(--font-body);
+  color: var(--ink);
+  background: var(--bg);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+.heading {
+  font-family: var(--font-heading);
+  font-weight: var(--heading-w);
+  letter-spacing: var(--heading-ls);
+  text-transform: var(--heading-tt);
+  margin: 0;
+}
+.brand { font-family: var(--font-heading); text-transform: var(--heading-tt); letter-spacing: var(--heading-ls); font-size: 22px; font-weight: var(--heading-w); }
+.brand-tag { font-size: 14px; color: var(--ink-soft); margin-top: 4px; }
+section h2, .closing h2 {
+  font-family: var(--font-heading); text-transform: var(--heading-tt); letter-spacing: var(--heading-ls);
+  font-weight: var(--heading-w);
+}
+footer {
+  padding: 32px 0 48px; font-size: 13px; color: var(--ink-soft);
+  border-top: var(--border-w) solid var(--line);
+  display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px;
+}
+footer a { color: var(--ink-soft); text-decoration: none; border-bottom: var(--border-w) solid transparent; }
+footer a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+.wrap { max-width: 860px; margin: 0 auto; padding: 0 var(--container-px); }
+header { padding: 32px 0 16px; }
+.hero { padding: var(--hero-py); }
+.hero h1 { font-family: var(--font-heading); text-transform: var(--heading-tt); letter-spacing: var(--heading-ls); font-weight: var(--heading-w); font-size: clamp(34px, 5.4vw, 56px); line-height: 1.08; margin: 0 0 20px; }
+.hero p { font-size: 18px; color: var(--ink); opacity: 0.85; margin: 0; max-width: 640px; }
+section { padding: var(--section-py) 0; border-top: var(--border-w) solid var(--line); }
+section h2 { font-size: clamp(20px, 2.5vw, 26px); margin: 0 0 24px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--card-gap); }
+.card { padding: var(--card-p); border: var(--border-w) solid var(--line); border-radius: var(--radius); background: var(--bg-elev); box-shadow: var(--shadow); transition: border-color var(--transition), transform var(--transition); }
+.card:hover { border-color: var(--accent); transform: translateY(-1px); }
+.card h3 { font-family: var(--font-heading); text-transform: var(--heading-tt); letter-spacing: var(--heading-ls); font-size: 16px; margin: 0 0 8px; font-weight: var(--heading-w); }
+.card p { font-size: 14.5px; color: var(--ink); opacity: 0.85; margin: 0; line-height: 1.55; }
+ol.steps { list-style: none; padding: 0; margin: 0; display: grid; gap: 22px; }
+.step { display: flex; gap: 18px; align-items: flex-start; }
+.step-num { flex: 0 0 38px; width: 38px; height: 38px; border-radius: 50%; background: var(--accent); color: #fff; display: inline-flex; align-items: center; justify-content: center; font-family: var(--font-heading); font-weight: var(--heading-w); font-size: 15px; }
+.step h3 { font-family: var(--font-heading); text-transform: var(--heading-tt); letter-spacing: var(--heading-ls); font-size: 16px; margin: 7px 0 4px; font-weight: var(--heading-w); }
+.step p { font-size: 15px; color: var(--ink); opacity: 0.85; margin: 0; }
+ul.diff { list-style: none; padding: 0; margin: 0; display: grid; gap: 12px; }
+ul.diff li { padding: 14px 16px 14px 40px; border: var(--border-w) solid var(--line); border-radius: var(--radius); position: relative; font-size: 15px; background: var(--bg-elev); box-shadow: var(--shadow); }
+ul.diff li::before { content: ""; position: absolute; left: 16px; top: 50%; transform: translateY(-50%); width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.closing { padding: calc(var(--section-py) * 1.4) 0 var(--section-py); text-align: center; border-top: var(--border-w) solid var(--line); }
+.closing h2 { font-size: clamp(24px, 3.4vw, 32px); margin: 0 0 14px; }
+.closing p { font-size: 16px; color: var(--ink); opacity: 0.85; margin: 0 auto; max-width: 600px; }
+@media (max-width: 600px) { .hero { padding: 40px 0 32px; } .hero h1 { font-size: clamp(28px, 8vw, 40px); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">QueryForge</div>
+    <div class="brand-tag">Search campaign drafting for developer-focused SaaS teams</div>
+  </header>
+  <div class="hero" id="hero">
+    <h1>Search ads built from your docs</h1>
+    <p>QueryForge is a pre-launch web app for developer-focused SaaS teams running Google Search. It matters because technical products need campaigns that match real use cases, not generic B2B copy.</p>
+  </div>
+  <section id="what">
+    <h2>What it does</h2>
+    <div class="cards">
+        <div class="card">
+          <h3>Read product language</h3>
+          <p>It takes a product URL and documentation, then pulls out use cases, technical terms, and problem language that show up in how developers search.</p>
+        </div>
+        <div class="card">
+          <h3>Draft campaign structure</h3>
+          <p>It turns that input into keyword clusters, ad copy variants, and landing page recommendations tied to likely search intent.</p>
+        </div>
+        <div class="card">
+          <h3>Review performance themes</h3>
+          <p>After launch, it surfaces which themes, ads, and pages are bringing in qualified clicks so the next round of edits is based on signal instead of guesswork.</p>
+        </div>
+    </div>
+  </section>
+  <section id="how">
+    <h2>How it works</h2>
+    <ol class="steps">
+        <li class="step">
+          <span class="step-num">1</span>
+          <div><h3>Point to your site</h3><p>Add your product URL and docs so QueryForge can map the product language, use cases, and technical pain points.</p></div>
+        </li>
+        <li class="step">
+          <span class="step-num">2</span>
+          <div><h3>Review the drafts</h3><p>Open proposed keyword groups, ad copy, and landing page matches in one flow and edit what needs to change.</p></div>
+        </li>
+        <li class="step">
+          <span class="step-num">3</span>
+          <div><h3>Learn from results</h3><p>Use the dashboard to see which messages and pages are pulling qualified search traffic and feed that into the next campaign pass.</p></div>
+        </li>
+    </ol>
+  </section>
+  <section id="diff">
+    <h2>What makes this different</h2>
+    <ul class="diff"><li>Unlike agency-heavy options such as GrowthSpree and Single Grain, the goal is a product workflow a small SaaS team can run without weeks of onboarding.</li><li>Where Smartly.io appears aimed at custom, enterprise-style setups, QueryForge is being built around a simpler self-serve flow for early teams.</li><li>The drafts start from docs, API language, and technical use cases, which fits the reality that developers respond to useful, specific answers more than broad marketing claims.</li></ul>
+  </section>
+  <div class="closing" id="closing">
+    <h2>Search should become part of the product workflow for small SaaS teams.</h2>
+    <p>The aim is to make Google Search ads understandable and shippable for teams that know their product deeply but do not want to rely on agencies, freelancers, and spreadsheets to get there.</p>
+  </div>
+  <footer>
+    <div>© 2026 QueryForge</div>
+    <div>Built and operated by <a href="https://baljia.ai">Baljia</a></div>
+  </footer>
+</div>
+</body>
+</html>

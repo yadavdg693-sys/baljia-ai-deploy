@@ -7,6 +7,7 @@
 import { isTavilyAvailable } from '@/lib/tavily';
 import { trackedTavilySearch as tavilySearchText } from './tracked-calls';
 import { callSmallLLMJson } from './json-mode';
+import { SurpriseMarketResearchSchema } from './schemas';
 import { emitActivity } from '../stage-runner';
 import { persistMarketResearch, renderSurpriseMarkdown } from './market-research-render';
 import {
@@ -147,6 +148,7 @@ Rules — shape:
   const result = await callSmallLLMJson<SurpriseMarketResearch>(buildPrompt(initialRaw), {
     maxTokens: 3000,
     retryOnce: true,
+    schema: SurpriseMarketResearchSchema,
     sanitizeFields: ['idea_overview', 'why_this_fits_you'],
     sanitizeArrayOfObjects: ['competitors', 'idea_refinements', 'first_priorities'],
   });

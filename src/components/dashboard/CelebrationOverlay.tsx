@@ -41,7 +41,7 @@ export function CelebrationOverlay({ taskTitle, onDismiss }: CelebrationOverlayP
         <strong>Task complete</strong>
         <h3 className="serif">{taskTitle}</h3>
         <p style={{ fontSize: 12, color: '#6f6f6f' }}>
-          CEO: Great work. Let&apos;s keep compounding this momentum.
+          Baljia: Great work. Let&apos;s keep compounding this momentum.
         </p>
       </div>
     </div>

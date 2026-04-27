@@ -7,6 +7,8 @@ import { createLogger } from '@/lib/logger';
 import { isTavilyAvailable } from '@/lib/tavily';
 import { trackedTavilySearch as tavilySearchText } from './tracked-calls';
 import { callSmallLLMJson } from './json-mode';
+import { BusinessProfilePromptSchema } from './schemas';
+import { saveOnboardingBrief } from './onboarding-brief';
 import { emitActivity } from '../stage-runner';
 import { appendMemorySection } from './memory-sections';
 import type { PipelineContext, BusinessProfile } from '../types';
@@ -154,7 +156,7 @@ Return a JSON object with these exact keys:
 
   const profile = await callSmallLLMJson<Omit<BusinessProfile, 'extracted_metadata'>>(
     synthesisPrompt,
-    { maxTokens: 500, retryOnce: true },
+    { maxTokens: 500, retryOnce: true, schema: BusinessProfilePromptSchema },
   );
 
   ctx.businessProfile = {
@@ -189,4 +191,5 @@ Return a JSON object with these exact keys:
     `Target customer: ${ctx.businessProfile.target_customer ?? 'unclear'}`,
     `Validation: ${ctx.businessProfile.existing_validation ?? 'none visible'}`,
   ]);
+  await saveOnboardingBrief(ctx);
 }

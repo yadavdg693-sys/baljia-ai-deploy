@@ -42,6 +42,8 @@
     "dist",
     ".open-next",
     "src/scripts",
-    "scripts"
+    "scripts",
+    "deploy",
+    "tmp-landing"
   ]
 }

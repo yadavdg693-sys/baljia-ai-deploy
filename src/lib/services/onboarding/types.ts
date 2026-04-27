@@ -210,6 +210,31 @@ export interface MissionDoc {
   where_were_headed: string;      // 4-6 sentences, GeoIP-anchored
 }
 
+export interface OnboardingBrief {
+  journey: OnboardingJourney;
+  founder: {
+    name: string | null;
+    email: string;
+    location: string | null;
+    timezone: string | null;
+    enrichment_confidence: 'high' | 'medium' | 'low';
+    angle: string | null;
+  };
+  input: string | null;
+  subject: {
+    kind: 'idea' | 'business' | 'invented_idea';
+    name: string | null;
+    summary: string;
+    source: 'founder_input' | 'website' | 'system_invented';
+  };
+  evidence: {
+    has_founder_angle: boolean;
+    has_business_profile: boolean;
+    has_founder_background: boolean;
+  };
+  confidence: 'high' | 'medium' | 'low';
+}
+
 export interface PipelineContext {
   // Entry
   companyId: string;
@@ -246,6 +271,7 @@ export interface PipelineContext {
   oneLiner: string;
   mission: string;
   missionDoc?: MissionDoc;
+  onboardingBrief?: OnboardingBrief;
   marketResearch: string | null;       // rendered markdown (legacy shape, for pre-Phase-3a stages)
   marketResearchJson?: MarketResearchResult; // structured per-journey JSON (Phase 3a)
 

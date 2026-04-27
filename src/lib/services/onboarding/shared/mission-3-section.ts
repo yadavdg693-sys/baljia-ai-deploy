@@ -8,6 +8,7 @@ import { eq } from 'drizzle-orm';
 import * as documentService from '@/lib/services/document.service';
 import { sanitizeForFounder } from '@/lib/founder-safety/sanitize';
 import { callSmallLLMJson } from './json-mode';
+import { MissionDocSchema } from './schemas';
 import { emitActivity } from '../stage-runner';
 import type { PipelineContext, MissionDoc } from '../types';
 
@@ -53,6 +54,11 @@ ${JSON.stringify({
 }, null, 2)}`
     : '(No structured research available.)';
 
+  const onboardingBriefBlock = ctx.onboardingBrief
+    ? `CANONICAL ONBOARDING BRIEF (source of truth for founder, journey, and subject):
+${JSON.stringify(ctx.onboardingBrief, null, 2)}`
+    : '(No canonical onboarding brief available.)';
+
   const hasDataGaps = mrJson
     && ((mrJson as unknown as { data_gaps?: string[] }).data_gaps?.length ?? 0) > 0;
   const confidenceGuidance = hasDataGaps
@@ -68,6 +74,8 @@ Idea / Business:
 ${ideaText}
 
 ${ctx.founderAngle ? `Founder positioning: ${ctx.founderAngle}\n` : ''}${regionLine}
+
+${onboardingBriefBlock}
 
 ${structuredResearchBlock}
 
@@ -95,6 +103,7 @@ Rules:
   const result = await callSmallLLMJson<MissionDoc>(prompt, {
     maxTokens: 900,
     retryOnce: true,
+    schema: MissionDocSchema,
     sanitizeFields: ['mission', 'what_were_building', 'where_were_headed'],
   });
 

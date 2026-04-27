@@ -1,0 +1,73 @@
+
+> baljia-ai@0.1.0 dev
+> next dev -p 3000 --disable-source-maps
+
+   ▲ Next.js 15.5.15
+   - Local:        http://localhost:3000
+   - Network:      http://10.64.7.184:3000
+   - Environments: .env.local
+   - Experiments (use with caution):
+     · serverActions
+
+ ✓ Starting...
+ ○ Compiling /instrumentation ...
+ ✓ Ready in 16.4s
+ GET /api/health 200 in 3447ms
+ GET / 200 in 13203ms
+ GET / 200 in 20152ms
+ GET /login 200 in 2896ms
+ GET / 200 in 280ms
+ GET /login 200 in 229ms
+ GET /api/auth/verify?token=MYgOly9TI_VhJtm9o38qCQ4IQgLV9nItvN7EJ7Jv9FE 200 in 3080ms
+ GET /login 200 in 2142ms
+[Auth] Magic link verified  {"userId":"19e5aab8-a62a-46aa-8fce-882b4906e7aa"}
+[Auth] Magic link verified  {"userId":"b661293e-c41e-4b8b-9ce4-9ed513b6a14d"}
+ GET /api/auth/verify?token=Sq-BCCyRwtNhW1TeZCy-hcylSkwz1BfuRHXM76gWgPU 307 in 3634ms
+ GET /callback 307 in 2472ms
+ GET /dashboard/6f6ec03c-0c5f-408a-ba4d-4b3d89b73660 200 in 12828ms
+ GET /dashboard/6f6ec03c-0c5f-408a-ba4d-4b3d89b73660/tasks 200 in 6330ms
+ GET /dashboard/6f6ec03c-0c5f-408a-ba4d-4b3d89b73660 200 in 3848ms
+[Auth] Magic link verified  {"userId":"b661293e-c41e-4b8b-9ce4-9ed513b6a14d"}
+ GET /api/auth/verify?token=nXR7_BCAV7EZOoZiHPpjX5jV29I4BTUgTWcg9mqCFso 307 in 3460ms
+ GET /callback 307 in 1102ms
+ GET /dashboard/6f6ec03c-0c5f-408a-ba4d-4b3d89b73660 200 in 3547ms
+ GET /dashboard/6f6ec03c-0c5f-408a-ba4d-4b3d89b73660 200 in 2155ms
+[Auth] Magic link verified  {"userId":"b661293e-c41e-4b8b-9ce4-9ed513b6a14d"}
+ GET /api/auth/verify?token=OilWmPeHtJCOck4q9DMgwRijZGIv7g1KuST33LCpROc 307 in 3813ms
+ GET /callback 307 in 1282ms
+ GET /dashboard/6f6ec03c-0c5f-408a-ba4d-4b3d89b73660 200 in 4254ms
+ GET /dashboard/6f6ec03c-0c5f-408a-ba4d-4b3d89b73660 200 in 1862ms
+[Auth] Magic link verified  {"userId":"b661293e-c41e-4b8b-9ce4-9ed513b6a14d"}
+ GET /api/auth/verify?token=V1DFR73NQ_zmjyawXCOeua5rwP9dcPL_x3WHYMyAyK4 307 in 3601ms
+ GET /callback 307 in 1065ms
+ GET /dashboard/6f6ec03c-0c5f-408a-ba4d-4b3d89b73660 200 in 3663ms
+ GET /dashboard/6f6ec03c-0c5f-408a-ba4d-4b3d89b73660 200 in 2056ms
+[Auth] Magic link verified  {"userId":"b661293e-c41e-4b8b-9ce4-9ed513b6a14d"}
+ GET /api/auth/verify?token=2nFX6DsDsngloG4UmfFz18QxwErDgnmIKpKfkEYWgmI 307 in 3167ms
+ GET /callback 307 in 1081ms
+ GET /dashboard/6f6ec03c-0c5f-408a-ba4d-4b3d89b73660 200 in 2801ms
+ GET /dashboard/6f6ec03c-0c5f-408a-ba4d-4b3d89b73660 200 in 2000ms
+ GET /login 200 in 744ms
+ GET /login 200 in 73ms
+[Auth] Magic link verified  {"userId":"b661293e-c41e-4b8b-9ce4-9ed513b6a14d"}
+ GET /api/auth/verify?token=ZLWx4HZ6MHepZsgpwVkGp2I0chaQ2ULEOlrBiwId7GM 307 in 3251ms
+ GET /callback 307 in 1051ms
+ GET /dashboard/6f6ec03c-0c5f-408a-ba4d-4b3d89b73660 200 in 3384ms
+ GET /dashboard/6f6ec03c-0c5f-408a-ba4d-4b3d89b73660 200 in 1919ms
+ GET / 200 in 1609ms
+ GET /live 200 in 1149ms
+ GET / 200 in 124ms
+ GET /login 200 in 436ms
+[Redis] Redis connected 
+ POST /api/auth/magic-link 500 in 6921ms
+ POST /api/auth/magic-link 500 in 4695ms
+[Redis] Redis connected 
+[Auth] 
+Magic link for test@example.com:
+http://localhost:3000/api/auth/verify?token=ZmLb_lfN0mA4BTgXWOCT9RnGv4tsJaYJdIJ4TFqKpxw
+ 
+[Auth] Magic link sent  {"email":"test@example.com"}
+ POST /api/auth/magic-link 200 in 4315ms
+ GET /login 200 in 1312ms
+ GET /login 200 in 69ms
+ GET /login 200 in 60ms

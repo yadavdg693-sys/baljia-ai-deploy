@@ -10,6 +10,7 @@
 import { isTavilyAvailable } from '@/lib/tavily';
 import { trackedTavilySearch as tavilySearchText } from './tracked-calls';
 import { callSmallLLMJson } from './json-mode';
+import { BuildMarketResearchSchema } from './schemas';
 import { emitActivity } from '../stage-runner';
 import { persistMarketResearch, renderBuildMarkdown } from './market-research-render';
 import {
@@ -148,6 +149,7 @@ Rules — shape:
   const result = await callSmallLLMJson<BuildMarketResearch>(buildPrompt(initialRaw), {
     maxTokens: 2800,
     retryOnce: true,
+    schema: BuildMarketResearchSchema,
     sanitizeFields: ['overview', 'opportunity', 'why_this_fits_you'],
     sanitizeArrayOfObjects: ['competitors', 'first_priorities'],
   });

@@ -5,6 +5,8 @@
 
 import { getCapabilityConstraint } from '@/lib/platform-capabilities';
 import { callSmallLLMJson } from './json-mode';
+import { InventedIdeaSchema } from './schemas';
+import { saveOnboardingBrief } from './onboarding-brief';
 import { emitActivity } from '../stage-runner';
 import { appendMemorySection } from './memory-sections';
 import type { PipelineContext, InventedIdea } from '../types';
@@ -116,6 +118,7 @@ export async function inventIdea(ctx: PipelineContext): Promise<void> {
   const result = await callSmallLLMJson<InventedIdea>(prompt, {
     maxTokens: 500,
     retryOnce: true,
+    schema: InventedIdeaSchema,
     sanitizeFields: ['invented_idea', 'changes_made', 'rationale'],
   });
 
@@ -140,4 +143,5 @@ export async function inventIdea(ctx: PipelineContext): Promise<void> {
     `Rationale: ${ctx.inventedIdea.rationale}`,
     `Founder angle: ${ctx.founderAngle ?? 'none'}`,
   ]);
+  await saveOnboardingBrief(ctx);
 }
