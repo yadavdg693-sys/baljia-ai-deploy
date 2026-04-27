@@ -1,8 +1,20 @@
 // Support Agent Tools — migrated to Drizzle + Neon
 import type { Task } from '@/types';
 import { db, emailThreads, platformEvents, companies, users, tasks as tasksTable, contacts } from '@/lib/db';
-import { eq, and, desc, ilike, or } from 'drizzle-orm';
+import { eq, and, desc, ilike, or, inArray } from 'drizzle-orm';
 import { sendEmail, sendEscalationEmail } from '@/lib/services/email.service';
+
+/** Look up the company's outbound email address (set during onboarding —
+ *  e.g. threadmint@baljia.app). Falls back to the generic support@ if the
+ *  column is null, but every onboarded company should have it set. */
+async function getCompanyOutboundFrom(companyId: string): Promise<string> {
+  const [row] = await db
+    .select({ company_email: companies.company_email })
+    .from(companies)
+    .where(eq(companies.id, companyId))
+    .limit(1);
+  return row?.company_email || 'support@baljia.app';
+}
 
 export function getSupportTools() {
   return [
@@ -123,17 +135,37 @@ export async function handleSupportTool(
         .orderBy(desc(emailThreads.created_at)).limit(limit);
 
       if (data.length === 0) return 'Inbox is empty. No inbound emails to process.';
-      return data.map((e) => `- From: ${e.from_address} | Subject: ${e.subject ?? '(no subject)'} | ${e.created_at}`).join('\n');
+
+      // Mark these emails as read so the agent doesn't loop on the same
+      // batch on the next turn. Fire-and-forget — a failed update just
+      // means the agent re-processes them, which is annoying but not wrong.
+      if (unreadOnly) {
+        const ids = data.map((e) => e.id);
+        db.update(emailThreads)
+          .set({ is_read: true })
+          .where(inArray(emailThreads.id, ids))
+          .catch(() => { /* logged inside Drizzle */ });
+      }
+
+      return data
+        .map((e) => `- thread_id=${e.thread_id ?? e.id} | From: ${e.from_address} | Subject: ${e.subject ?? '(no subject)'} | ${e.created_at}\n  Body: ${(e.body ?? '').slice(0, 300)}`)
+        .join('\n');
     }
 
     case 'send_email': {
       try {
+        // Send from the company's verified address (e.g. threadmint@baljia.app)
+        // so replies thread correctly and the recipient sees a coherent identity.
+        const fromAddress = await getCompanyOutboundFrom(task.company_id);
         const { messageId } = await sendEmail({
-          to: input.to as string, from: 'support@baljia.app',
-          subject: input.subject as string, textBody: input.body as string,
-          companyId: task.company_id, threadId: (input.reply_to_thread_id as string) ?? undefined,
+          to: input.to as string,
+          from: fromAddress,
+          subject: input.subject as string,
+          textBody: input.body as string,
+          companyId: task.company_id,
+          threadId: (input.reply_to_thread_id as string) ?? undefined,
         });
-        return `Email sent to ${input.to}: "${input.subject}" (messageId: ${messageId})`;
+        return `Email sent from ${fromAddress} to ${input.to}: "${input.subject}" (messageId: ${messageId})`;
       } catch (err) {
         return `Failed to send email: ${err instanceof Error ? err.message : 'Unknown error'}`;
       }
