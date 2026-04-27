@@ -167,7 +167,22 @@ export async function getCompanyDatabase(companyId: string): Promise<NeonDatabas
   const data = await response.json() as { project: NeonProject };
   const project = data.project;
 
-  const connRes = await fetch(`${NEON_API}/projects/${project.id}/connection_uri`, {
+  // Neon API v2 requires `database_name` and `role_name` query params on this
+  // endpoint. Without them it returns 400 "query parameter database_name not
+  // set" and the previous version of this code silently swallowed that as an
+  // empty connectionUri. The defaults (`neondb` / `neondb_owner`) are what
+  // createProjectAndDatabase provisions, so they match every Baljia-created
+  // project. If a project was provisioned with different names, we'll still
+  // get 400 here and the caller can fall back to the createProjectAndDatabase
+  // response (which includes the URI inline).
+  const connUrl = new URL(`${NEON_API}/projects/${project.id}/connection_uri`);
+  connUrl.searchParams.set('database_name', 'neondb');
+  connUrl.searchParams.set('role_name', 'neondb_owner');
+  // Pooled connection — what app code actually wants. Falls back to direct
+  // if the project doesn't have a pooler.
+  connUrl.searchParams.set('pooled', 'true');
+
+  const connRes = await fetch(connUrl.toString(), {
     headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
   });
 
@@ -175,6 +190,12 @@ export async function getCompanyDatabase(companyId: string): Promise<NeonDatabas
   if (connRes.ok) {
     const connData = await connRes.json() as { uri?: string };
     connectionUri = connData.uri ?? '';
+  } else {
+    log.warn('Neon connection_uri fetch failed', {
+      projectId: project.id,
+      status: connRes.status,
+      body: (await connRes.text().catch(() => '')).slice(0, 200),
+    });
   }
 
   let host = '';
