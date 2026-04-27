@@ -24,7 +24,12 @@ test.describe('Founder UI parity (user can do what Baljia does)', () => {
     companyCtx = await pickTestCompany();
     await ensureCredits(companyCtx.id, 20);
     // Wipe any leftover fixtures so each suite run is idempotent.
-    await db.delete(tasks).where(and(
+    // Clear credit_ledger references first (FK constraint).
+    // Soft-clean: mark stale fixtures as 'rejected'. We avoid hard-delete because
+    // tasks have FK references from credit_ledger, task_executions, and
+    // platform_events — none of which CASCADE. Status update is cheap, idempotent,
+    // and keeps the audit trail clean.
+    await db.update(tasks).set({ status: 'rejected' as never }).where(and(
       eq(tasks.company_id, companyCtx.id),
       like(tasks.title, `%${TASK_PREFIX}%`),
     ));
@@ -170,9 +175,55 @@ test.describe('Founder UI parity (user can do what Baljia does)', () => {
     console.log('  ✓ PATCH /api/recurring/:id, DELETE /api/recurring/:id, POST /api/links, DELETE /api/links — all 200');
   });
 
+  // ────────────────────────────────────────────────────────────
+  // 5. Approve flow actually launches the task (regression for the bug
+  //    where the dashboard showed "Awaiting approval" again after 30s
+  //    because the BG worker process wasn't running in dev).
+  // ────────────────────────────────────────────────────────────
+  test('approve flow: API marks task authorized AND launches it (no "snap back to awaiting approval")', async ({ page }) => {
+    // Seed a todo task we can approve directly (avoids needing the LLM for create)
+    const title = `${TASK_PREFIX}-approve-flow`;
+    const [seeded] = await db.insert(tasks).values({
+      company_id: companyCtx.id,
+      title,
+      description: 'E2E approve-flow seed',
+      tag: 'research',
+      source: 'founder_requested',
+      status: 'todo',
+      assigned_to_agent_id: 29,
+    }).returning({ id: tasks.id });
+
+    // Approve via API (same path the dashboard button uses)
+    const res = await page.request.post(`/api/tasks/${seeded.id}/approve`);
+    expect(res.status()).toBe(200);
+    const body = await res.json() as { authorized: boolean; queued_for_worker: boolean };
+    expect(body.authorized).toBe(true);
+
+    // Authorized_by should be set immediately (synchronous DB update inside the route)
+    const [afterApprove] = await db.select({ authorized_by: tasks.authorized_by, status: tasks.status })
+      .from(tasks).where(eq(tasks.id, seeded.id)).limit(1);
+    expect(afterApprove?.authorized_by).toBe('founder');
+
+    // Within ~10s the worker should claim and flip status to in_progress.
+    // The fix is to launch directly from the API (rather than relying on the
+    // BG worker process that isn't running in dev).
+    await expect.poll(async () => {
+      const [row] = await db.select({ status: tasks.status })
+        .from(tasks).where(eq(tasks.id, seeded.id)).limit(1);
+      return row?.status;
+    }, { timeout: 15_000, intervals: [500, 1000, 2000] }).not.toBe('todo');
+    console.log('  ✓ task transitioned out of "todo" after approve — launch is wired');
+
+    // Cleanup: cancel the worker run by setting back to rejected (avoid burning more time/credits)
+    await db.update(tasks).set({ status: 'rejected' }).where(eq(tasks.id, seeded.id));
+  });
+
   // ── Cleanup ──
+  // Soft-cleanup tasks (mark as rejected) to avoid FK violations from
+  // credit_ledger / task_executions / platform_events. Hard-delete the lighter
+  // tables that don't have inbound FK references.
   test.afterAll(async () => {
-    await db.delete(tasks).where(and(
+    await db.update(tasks).set({ status: 'rejected' as never }).where(and(
       eq(tasks.company_id, companyCtx.id),
       like(tasks.title, `%${TASK_PREFIX}%`),
     ));

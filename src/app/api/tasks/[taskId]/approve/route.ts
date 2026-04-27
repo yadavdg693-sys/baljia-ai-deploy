@@ -9,7 +9,6 @@ import { eq } from 'drizzle-orm';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('TaskApprove');
-void log; // kept for potential future logging; launchTask is no longer called here
 
 export async function POST(
   _request: NextRequest,
@@ -76,12 +75,26 @@ export async function POST(
     title: task.title,
   });
 
+  // Launch directly from the web process. This matches the CEO chat path
+  // (handleApproveTask in ceo.tool-handlers.ts) and means tasks actually run
+  // in dev environments that don't have the Render Background Worker process
+  // (scripts/worker-boot.ts) running. In production both launch paths are
+  // safe to coexist — launchTask uses atomic claimSlotAndCharge under
+  // WHERE status='todo' so only one wins the race.
+  // Fire-and-forget: don't block the founder's API response on a 4-hour
+  // worker run; surface progress via dashboard polling + on-action refresh.
+  void import('@/lib/agents/worker-launcher').then(({ launchTask }) =>
+    launchTask(taskId).catch((err) => {
+      log.error('launchTask after approve failed', { taskId, error: err instanceof Error ? err.message : String(err) });
+    }),
+  );
+
   return NextResponse.json({
     id: task.id,
     title: task.title,
-    status: 'todo',                    // still todo — worker will claim
+    status: 'todo',                    // still todo for ~1s — worker claim flips to in_progress
     authorized: true,
     queued_for_worker: true,
-    note: 'Task approved and queued. A background worker will pick it up within ~5 seconds.',
+    note: 'Task approved and launching now.',
   });
 }

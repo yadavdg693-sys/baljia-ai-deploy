@@ -116,7 +116,7 @@ export function TaskCard({ task, onApprove, onReject, onReorder, onClick }: Task
           )}
         </div>
         <Badge variant={statusVariants[task.status] ?? 'default'} size="sm">
-          {task.status.replace(/_/g, ' ')}
+          {task.status === 'todo' && task.authorized_by ? 'queued' : task.status.replace(/_/g, ' ')}
         </Badge>
       </div>
 
@@ -162,8 +162,10 @@ export function TaskCard({ task, onApprove, onReject, onReorder, onClick }: Task
         </span>
       </div>
 
-      {/* Approve/Reject/Reorder/RunNow buttons for tasks awaiting founder decision */}
-      {task.status === 'todo' && (onApprove || onReject || onReorder) && (
+      {/* Approve/Reject/Reorder/RunNow buttons for tasks awaiting founder decision.
+           Hidden once authorized_by is set — the task is launching, buttons would
+           race the worker claim. */}
+      {task.status === 'todo' && !task.authorized_by && (onApprove || onReject || onReorder) && (
         <div className="flex items-center gap-1 mt-3 pt-3 border-t border-border-subtle">
           {onReject && (
             <Button

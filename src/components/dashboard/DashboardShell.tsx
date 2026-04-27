@@ -203,15 +203,24 @@ export function DashboardShell({
     return w;
   }, [creditBalance, company.plan_tier, company.onboarding_status, company.hosting_state]);
 
-  // FIX: Approve now calls real API before updating local state
+  // Approve hits the API, then optimistically marks the task as authorized so
+  // the UI immediately shows "Queued · launching" instead of "Awaiting approval".
+  // The worker (running in-process via launchTask now) flips status to
+  // 'in_progress' within ~1s, which the next refreshDashboard call picks up.
   const handleApprove = useCallback(async (taskId: string) => {
     try {
       const res = await fetch(`/api/tasks/${taskId}/approve`, { method: 'POST' });
-      if (res.ok || (res.status === 409)) {
-        setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, status: 'in_progress' as const } : t)));
+      if (res.ok || res.status === 409) {
+        // Optimistic — use authorized_by as the signal so it survives the next
+        // poll (the API has already persisted authorized_by='founder').
+        setTasks((prev) => prev.map((t) =>
+          t.id === taskId ? { ...t, authorized_by: 'founder' } : t
+        ));
+        // Brief delay then refresh to pull in_progress status once the worker claims.
+        setTimeout(() => { void refreshDashboard(); }, 1500);
       }
     } catch { /* silent — optimistic update skipped on network error */ }
-  }, []);
+  }, [refreshDashboard]);
 
   // FIX: Reject now calls real API before updating local state
   const handleReject = useCallback(async (taskId: string) => {
@@ -420,13 +429,18 @@ export function DashboardShell({
                     {task.status === 'in_progress' && (
                       <span className="micro-pill micro-pill--dark">Running</span>
                     )}
-                    {task.status === 'todo' && (
+                    {task.status === 'todo' && task.authorized_by && (
+                      <span className="micro-pill micro-pill--dark">Queued · launching</span>
+                    )}
+                    {task.status === 'todo' && !task.authorized_by && (
                       <span className="micro-pill micro-pill--dark">Awaiting approval</span>
                     )}
                   </div>
                   {/* Inline controls for todo tasks — full parity with Baljia's
-                       reject_task / approve_task / move_task_to_top / reorder_task / get_task_run_link tools. */}
-                  {task.status === 'todo' && (
+                       reject_task / approve_task / move_task_to_top / reorder_task / get_task_run_link tools.
+                       Once authorized_by is set, the task is launching — hide
+                       the buttons since they'd race with the worker claim. */}
+                  {task.status === 'todo' && !task.authorized_by && (
                     <div
                       className="task-preview-card__actions"
                       onClick={(e) => e.stopPropagation()}
