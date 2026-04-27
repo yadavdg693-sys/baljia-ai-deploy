@@ -17,9 +17,26 @@ const log = createLogger('LLMProvider');
 // ── Anthropic ──────────────────────────────────
 
 export function isAnthropicAvailable(): boolean {
-  if (isDirectAnthropicAvailable()) return true;
-  if (isBedrockAvailable()) return true;
+  if (isAnthropicOAuthAvailable()) return true;   // Claude Code OAuth (preferred)
+  if (isDirectAnthropicAvailable()) return true;  // Direct API key
+  if (isBedrockAvailable()) return true;          // AWS Bedrock
   return false;
+}
+
+/**
+ * Claude Code OAuth — reads ~/.claude/.credentials.json. Preferred over
+ * direct API key + Bedrock because it routes through the operator's existing
+ * Pro/Max subscription with no extra spend.
+ */
+export function isAnthropicOAuthAvailable(): boolean {
+  // Lazy require to avoid pulling node:fs into the Edge Runtime bundle.
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const mod = require('@/lib/anthropic-oauth') as typeof import('@/lib/anthropic-oauth');
+    return mod.isAnthropicOAuthAvailable();
+  } catch {
+    return false;
+  }
 }
 
 export function isBedrockAvailable(): boolean {

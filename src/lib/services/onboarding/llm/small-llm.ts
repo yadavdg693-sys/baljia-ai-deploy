@@ -26,12 +26,22 @@ export async function callSmallLLM(prompt: string, maxTokens = 256): Promise<str
         return await callOpenAI({ userPrompt: prompt, maxTokens, model: OPENAI_MODELS.GPT_5_4_MINI });
       }
       if (p === 'anthropic' && isAnthropicAvailable()) {
-        const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-        const response = await client.messages.create({
-          model: SMALL_LLM_FALLBACK_MODEL,
-          max_tokens: maxTokens,
-          messages: [{ role: 'user', content: prompt }],
-        });
+        const { createAnthropicWithOAuth, CLAUDE_CODE_IDENTITY } = await import('@/lib/anthropic-oauth');
+        const { client, isOAuth } = createAnthropicWithOAuth();
+        // OAuth requires the Claude Code identity as the first system block.
+        // Non-OAuth path skips system entirely (matches prior behavior).
+        const response = await (isOAuth
+          ? client.messages.create({
+              model: SMALL_LLM_FALLBACK_MODEL,
+              max_tokens: maxTokens,
+              system: [{ type: 'text', text: CLAUDE_CODE_IDENTITY }],
+              messages: [{ role: 'user', content: prompt }],
+            })
+          : client.messages.create({
+              model: SMALL_LLM_FALLBACK_MODEL,
+              max_tokens: maxTokens,
+              messages: [{ role: 'user', content: prompt }],
+            }));
         const block = response.content[0];
         return block.type === 'text' ? block.text : '';
       }

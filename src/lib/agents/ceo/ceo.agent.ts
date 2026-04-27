@@ -10,12 +10,16 @@ import type { CEOStreamEvent, ChatMessage } from '@/types';
 import { assembleCEOPrompt } from './ceo.prompt';
 import { CEO_TOOLS, handleToolCall } from './ceo.tools';
 import type { ToolResult } from './ceo.tools';
-import { isAnthropicAvailable, isBedrockAvailable, isDirectAnthropicAvailable, isOpenAIAvailable, getOpenAIApiKey, isOpenRouterAvailable, OPENROUTER_MODELS, OPENAI_MODELS, getPreferredProvider } from '@/lib/llm-provider';
+import { isAnthropicAvailable, isBedrockAvailable, isDirectAnthropicAvailable, isOpenAIAvailable, getOpenAIApiKey, isOpenRouterAvailable, OPENROUTER_MODELS, OPENAI_MODELS, getPreferredProvider, isAnthropicOAuthAvailable } from '@/lib/llm-provider';
+import { createAnthropicWithOAuth, withClaudeCodeIdentity } from '@/lib/anthropic-oauth';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('CEO');
 
-const CLAUDE_MODEL = 'claude-sonnet-4-20250514';
+// CEO chat is the founder-facing strategic layer — use Opus 4.6 for the
+// best reasoning + multi-step tool orchestration. Override per-deployment
+// via CEO_CLAUDE_MODEL env var if needed.
+const CLAUDE_MODEL = process.env.CEO_CLAUDE_MODEL || 'claude-opus-4-6';
 const OPENAI_MODEL = OPENAI_MODELS.GPT_5_4;
 const OPENROUTER_MODEL = OPENROUTER_MODELS.FULL_AGENT;
 const GEMINI_MODEL = 'gemini-2.5-flash';
@@ -66,39 +70,73 @@ export async function* streamCEOResponse(input: {
 // CLAUDE (Primary)
 // ══════════════════════════════════════════════
 
-/** Create the right Anthropic client — Bedrock API key, Bedrock IAM, or direct */
-function createAnthropicClient(): Anthropic {
-  // Option 1: Bedrock long-term API key (ABSK... format)
-  const bedrockApiKey = process.env.AWS_BEDROCK_API_KEY;
-  if (bedrockApiKey && !isDirectAnthropicAvailable()) {
-    const region = process.env.AWS_BEDROCK_REGION || process.env.AWS_REGION || 'us-east-1';
-    log.info('Using AWS Bedrock API key', { region });
-    // Bedrock API keys use Bearer auth on the Bedrock runtime endpoint
-    // The Anthropic SDK base URL + custom auth header makes this work
-    const AnthropicBedrock = require('@anthropic-ai/bedrock-sdk').default;
-    return new AnthropicBedrock({
-      awsRegion: region,
-      baseURL: `https://bedrock-runtime.${region}.amazonaws.com`,
-      defaultHeaders: { 'Authorization': `Bearer ${bedrockApiKey}` },
-      skipAuth: true,
-    }) as unknown as Anthropic;
+/** Create the right Anthropic client.
+ * Order: Claude Code OAuth → direct ANTHROPIC_API_KEY → Bedrock API key → Bedrock IAM.
+ *
+ * Claude Code OAuth ranks first because it piggybacks on the operator's
+ * Pro/Max subscription — no extra spend, no extra creds, and (in dev)
+ * usually the only path that works.
+ *
+ * Returns `{ client, isOAuth }`. When isOAuth is true, callers MUST wrap
+ * their system prompt with `withClaudeCodeIdentity()` or the API rejects
+ * the request.
+ */
+function createAnthropicClient(): { client: Anthropic; isOAuth: boolean } {
+  // Option 1: Claude Code OAuth (preferred — uses the operator's Pro/Max session)
+  if (isAnthropicOAuthAvailable()) {
+    const { client, isOAuth } = createAnthropicWithOAuth();
+    if (isOAuth) {
+      log.info('Using Claude Code OAuth');
+      return { client, isOAuth };
+    }
   }
 
-  // Option 2: Standard IAM credentials for Bedrock
-  if (isBedrockAvailable() && !isDirectAnthropicAvailable()) {
+  // Option 2: Direct Anthropic API key
+  if (isDirectAnthropicAvailable()) {
+    return { client: new Anthropic(), isOAuth: false };
+  }
+
+  // Option 3: Bedrock long-term API key (ABSK... format)
+  const bedrockApiKey = process.env.AWS_BEDROCK_API_KEY;
+  if (bedrockApiKey) {
+    const region = process.env.AWS_BEDROCK_REGION || process.env.AWS_REGION || 'us-east-1';
+    log.info('Using AWS Bedrock API key', { region });
+    const AnthropicBedrock = require('@anthropic-ai/bedrock-sdk').default;
+    return {
+      client: new AnthropicBedrock({
+        awsRegion: region,
+        baseURL: `https://bedrock-runtime.${region}.amazonaws.com`,
+        defaultHeaders: { 'Authorization': `Bearer ${bedrockApiKey}` },
+        skipAuth: true,
+      }) as unknown as Anthropic,
+      isOAuth: false,
+    };
+  }
+
+  // Option 4: Standard IAM credentials for Bedrock
+  if (isBedrockAvailable()) {
     const AnthropicBedrock = require('@anthropic-ai/bedrock-sdk').default;
     const region = process.env.AWS_BEDROCK_REGION || process.env.AWS_REGION || 'us-east-1';
     log.info('Using AWS Bedrock IAM', { region });
-    return new AnthropicBedrock({ awsRegion: region }) as unknown as Anthropic;
+    return {
+      client: new AnthropicBedrock({ awsRegion: region }) as unknown as Anthropic,
+      isOAuth: false,
+    };
   }
 
-  // Option 3: Direct Anthropic API
-  return new Anthropic();
+  // Final fallback — Anthropic() with no creds will throw on first call,
+  // surfacing a clear error rather than silently returning a broken client.
+  return { client: new Anthropic(), isOAuth: false };
 }
 
 /** Get the right model ID — Bedrock uses a different format */
 function getClaudeModelId(): string {
-  if ((process.env.AWS_BEDROCK_API_KEY || isBedrockAvailable()) && !isDirectAnthropicAvailable()) {
+  // OAuth + direct API both speak the canonical model id.
+  if (isAnthropicOAuthAvailable() || isDirectAnthropicAvailable()) {
+    return CLAUDE_MODEL;
+  }
+  // Bedrock uses an inference profile id.
+  if (process.env.AWS_BEDROCK_API_KEY || isBedrockAvailable()) {
     return process.env.AWS_BEDROCK_MODEL_ID || 'us.anthropic.claude-sonnet-4-20250514-v1:0';
   }
   return CLAUDE_MODEL;
@@ -109,8 +147,11 @@ async function* streamWithClaude(input: {
   message: string;
   sessionHistory: ChatMessage[];
 }): AsyncGenerator<CEOStreamEvent> {
-  const anthropic = createAnthropicClient();
-  const systemPrompt = await assembleCEOPrompt(input.companyId);
+  const { client: anthropic, isOAuth } = createAnthropicClient();
+  const rawSystemPrompt = await assembleCEOPrompt(input.companyId);
+  // OAuth path requires the Claude Code identity prefix as a separate text
+  // block — the API rejects requests whose first system block isn't it.
+  const systemPrompt = withClaudeCodeIdentity(rawSystemPrompt, isOAuth);
 
   const messages: Anthropic.MessageParam[] = input.sessionHistory
     .filter((m) => m.role === 'user' || m.role === 'assistant')
@@ -143,7 +184,9 @@ async function* streamWithClaude(input: {
       const stream = anthropic.messages.stream({
         model: getClaudeModelId(),
         max_tokens: 2048,
-        system: systemPrompt,
+        // SDK accepts string OR array of text blocks. withClaudeCodeIdentity
+        // returns whichever shape is correct for the auth path.
+        system: systemPrompt as Anthropic.MessageCreateParams['system'],
         messages,
         tools: CEO_TOOLS as Anthropic.Tool[],
       }, { signal: controller.signal });

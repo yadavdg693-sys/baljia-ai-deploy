@@ -177,13 +177,14 @@ function validateClassification(parsed: LLMClassification): LLMClassification {
 }
 
 async function classifyWithHaiku(input: { title: string; description: string; tag: string }): Promise<LLMClassification> {
-  const anthropic = new Anthropic();
+  const { createAnthropicWithOAuth, withClaudeCodeIdentity } = await import('@/lib/anthropic-oauth');
+  const { client: anthropic, isOAuth } = createAnthropicWithOAuth();
   const response = await callAnthropicWithTimeout(
     anthropic,
     {
       model: HAIKU_MODEL,
       max_tokens: 256,
-      system: CLASSIFIER_SYSTEM_PROMPT,
+      system: withClaudeCodeIdentity(CLASSIFIER_SYSTEM_PROMPT, isOAuth) as Anthropic.MessageCreateParams['system'],
       messages: [{ role: 'user', content: buildClassifierPrompt(input) }],
     },
     { timeoutMs: 30000, label: 'governance_classify_haiku' }

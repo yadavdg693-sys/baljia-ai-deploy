@@ -22,7 +22,8 @@ import { getMetaAdsTools, handleMetaAdsTool } from './tools/meta-ads.tools';
 import { getOutreachTools, handleOutreachTool } from './tools/outreach.tools';
 import { getEngineeringTools, handleEngineeringTool } from './tools/engineering.tools';
 import { callAnthropicWithTimeout, callOpenRouterWithTimeout, callGeminiWithTimeout } from '@/lib/llm-safety';
-import { isAnthropicAvailable, isBedrockAvailable, isDirectAnthropicAvailable, isOpenAIAvailable, getOpenAIApiKey, isOpenRouterAvailable, OPENROUTER_MODELS, OPENAI_MODELS, getPreferredProvider } from '@/lib/llm-provider';
+import { isAnthropicAvailable, isBedrockAvailable, isDirectAnthropicAvailable, isAnthropicOAuthAvailable, isOpenAIAvailable, getOpenAIApiKey, isOpenRouterAvailable, OPENROUTER_MODELS, OPENAI_MODELS, getPreferredProvider } from '@/lib/llm-provider';
+import { createAnthropicWithOAuth, withClaudeCodeIdentity } from '@/lib/anthropic-oauth';
 import { sanitizeForPrompt, moderateOutput } from '@/lib/content-safety';
 import { db, agents as agentsTable, reports, companies, tasks as tasksTable, taskExecutions } from '@/lib/db';
 import { eq, and, desc } from 'drizzle-orm';
@@ -31,8 +32,13 @@ import type { Task, TaskExecution } from '@/types';
 
 const log = createLogger('AgentFactory');
 
-const CLAUDE_MODEL_SONNET = 'claude-sonnet-4-20250514';
-const CLAUDE_MODEL_HAIKU = 'claude-haiku-4-5-20251001';
+// Worker agents (engineering / research / data / browser / etc.) use Sonnet
+// 4.6 — strong on code generation + tool use, cheaper than Opus, and the
+// adaptive-thinking model rated best for agent loops. Haiku 4.5 stays as
+// the fast/cheap option for verification + small classifications.
+// Override via WORKER_CLAUDE_MODEL / WORKER_HAIKU_MODEL env vars.
+const CLAUDE_MODEL_SONNET = process.env.WORKER_CLAUDE_MODEL || 'claude-sonnet-4-6';
+const CLAUDE_MODEL_HAIKU = process.env.WORKER_HAIKU_MODEL || 'claude-haiku-4-5-20251001';
 const GEMINI_MODEL = 'gemini-2.5-flash';
 
 // ══════════════════════════════════════════════
@@ -1397,15 +1403,21 @@ async function runWithClaude(
   modelId: string = CLAUDE_MODEL_SONNET,
 ): Promise<AgentResult> {
   let anthropic: Anthropic;
-  if (isBedrockAvailable() && !isDirectAnthropicAvailable()) {
+  let isOAuth = false;
+  // Order: Claude Code OAuth → direct API key → Bedrock API key → Bedrock IAM.
+  // OAuth piggybacks on the operator's Pro/Max subscription; preferred in
+  // dev (no extra creds) and in prod (no per-call billing surprise).
+  if (isAnthropicOAuthAvailable()) {
+    const oauthClient = createAnthropicWithOAuth();
+    anthropic = oauthClient.client;
+    isOAuth = oauthClient.isOAuth;
+  } else if (isDirectAnthropicAvailable()) {
+    anthropic = new Anthropic();
+  } else if (isBedrockAvailable()) {
     const AnthropicBedrock = require('@anthropic-ai/bedrock-sdk').default;
     const region = process.env.AWS_BEDROCK_REGION || process.env.AWS_REGION || 'us-east-1';
     const apiKey = process.env.AWS_BEDROCK_API_KEY;
     // Use Bearer-auth long-term API key (ABSK... format) instead of AWS SigV4.
-    // The previous `new AnthropicBedrock({ awsRegion })` call fell through to the
-    // default AWS credential chain and failed with CredentialsProviderError
-    // when no AWS_* env vars were set. Bedrock long-term keys bypass that
-    // entirely — see scripts/test-bedrock.ts for the reference client shape.
     if (apiKey && apiKey.startsWith('ABSK')) {
       anthropic = new AnthropicBedrock({
         awsRegion: region,
@@ -1441,7 +1453,9 @@ async function runWithClaude(
       {
         model: modelId,
         max_tokens: 4096,
-        system: systemPrompt,
+        // OAuth path requires the Claude Code identity prefix as the first
+        // system text block; non-OAuth path passes the prompt as-is.
+        system: withClaudeCodeIdentity(systemPrompt, isOAuth) as Anthropic.MessageCreateParams['system'],
         tools: tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.input_schema })),
         messages,
       },
