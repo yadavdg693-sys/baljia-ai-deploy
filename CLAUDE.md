@@ -79,7 +79,8 @@ The tables below remain as a map of what reference material exists.
 | Auth (founder) | Custom JWT (jose) + magic link + Google OAuth | Full control over session management |
 | Auth (LLM provider) | **Claude Code OAuth** (`~/.claude/.credentials.json`) → ANTHROPIC_API_KEY → Bedrock | Piggybacks on operator's Pro/Max subscription; no extra creds. See `src/lib/anthropic-oauth.ts`. |
 | Hosting | Cloudflare Workers (primary) + Render (legacy fallback) | See ADR-002. CF Workers serve API + agent execution + scheduled tasks; Render kept for environments without CF creds |
-| Queue/Events | Upstash Redis | Serverless pub/sub for event bus, task queue |
+| Cache + ephemeral counters | Redis Cloud (via `ioredis` TCP, not Upstash REST) | Rate-limit counters (`rl:chat:<ip>`), Tavily search cache, fire-and-forget pub/sub on `events:<companyId>`. Falls back gracefully if `REDIS_URL` unset. NOTE: the **task queue is in Postgres** (`tasks.status='todo'` + atomic claim under `WHERE status='todo'`), not Redis. Pub/sub channel is published-to but not yet consumed client-side; dashboard refresh uses 30s poll + on-action hook. |
+| Task queue | Postgres (`tasks` table) | Atomic claim via `WHERE status='todo'` in `claimSlotAndCharge`. Render BG worker (`scripts/worker-boot.ts`) polls + claims; web process can also `launchTask` directly. One slot per company. |
 | LLM (CEO chat) | **Claude Opus 4.6** (`claude-opus-4-6`) | Strategic, multi-tool orchestration, founder-facing. Override via `CEO_CLAUDE_MODEL`. |
 | LLM (Worker agents) | **Claude Sonnet 4.6** (`claude-sonnet-4-6`) | Engineering / Research / Data / Browser / etc. Strong on code + tool use, cheaper than Opus. Override via `WORKER_CLAUDE_MODEL`. |
 | LLM (Governance) | Claude Haiku 4.5 (`claude-haiku-4-5-20251001`) | Fast/cheap for routing, classification, credit quoting |
@@ -483,7 +484,7 @@ The codebase has substantial implementation across all major areas. This section
 | `task.service.ts` | Built | CRUD, queue ordering, status transitions |
 | `memory.service.ts` | Built (382 LOC) | Learning extraction, memory layer management |
 | `failure.service.ts` | Built (173 LOC) | FNV-1a fingerprinting, 8-class taxonomy |
-| `event.service.ts` | Built (136 LOC) | Dual-write Neon + Redis pub/sub |
+| `event.service.ts` | Built (136 LOC) | Writes to `platform_events` table (durable) + best-effort publish to Redis pub/sub channel `events:<companyId>` (no current consumer — dashboard uses 30s poll + on-action hook instead) |
 | `onboarding.service.ts` | Built | 20-stage async pipeline |
 | `chat.service.ts` | Built | Session management, safe JSONB parsing |
 | `router.service.ts` | Built | 80+ tags mapped to 8 agent IDs |
