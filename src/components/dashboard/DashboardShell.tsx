@@ -339,16 +339,8 @@ export function DashboardShell({ company, tasks: initialTasks, documents, report
         {/* ── Left column ── */}
         <div style={S.colLeft} className="dashboard-col-left">
           <div style={S.panelHeading}><span style={{ fontFamily: "'Newsreader', Georgia, serif" }}>Baljia</span></div>
-          <div style={{ display: 'flex', gap: 14, marginBottom: 20 }}>
+          <div style={{ marginBottom: 20 }}>
             <img src="/mascot.png" alt="Baljia" style={S.mascotMd} />
-            <div>
-              <h2 style={{ fontFamily: "'Newsreader', Georgia, serif", fontSize: 16, fontWeight: 500, marginBottom: 4, color: 'var(--ink)' }}>{company.one_liner ?? 'Ready'}</h2>
-              <p style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>
-                {company.onboarding_status === 'completed' ? 'Company online. Chat with the CEO or approve a task.'
-                  : onboardingFailed ? 'Setup paused — resume above.'
-                  : 'Baljia is still setting things up.'}
-              </p>
-            </div>
           </div>
 
           {company.plan_tier === 'trial' && (
