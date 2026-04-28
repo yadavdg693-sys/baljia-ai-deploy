@@ -19,7 +19,8 @@
 import { existsSync, readFileSync, statSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { dirname, join, isAbsolute } from 'node:path';
 import { execSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { tmpdir } from 'node:os';
 import Anthropic from '@anthropic-ai/sdk';
 import { db, platformFeedback, platformOpsRuns } from '@/lib/db';
 import { eq, sql } from 'drizzle-orm';
@@ -307,6 +308,42 @@ function gitExec(cmd: string): string {
   return execSync(cmd, { cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 1024 * 1024 });
 }
 
+/**
+ * Pre-flight check: confirm the platform write token actually has write
+ * access to the platform repo. Avoids burning LLM cost on runs that will
+ * fail at push time.
+ */
+async function checkPlatformWriteAccess(): Promise<{ ok: boolean; reason?: string }> {
+  const token = process.env.PLATFORM_OPS_GIT_TOKEN ?? process.env.GITHUB_TOKEN;
+  if (!token) return { ok: false, reason: 'No PLATFORM_OPS_GIT_TOKEN or GITHUB_TOKEN set' };
+
+  try {
+    const remote = gitExec('git remote get-url origin').trim();
+    const m = remote.match(/[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?$/);
+    if (!m) return { ok: false, reason: `Cannot parse owner/repo from origin: ${remote}` };
+    const [, owner, repo] = m;
+
+    // GET /repos/{owner}/{repo} returns `permissions` object when authed
+    const res = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
+    });
+    if (!res.ok) {
+      return { ok: false, reason: `GitHub API ${res.status} fetching ${owner}/${repo} — token may be invalid` };
+    }
+    const data = await res.json() as { permissions?: { push?: boolean; admin?: boolean }; full_name?: string };
+    const canPush = data.permissions?.push === true || data.permissions?.admin === true;
+    if (!canPush) {
+      return {
+        ok: false,
+        reason: `Token has no push permission for ${data.full_name ?? `${owner}/${repo}`}. Set PLATFORM_OPS_GIT_TOKEN to a PAT with Contents:write + Pull-requests:write for that repo.`,
+      };
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, reason: `Pre-flight check threw: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
 async function openPullRequest(branch: string, title: string, body: string): Promise<{ url: string; number: number }> {
   const token = process.env.GITHUB_TOKEN;
   if (!token) throw new Error('GITHUB_TOKEN not configured for PR creation');
@@ -382,6 +419,26 @@ export async function fixApprovedBug(feedbackId: string): Promise<WriteResult> {
     result.status = 'skipped';
     result.reason = 'PLATFORM_OPS_PAUSED=true';
     return result;
+  }
+
+  // Pre-flight: confirm we have a token that can write to the platform repo.
+  // We don't actually push here — just verify the token+permission via the
+  // GitHub API so we don't burn $1+ in LLM cost on a run that's doomed at
+  // the push step.
+  // Dry-run mode (PLATFORM_OPS_DRY_RUN=true) skips the pre-flight + push +
+  // PR-open and just commits locally on a branch. Useful for testing the
+  // agent's reasoning without needing platform-repo write access.
+  const dryRun = process.env.PLATFORM_OPS_DRY_RUN === 'true';
+  if (!dryRun) {
+    const writeOk = await checkPlatformWriteAccess();
+    if (!writeOk.ok) {
+      result.status = 'skipped';
+      result.reason = writeOk.reason;
+      log.warn('Writer pre-flight failed — skipping bug', { feedbackId, reason: writeOk.reason });
+      return result;
+    }
+  } else {
+    log.info('Writer running in DRY-RUN mode (no push, no PR)', { feedbackId });
   }
 
   const [bug] = await db.select().from(platformFeedback).where(eq(platformFeedback.id, feedbackId)).limit(1);
@@ -492,37 +549,78 @@ export async function fixApprovedBug(feedbackId: string): Promise<WriteResult> {
     const diff = gitExec('git diff --cached');
     const diffHash = createHash('sha256').update(diff).digest('hex');
 
-    // Commit (use heredoc-style via stdin to handle multi-line)
-    const commitFile = join(REPO_ROOT, '.git', 'PLATFORM_OPS_COMMIT_MSG');
+    // Commit (use temp file in OS tmpdir to handle multi-line message
+    // safely. Earlier we used .git/PLATFORM_OPS_COMMIT_MSG but that path
+    // doesn't exist when .git is a worktree pointer-file, not a dir.)
+    const commitFile = join(tmpdir(), `platform-ops-commit-${randomUUID()}.txt`);
     writeFileSync(commitFile, fixOutput.commit_message, 'utf8');
-    gitExec(`git commit -F ${JSON.stringify(commitFile)}`);
+    try {
+      gitExec(`git commit -F ${JSON.stringify(commitFile)}`);
+    } finally {
+      // Best-effort cleanup. unlinkSync would throw on Windows if file is
+      // locked; fs.rm async would too. Keeping silent — file is in tmpdir
+      // and gets cleaned by OS eventually.
+      try { execSync(process.platform === 'win32' ? `del /Q ${JSON.stringify(commitFile)}` : `rm -f ${JSON.stringify(commitFile)}`, { cwd: REPO_ROOT, stdio: 'ignore' }); } catch { /* swallow */ }
+    }
     const commitSha = gitExec('git rev-parse HEAD').trim();
 
-    // Push the branch
-    log.info('Pushing branch to origin', { branchName });
-    gitExec(`git push -u origin ${JSON.stringify(branchName)}`);
+    let prUrl = '';
+    let prNumber = 0;
+    if (dryRun) {
+      // Dry-run: skip push + PR. Branch + commit are local. Operator can
+      // inspect with `git log platform-ops-fix/<slug>` and decide manually.
+      log.info('DRY-RUN: skipping push + PR open. Branch is local only.', { branchName, commitSha });
+      prUrl = `(dry-run, no PR)`;
+      prNumber = 0;
+    } else {
+      // Push the branch. Use PLATFORM_OPS_GIT_TOKEN if set (separately scoped
+      // for platform-repo writes), else fall back to GITHUB_TOKEN.
+      const ghToken = process.env.PLATFORM_OPS_GIT_TOKEN ?? process.env.GITHUB_TOKEN;
+      if (!ghToken) throw new Error('No platform-write token: set PLATFORM_OPS_GIT_TOKEN');
+      const remote2 = gitExec('git remote get-url origin').trim();
+      const m2 = remote2.match(/[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?$/);
+      if (!m2) throw new Error(`Cannot parse origin: ${remote2}`);
+      const [, owner2, repo2] = m2;
+      const authedUrl = `https://x-access-token:${ghToken}@github.com/${owner2}/${repo2}.git`;
+      log.info('Pushing branch to origin', { branchName });
+      try {
+        gitExec(`git push -u ${JSON.stringify(authedUrl)} ${JSON.stringify(branchName)}:${JSON.stringify(branchName)}`);
+      } catch (pushErr) {
+        const msg = pushErr instanceof Error ? pushErr.message : String(pushErr);
+        if (/403|Write access to repository not granted/.test(msg)) {
+          throw new Error(
+            `Push 403: token has no write access to ${owner2}/${repo2}. ` +
+            `Set PLATFORM_OPS_GIT_TOKEN to a PAT with Contents:write + Pull-requests:write. ` +
+            `(Branch + commit succeeded locally on ${branchName})`
+          );
+        }
+        throw pushErr;
+      }
 
-    // Open PR
-    const prBodyWithFooter = [
-      fixOutput.pr_body,
-      ``,
-      `---`,
-      `**Bug ID:** ${bug.id}`,
-      `**Triage diagnosis:**`,
-      `\`\`\``,
-      (bug.diagnosis ?? '').slice(0, 2000),
-      `\`\`\``,
-      ``,
-      `**Test evidence:**`,
-      `\`\`\``,
-      fixOutput.test_evidence.slice(0, 2000),
-      `\`\`\``,
-      ``,
-      `*Generated by Baljia Platform-Ops Writer Agent. Verifier agent review and human Gate 2 required before merge.*`,
-    ].join('\n');
+      // Open PR (skipped in dry-run)
+      const prBodyWithFooter = [
+        fixOutput.pr_body,
+        ``,
+        `---`,
+        `**Bug ID:** ${bug.id}`,
+        `**Triage diagnosis:**`,
+        `\`\`\``,
+        (bug.diagnosis ?? '').slice(0, 2000),
+        `\`\`\``,
+        ``,
+        `**Test evidence:**`,
+        `\`\`\``,
+        fixOutput.test_evidence.slice(0, 2000),
+        `\`\`\``,
+        ``,
+        `*Generated by Baljia Platform-Ops Writer Agent. Verifier agent review and human Gate 2 required before merge.*`,
+      ].join('\n');
 
-    const pr = await openPullRequest(branchName, fixOutput.pr_title, prBodyWithFooter);
-    log.info('PR opened', { prUrl: pr.url, prNumber: pr.number });
+      const pr = await openPullRequest(branchName, fixOutput.pr_title, prBodyWithFooter);
+      log.info('PR opened', { prUrl: pr.url, prNumber: pr.number });
+      prUrl = pr.url;
+      prNumber = pr.number;
+    }
 
     // Switch back to base branch so next runs aren't on this branch
     gitExec(`git checkout ${JSON.stringify(baseBranch)}`);
@@ -535,8 +633,8 @@ export async function fixApprovedBug(feedbackId: string): Promise<WriteResult> {
       branch_name: branchName,
       commit_sha: commitSha,
       diff_hash: diffHash,
-      pr_url: pr.url,
-      pr_number: pr.number,
+      pr_url: prUrl || null,
+      pr_number: prNumber || null,
       files_to_modify: [...writtenFiles],
       test_evidence: { stdout: fixOutput.test_evidence } as Record<string, unknown>,
       turns,
@@ -545,19 +643,20 @@ export async function fixApprovedBug(feedbackId: string): Promise<WriteResult> {
       completed_at: new Date(),
     }).where(eq(platformOpsRuns.id, run.id));
 
+    // Bug status: pr_open if we actually opened a PR, dry_run_branch if local-only
     await db.update(platformFeedback).set({
-      status: 'pr_open',
+      status: dryRun ? 'awaiting_approval' : 'pr_open',
       ops_run_id: run.id,
     }).where(eq(platformFeedback.id, bug.id));
 
     result.status = 'done';
-    result.prUrl = pr.url;
-    result.prNumber = pr.number;
+    result.prUrl = prUrl;
+    result.prNumber = prNumber;
     result.branchName = branchName;
     result.turns = turns;
     result.wallClockSeconds = wallClockSeconds;
     result.costCents = costCents;
-    log.info('Writer complete', { feedbackId, prUrl: pr.url, branchName, turns, costCents });
+    log.info('Writer complete', { feedbackId, prUrl, branchName, turns, costCents, dryRun });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.error('Writer failed', { feedbackId, runId: run.id, error: msg });
