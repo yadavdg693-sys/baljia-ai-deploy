@@ -1193,6 +1193,13 @@ async function handleToolCall(
 // ══════════════════════════════════════════════
 
 const ENGINEERING_TOOLS = new Set([
+  // Skills layer — MANDATORY first calls per agent prompt rule 1
+  // (Bug: these were missing from the dispatch set, causing "Unknown tool"
+  // responses even though the tool DEFINITIONS were registered. The agent
+  // saw the tools in its tool list, called them, and our dispatcher didn't
+  // route them to handleEngineeringTool. Production failure on
+  // task 9a36e013-...-cd26 was the symptom.)
+  'list_skills', 'read_skill',
   // GitHub (source control)
   'github_create_repo', 'github_push_file', 'github_read_file',
   'github_list_files', 'github_delete_file',
@@ -1202,6 +1209,7 @@ const ENGINEERING_TOOLS = new Set([
   'cf_deploy_landing', 'cf_verify_founder_app', 'cf_delete_founder_app',
   // Cloudflare — Tier 2/3 full-stack apps (Workers + R2 + Neon bindings)
   'cf_deploy_app', 'cf_get_app_info', 'cf_read_app_source', 'cf_delete_app',
+  'cf_get_logs',
   // Company + domain
   'get_company_tech',
   'attach_custom_domain', 'verify_custom_domain',
