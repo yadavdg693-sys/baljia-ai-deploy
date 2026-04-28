@@ -82,3 +82,6 @@ dist/
 
 # generated landing-page HTML samples
 /tmp-landing/
+
+# generated worker bundles from full-stack CF tests
+/src/scripts/cf-fullstack-test/.bundle/
