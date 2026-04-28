@@ -63,6 +63,7 @@ Skill matrix — read the listed skill BEFORE writing code in that domain:
 | Touching... | Read skill |
 |---|---|
 | Anything that deploys to Workers (every task) | cloudflare-workers |
+| **Building a full-stack founder app (API + DB + frontend) — read this BEFORE writing the script_content for cf_deploy_app** | **build-fullstack-cf-app** |
 | Database / SQL / migrations / schema | neon-postgres |
 | HTML / pages / dashboards / Tailwind / UI | frontend-design |
 | Payments / Stripe / pricing / subscriptions | stripe-payments |

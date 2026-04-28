@@ -2053,6 +2053,8 @@ const SKILLS_ROOT = join(process.cwd(), '.claude', 'skills');
 const SKILL_SUMMARIES: Record<string, string> = {
   'cloudflare-workers':
     'Founder-app deploy target. Runtime constraints (30s CPU, 128 MB, 10 MB bundle), code shape (ES module + default fetch handler), and frameworks that work (Hono) vs ones that don\'t (Express, pg, ioredis).',
+  'build-fullstack-cf-app':
+    'MANDATORY before generating script_content for cf_deploy_app on a Tier 2/3 task (API + DB + frontend). Verified pattern: single-file Worker + raw fetch to Neon HTTP /sql (no @neondatabase/serverless import — the agent has no bundler). Includes canonical template, ordered deploy steps (provision_database → CREATE TABLE → cf_deploy_app → cf_verify), 6 pitfalls, long-running-ops gap.',
   'neon-postgres':
     'Database access from Workers. Use @neondatabase/serverless HTTP driver — pg/postgres packages don\'t work. Drizzle ORM patterns, migration approaches, query best practices.',
   'frontend-design':
