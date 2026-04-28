@@ -6,8 +6,75 @@
 import type { Task, VerificationLevel } from '@/types';
 import * as taskService from '@/lib/services/task.service';
 import * as eventService from '@/lib/services/event.service';
-import { db, reports, companies } from '@/lib/db';
-import { eq } from 'drizzle-orm';
+import { db, reports, companies, taskExecutions } from '@/lib/db';
+import { eq, desc } from 'drizzle-orm';
+
+// Tools that CONSTITUTE shipping CODE somewhere a customer can hit. If a
+// task tag implies it should produce a running app, at least one of these
+// must appear in the execution_log — otherwise the agent's running but
+// nothing is live. queryforge campaign-generator failure (2026-04-25,
+// task 9a36e013-…) had ZERO of these calls in 20 turns; agent created DB
+// tables via run_migration and stopped.
+//
+// run_migration is INTENTIONALLY EXCLUDED — schema migrations alone don't
+// constitute "the feature shipped". For pure-DB tasks (tag='database',
+// 'migration', 'sql'), use a different evidence path.
+const DEPLOY_TOOL_NAMES = new Set([
+  'cf_deploy_app',
+  'cf_deploy_landing',
+  'github_push_file',          // Render deploy-from-repo path
+  'github_create_commit',
+  'render_create_service',
+  'render_deploy',
+  'deploy_to_render',
+]);
+
+// Schema-only tools — sufficient evidence for DB-shaped tasks but NOT for
+// feature/engineering tasks (which need both schema AND code).
+const SCHEMA_DEPLOY_TOOLS = new Set(['run_migration']);
+
+// Tags where a deploy is REQUIRED for "completed" — i.e. without at least
+// one DEPLOY_TOOL call, the task is not actually done.
+const DEPLOY_REQUIRED_TAGS = new Set([
+  'engineering',
+  'deploy',
+  'feature',
+  'complex-feature',
+  'mvp',
+  'full-crud',
+  'auth',
+  'landing-page',
+  'dashboard',
+  'pricing-page',
+  'bug-fix',
+  'fix',
+]);
+
+/** Read execution_log from the latest execution for this task and return
+ *  the names of every tool the agent called. Empty array on error. */
+async function getExecutionToolCalls(taskId: string): Promise<string[]> {
+  try {
+    const [exec] = await db
+      .select({ execution_log: taskExecutions.execution_log })
+      .from(taskExecutions)
+      .where(eq(taskExecutions.task_id, taskId))
+      .orderBy(desc(taskExecutions.created_at))
+      .limit(1);
+
+    if (!exec?.execution_log) return [];
+
+    let log: Array<{ tool?: string }> = [];
+    if (typeof exec.execution_log === 'string') {
+      try { log = JSON.parse(exec.execution_log); } catch { return []; }
+    } else if (Array.isArray(exec.execution_log)) {
+      log = exec.execution_log as Array<{ tool?: string }>;
+    }
+
+    return log.map((e) => e.tool ?? '').filter(Boolean);
+  } catch {
+    return [];
+  }
+}
 
 // ══════════════════════════════════════════════
 // VERIFICATION EVIDENCE
@@ -57,12 +124,17 @@ export async function verifyTask(task: Task): Promise<VerificationResult> {
 function determineLevel(task: Task): VerificationLevel {
   const tag = task.tag.toLowerCase();
 
-  // Deterministic checks — DB/API tasks
-  if (['api', 'crud', 'database', 'webhook', 'cron', 'auth'].includes(tag)) {
+  // Deterministic checks — DB/API tasks + generic engineering work that's
+  // expected to ship code somewhere. 'engineering' was missing pre-2026-04-28:
+  // queryforge campaign-generator (tag='engineering') fell through to 'none'
+  // and verifyNone rubber-stamped a 0-deploy task as "completed".
+  if (['engineering', 'feature', 'mvp', 'complex-feature', 'full-crud',
+       'bug-fix', 'fix', 'api', 'crud', 'database', 'webhook', 'cron',
+       'auth'].includes(tag)) {
     return 'deterministic';
   }
 
-  // Browser flow — UI/frontend tasks
+  // Browser flow — UI/frontend tasks (validates by hitting the deployed URL)
   if (['landing-page', 'dashboard', 'form', 'css', 'onboarding', 'settings', 'pricing-page'].includes(tag)) {
     return 'browser_flow';
   }
@@ -101,7 +173,27 @@ function verifyNone(task: Task): VerificationResult {
 async function verifyDeterministic(task: Task): Promise<VerificationResult> {
   const checks: VerificationCheck[] = [];
 
-  // Check 1: Task has a report
+  // Check 1 (NEW & CRITICAL): For deploy-shaped tasks, the agent must have
+  // called a DEPLOY tool. Without this check, an agent that runs 20 turns
+  // calling read-only tools and never deploying anything still gets marked
+  // "completed". This is exactly what happened to queryforge's campaign
+  // generator (task 9a36e013-…) — verifyNone said passed=true and the user
+  // got told "✅ done" when nothing was deployed.
+  const tagNormalized = task.tag.toLowerCase().trim();
+  const requiresDeploy = DEPLOY_REQUIRED_TAGS.has(tagNormalized);
+  if (requiresDeploy) {
+    const toolCalls = await getExecutionToolCalls(task.id);
+    const deployCalls = toolCalls.filter((t) => DEPLOY_TOOL_NAMES.has(t));
+    checks.push({
+      name: 'deploy_evidence',
+      passed: deployCalls.length > 0,
+      detail: deployCalls.length > 0
+        ? `${deployCalls.length} deploy tool call(s): ${[...new Set(deployCalls)].join(', ')}`
+        : `Tag "${task.tag}" requires a deploy but agent never called a deploy tool. Tools used: ${[...new Set(toolCalls)].slice(0, 8).join(', ') || 'none'}`,
+    });
+  }
+
+  // Check 2: Task has a report
   const reportRows = await db.select({ id: reports.id, title: reports.title })
     .from(reports).where(eq(reports.task_id, task.id));
 
@@ -111,7 +203,7 @@ async function verifyDeterministic(task: Task): Promise<VerificationResult> {
     detail: reportRows.length ? `Found ${reportRows.length} report(s)` : 'No execution report created',
   });
 
-  // Check 2: Task completed within time limit
+  // Check 3: Task completed within time limit
   if (task.started_at && task.completed_at) {
     const duration = new Date(task.completed_at).getTime() - new Date(task.started_at).getTime();
     const maxMs = 4 * 60 * 60 * 1000; // 4 hours
@@ -122,14 +214,14 @@ async function verifyDeterministic(task: Task): Promise<VerificationResult> {
     });
   }
 
-  // Check 3: Turn count within limits
+  // Check 4: Turn count within limits
   checks.push({
     name: 'within_turn_limit',
     passed: task.turn_count <= task.max_turns,
     detail: `Turns: ${task.turn_count}/${task.max_turns}`,
   });
 
-  // Check 4: No error in execution
+  // Check 5: No error in execution
   checks.push({
     name: 'no_failure',
     passed: task.failure_class === null,
@@ -142,7 +234,10 @@ async function verifyDeterministic(task: Task): Promise<VerificationResult> {
     level: 'deterministic',
     passed,
     checks,
-    evidence: { report_count: reportRows.length },
+    evidence: {
+      report_count: reportRows.length,
+      requires_deploy: requiresDeploy,
+    },
     summary: passed
       ? `All ${checks.length} deterministic checks passed.`
       : `${checks.filter((c) => !c.passed).length}/${checks.length} checks failed.`,

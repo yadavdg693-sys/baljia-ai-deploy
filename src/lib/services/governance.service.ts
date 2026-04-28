@@ -68,6 +68,10 @@ const DETERMINISTIC_VERIFY_TAGS = new Set([
 ]);
 
 const BROWSER_VERIFY_TAGS = new Set([
+  // Generic engineering — most common production tag for "build/modify a feature".
+  // Was missing pre-2026-04-28: caused queryforge campaign-generator (tag='engineering')
+  // to fall through classifyVerificationLevel → 'none' → verifyNone passes anything.
+  'engineering',
   'landing-page', 'auth', 'settings', 'dashboard', 'admin', 'onboarding',
   'reporting', 'pricing-page', 'about-page', 'changelog', 'faq', 'contact-form',
   'feedback', 'error-page', 'form', 'notification', 'ux', 'legal', 'referral',
