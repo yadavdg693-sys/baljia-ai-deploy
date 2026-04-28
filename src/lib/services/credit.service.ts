@@ -7,8 +7,11 @@ import type { LedgerEntryType, PlanTier } from '@/types';
 const log = createLogger('Credit');
 
 // G-FIN-001: Per-plan daily spend caps (replaces hardcoded 20)
+// Trial cap was 10 — tightened to 3 because each task is ~$0.10-1.00 in LLM
+// tokens, and 10 trials × 3 days × ~$0.50/task = ~$15/founder = bleed at 50
+// trials. 3/day caps the worst case at ~$5/founder over the 3-day trial.
 const PLAN_SPEND_CAPS: Record<PlanTier, number> = {
-  trial: 10,
+  trial: 3,
   starter: 30,
   growth: 75,
   scale: 200,

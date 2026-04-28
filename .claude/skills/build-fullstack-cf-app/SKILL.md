@@ -134,6 +134,12 @@ export default {
 
 The agent must do these in this order or the deploy fails:
 
+### 0. Is this a modification or a first deploy?
+
+**Call `cf_read_app_source` first.** If it returns the current source code, this is a MODIFICATION — read the existing source, edit only what the task requires, then redeploy. If it returns null (no app exists), this is a FIRST DEPLOY — proceed with the steps below.
+
+**Never regenerate from scratch on a modification.** You will lose prior customization, break endpoints customer code depends on, and corrupt working logic. The agent's job on modification = surgical edits, not a fresh draft.
+
 ### 1. Provision the DB
 Call `provision_database`. Without this, `cf_deploy_app({ with_neon_db: true })` fails with "company has no provisioned Neon DB".
 

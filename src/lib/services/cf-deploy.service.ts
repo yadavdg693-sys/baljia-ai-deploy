@@ -503,6 +503,76 @@ export async function getWorkerScriptInfo(scriptName: string): Promise<WorkerScr
   }
 }
 
+export interface WorkerScriptSource {
+  scriptName: string;
+  source: string;        // Full ES-module source code (the actual Worker JS)
+  etag: string;
+  bytes: number;
+}
+
+/**
+ * Fetch the deployed Worker source code back from CF.
+ *
+ * CF's GET /accounts/{id}/workers/scripts/{name} actually returns the script
+ * body directly (or a multipart bundle for module Workers). For modification
+ * tasks the engineering agent needs to read what's currently running before
+ * editing. Without this tool, "fix bug X in my app" forces the agent to
+ * regenerate the whole Worker from scratch and risk losing prior customization.
+ *
+ * Returns null if the script doesn't exist (404) or CF is unreachable.
+ */
+export async function getWorkerScriptSource(scriptName: string): Promise<WorkerScriptSource | null> {
+  if (!isCloudflareDeployConfigured()) return null;
+  try {
+    const url = `${CF_API}/accounts/${cfAccountId()}/workers/scripts/${encodeURIComponent(scriptName)}`;
+    const response = await cfFetch(url, { headers: cfApiHeaders() });
+    if (response.status === 404) return null;
+    if (!response.ok) {
+      log.warn('CF getWorkerScriptSource non-ok', { scriptName, status: response.status });
+      return null;
+    }
+
+    const etag = response.headers.get('etag') ?? 'unknown';
+    const contentType = response.headers.get('content-type') ?? '';
+    const body = await response.text();
+
+    // Module Workers (the shape we deploy via deployWorkerScript) come back as
+    // multipart/form-data with 'metadata' + the module file(s). Older service
+    // workers return the script body directly. Detect and extract.
+    let source = body;
+    if (contentType.includes('multipart/form-data')) {
+      // Extract the first non-metadata part. The boundary lives in Content-Type.
+      const boundaryMatch = /boundary=([^;]+)/.exec(contentType);
+      if (boundaryMatch) {
+        const boundary = boundaryMatch[1].replace(/^"|"$/g, '');
+        const parts = body.split(`--${boundary}`);
+        // Find the part whose content-type is JS (skip 'metadata' JSON part).
+        const jsPart = parts.find((p) =>
+          /content-type:\s*application\/javascript/i.test(p) ||
+          /content-disposition:[^\n]*name="?worker\.mjs"?/i.test(p)
+        );
+        if (jsPart) {
+          // Strip leading headers + trailing boundary marker.
+          const headerEnd = jsPart.indexOf('\r\n\r\n');
+          if (headerEnd >= 0) {
+            source = jsPart.slice(headerEnd + 4).replace(/\r\n--\s*$/, '').trim();
+          }
+        }
+      }
+    }
+
+    return {
+      scriptName,
+      source,
+      etag,
+      bytes: source.length,
+    };
+  } catch (error) {
+    log.error('CF getWorkerScriptSource error', { scriptName }, error);
+    return null;
+  }
+}
+
 // ══════════════════════════════════════════════
 // LOGS — Workers GraphQL Analytics API
 // ══════════════════════════════════════════════

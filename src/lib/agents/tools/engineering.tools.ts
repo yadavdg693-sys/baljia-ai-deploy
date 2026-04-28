@@ -28,6 +28,7 @@ import {
   addWorkerRoute,
   putWorkerSecret,
   getWorkerScriptInfo,
+  getWorkerScriptSource,
   getWorkerLogs,
   type WorkerBinding,
 } from '@/lib/services/cf-deploy.service';
@@ -196,6 +197,14 @@ export function getEngineeringTools() {
     {
       name: 'cf_get_app_info',
       description: 'Get deployment info for this company\'s Tier 2/3 app (deploy status, etag, last modified). Does NOT return the source code. Returns null if no app is deployed.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {},
+      },
+    },
+    {
+      name: 'cf_read_app_source',
+      description: 'CRITICAL FOR MODIFICATIONS: Fetch the CURRENT deployed Worker source code (the JS) from Cloudflare. ALWAYS call this BEFORE editing an existing app — otherwise you have to regenerate from scratch and risk losing prior customization. Returns the full ES-module source, etag, and byte count. Returns null if no app is deployed for this company. After reading, edit in your context, then call cf_deploy_app with the modified script_content. Idempotent and safe — read-only operation.',
       input_schema: {
         type: 'object' as const,
         properties: {},
@@ -497,6 +506,9 @@ export async function handleEngineeringTool(
 
     case 'cf_get_app_info':
       return cfGetAppInfo(input, task.company_id);
+
+    case 'cf_read_app_source':
+      return cfReadAppSource(input, task.company_id);
 
     case 'cf_delete_app':
       return cfDeleteApp(input, task.company_id);
@@ -1959,6 +1971,33 @@ async function cfGetAppInfo(_input: Record<string, unknown>, companyId: string):
     ].join('\n');
   } catch (err) {
     return `Get app info error: ${err instanceof Error ? err.message : 'Unknown error'}`;
+  }
+}
+
+async function cfReadAppSource(_input: Record<string, unknown>, companyId: string): Promise<string> {
+  if (!isCloudflareDeployConfigured()) return 'Cloudflare deploy not configured.';
+  try {
+    const subdomain = await resolveCompanySubdomain(companyId);
+    const scriptName = workerScriptNameFor(subdomain);
+    const result = await getWorkerScriptSource(scriptName);
+    if (!result) {
+      return `No Tier 2/3 app deployed for ${subdomain} (script "${scriptName}" not found). Use cf_deploy_app to create one. If this is a Tier 1 landing page, source is the HTML file in R2 — read that via cf_deploy_landing's storage path instead.`;
+    }
+    log.info('cf_read_app_source returned source', { companyId, subdomain, bytes: result.bytes, etag: result.etag });
+    return [
+      `Current Worker source for ${subdomain}.baljia.app:`,
+      `Script: ${result.scriptName}`,
+      `ETag:   ${result.etag}`,
+      `Bytes:  ${result.bytes}`,
+      ``,
+      `─── BEGIN SOURCE ───`,
+      result.source,
+      `─── END SOURCE ───`,
+      ``,
+      `To modify: edit the source above, then call cf_deploy_app({ script_content: <edited source>, with_neon_db: true (if needed) }). Don't regenerate from scratch — preserve existing handlers and only add/edit what the task requires.`,
+    ].join('\n');
+  } catch (err) {
+    return `Read app source error: ${err instanceof Error ? err.message : 'Unknown error'}`;
   }
 }
 
