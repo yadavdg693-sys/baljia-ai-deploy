@@ -57,6 +57,11 @@ import {
   type ResolvedDesignTokens,
 } from './landing-design-tokens';
 import { ANTI_PATTERNS, INDUSTRY_RULES, UI_STYLES } from './landing-design-corpus';
+import {
+  utilityCardsV2Styles, utilityCardsV2Body,
+  editorialV2Styles, editorialV2Body,
+  narrativeV2Styles, narrativeV2Body,
+} from './landing-renderer-v2';
 import type { PipelineContext, MarketResearchResult } from '../types';
 
 const log = createLogger('OnboardingLanding');
@@ -675,229 +680,31 @@ footer a:hover { color: var(--accent); border-bottom-color: var(--accent); }`;
 }
 
 function renderUtilityCards(content: LandingContent, year: number): { styles: string; body: string } {
-  const capabilityCards = content.what_it_does.capabilities
-    .map((c) => `
-        <div class="card">
-          <h3>${esc(c.title)}</h3>
-          <p>${esc(c.description)}</p>
-        </div>`)
-    .join('');
-  const howSteps = content.how_it_works.steps
-    .map((s) => `
-        <li class="step">
-          <span class="step-num">${s.number}</span>
-          <div><h3>${esc(s.title)}</h3><p>${esc(s.description)}</p></div>
-        </li>`)
-    .join('');
-  const diffPoints = content.what_makes_different.points
-    .map((p) => `<li>${esc(p)}</li>`)
-    .join('');
-
-  const styles = `.wrap { max-width: 860px; margin: 0 auto; padding: 0 var(--container-px); }
-header { padding: 32px 0 16px; }
-.hero { padding: var(--hero-py); }
-.hero h1 { font-family: var(--font-heading); text-transform: var(--heading-tt); letter-spacing: var(--heading-ls); font-weight: var(--heading-w); font-size: clamp(34px, 5.4vw, 56px); line-height: 1.08; margin: 0 0 20px; }
-.hero p { font-size: 18px; color: var(--ink); opacity: 0.85; margin: 0; max-width: 640px; }
-section { padding: var(--section-py) 0; border-top: var(--border-w) solid var(--line); }
-section h2 { font-size: clamp(20px, 2.5vw, 26px); margin: 0 0 24px; }
-.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--card-gap); }
-.card { padding: var(--card-p); border: var(--border-w) solid var(--line); border-radius: var(--radius); background: var(--bg-elev); box-shadow: var(--shadow); transition: border-color var(--transition), transform var(--transition); }
-.card:hover { border-color: var(--accent); transform: translateY(-1px); }
-.card h3 { font-family: var(--font-heading); text-transform: var(--heading-tt); letter-spacing: var(--heading-ls); font-size: 16px; margin: 0 0 8px; font-weight: var(--heading-w); }
-.card p { font-size: 14.5px; color: var(--ink); opacity: 0.85; margin: 0; line-height: 1.55; }
-ol.steps { list-style: none; padding: 0; margin: 0; display: grid; gap: 22px; }
-.step { display: flex; gap: 18px; align-items: flex-start; }
-.step-num { flex: 0 0 38px; width: 38px; height: 38px; border-radius: 50%; background: var(--accent); color: #fff; display: inline-flex; align-items: center; justify-content: center; font-family: var(--font-heading); font-weight: var(--heading-w); font-size: 15px; }
-.step h3 { font-family: var(--font-heading); text-transform: var(--heading-tt); letter-spacing: var(--heading-ls); font-size: 16px; margin: 7px 0 4px; font-weight: var(--heading-w); }
-.step p { font-size: 15px; color: var(--ink); opacity: 0.85; margin: 0; }
-ul.diff { list-style: none; padding: 0; margin: 0; display: grid; gap: 12px; }
-ul.diff li { padding: 14px 16px 14px 40px; border: var(--border-w) solid var(--line); border-radius: var(--radius); position: relative; font-size: 15px; background: var(--bg-elev); box-shadow: var(--shadow); }
-ul.diff li::before { content: ""; position: absolute; left: 16px; top: 50%; transform: translateY(-50%); width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
-.closing { padding: calc(var(--section-py) * 1.4) 0 var(--section-py); text-align: center; border-top: var(--border-w) solid var(--line); }
-.closing h2 { font-size: clamp(24px, 3.4vw, 32px); margin: 0 0 14px; }
-.closing p { font-size: 16px; color: var(--ink); opacity: 0.85; margin: 0 auto; max-width: 600px; }
-@media (max-width: 600px) { .hero { padding: 40px 0 32px; } .hero h1 { font-size: clamp(28px, 8vw, 40px); } }`;
-
-  const body = `<div class="wrap">
-  <header>
-    <div class="brand">${esc(content.brand.name)}</div>
-    <div class="brand-tag">${esc(content.brand.tagline)}</div>
-  </header>
-  <div class="hero" id="hero">
-    <h1>${esc(content.hero.headline)}</h1>
-    <p>${esc(content.hero.subhead)}</p>
-  </div>
-  <section id="what">
-    <h2>${esc(content.what_it_does.heading)}</h2>
-    <div class="cards">${capabilityCards}
-    </div>
-  </section>
-  <section id="how">
-    <h2>${esc(content.how_it_works.heading)}</h2>
-    <ol class="steps">${howSteps}
-    </ol>
-  </section>
-  <section id="diff">
-    <h2>${esc(content.what_makes_different.heading)}</h2>
-    <ul class="diff">${diffPoints}</ul>
-  </section>
-  <div class="closing" id="closing">
-    <h2>${esc(content.closing.headline)}</h2>
-    <p>${esc(content.closing.body)}</p>
-  </div>
-  <footer>
-    <div>© ${year} ${esc(content.brand.name)}</div>
-    <div>Built and operated by <a href="https://baljia.ai">Baljia</a></div>
-  </footer>
-</div>`;
-  return { styles, body };
+  // 2026-04-29: delegated to v2 renderer (landing-renderer-v2.ts).
+  // Removes uniform borders, larger hero type, accent-edge cards, oversized
+  // step numerals, dash-prefixed differentiators, accent-band closing.
+  // Original boxy implementation preserved in git history (commit before
+  // the v2 wiring) if rollback ever needed.
+  return { styles: utilityCardsV2Styles(), body: utilityCardsV2Body(content, year, esc) };
 }
 
-// Editorial: minimal, single-column, large typography, capabilities as a
-// numbered ordered list (no card chrome), differentiators inline. Hero leads
-// with a thin top rule and oversized headline. No 3-up grids.
+// Editorial: minimal, single-column, large typography. v2: removes
+// section borders, uses thin accent-bar dividers, oversized hero, numbered
+// capabilities as full-width blocks (not cards), pull-quote differentiators.
 function renderEditorial(content: LandingContent, year: number): { styles: string; body: string } {
-  const capList = content.what_it_does.capabilities
-    .map((c, i) => `
-      <li class="ed-cap">
-        <span class="ed-cap-num">${(i + 1).toString().padStart(2, '0')}</span>
-        <div><h3>${esc(c.title)}</h3><p>${esc(c.description)}</p></div>
-      </li>`)
-    .join('');
-  const stepList = content.how_it_works.steps
-    .map((s) => `<p class="ed-step"><strong>${s.number}. ${esc(s.title)}.</strong> ${esc(s.description)}</p>`)
-    .join('');
-  const diffList = content.what_makes_different.points
-    .map((p) => `<p class="ed-diff">— ${esc(p)}</p>`)
-    .join('');
-
-  const styles = `.wrap { max-width: 720px; margin: 0 auto; padding: 0 var(--container-px); }
-header { padding: 56px 0 24px; border-bottom: var(--border-w) solid var(--line); }
-.hero { padding: 64px 0 32px; }
-.hero h1 { font-family: var(--font-heading); text-transform: var(--heading-tt); letter-spacing: var(--heading-ls); font-weight: var(--heading-w); font-size: clamp(40px, 7vw, 72px); line-height: 1.04; margin: 0 0 28px; max-width: 18ch; }
-.hero p { font-size: 20px; color: var(--ink); opacity: 0.78; margin: 0; max-width: 56ch; line-height: 1.5; }
-section { padding: var(--section-py) 0; border-top: var(--border-w) solid var(--line); }
-section h2 { font-size: clamp(18px, 2.2vw, 22px); margin: 0 0 28px; color: var(--ink-soft); }
-ol.ed-caps { list-style: none; padding: 0; margin: 0; display: grid; gap: 28px; }
-.ed-cap { display: grid; grid-template-columns: 60px 1fr; align-items: baseline; gap: 0; border-radius: var(--radius); padding: 4px 0; transition: background var(--transition); }
-.ed-cap-num { font-family: var(--font-heading); font-size: 14px; color: var(--accent); letter-spacing: 0.04em; }
-.ed-cap h3 { font-family: var(--font-heading); font-size: 22px; margin: 0 0 6px; font-weight: var(--heading-w); letter-spacing: var(--heading-ls); }
-.ed-cap p { margin: 0; font-size: 17px; line-height: 1.55; opacity: 0.8; }
-.ed-step { font-size: 17px; line-height: 1.6; margin: 0 0 14px; max-width: 60ch; }
-.ed-step strong { font-family: var(--font-heading); font-weight: var(--heading-w); color: var(--accent); }
-.ed-diff { font-size: 17px; line-height: 1.55; margin: 0 0 12px; max-width: 60ch; padding-left: 0; border-left: var(--border-w) solid var(--accent); padding: 4px 0 4px 18px; box-shadow: var(--shadow); border-radius: var(--radius); background: var(--bg-elev); }
-.closing { padding: 96px 0 64px; border-top: var(--border-w) solid var(--line); }
-.closing h2 { font-size: clamp(28px, 4.5vw, 44px); margin: 0 0 18px; max-width: 22ch; line-height: 1.12; color: var(--ink); }
-.closing p { font-size: 18px; opacity: 0.78; max-width: 56ch; margin: 0; line-height: 1.55; }
-@media (max-width: 600px) { .hero h1 { font-size: clamp(32px, 9vw, 48px); } .ed-cap { grid-template-columns: 44px 1fr; } }`;
-
-  const body = `<div class="wrap">
-  <header>
-    <div class="brand">${esc(content.brand.name)}</div>
-    <div class="brand-tag">${esc(content.brand.tagline)}</div>
-  </header>
-  <div class="hero" id="hero">
-    <h1>${esc(content.hero.headline)}</h1>
-    <p>${esc(content.hero.subhead)}</p>
-  </div>
-  <section id="what">
-    <h2>${esc(content.what_it_does.heading)}</h2>
-    <ol class="ed-caps">${capList}
-    </ol>
-  </section>
-  <section id="how">
-    <h2>${esc(content.how_it_works.heading)}</h2>
-    ${stepList}
-  </section>
-  <section id="diff">
-    <h2>${esc(content.what_makes_different.heading)}</h2>
-    ${diffList}
-  </section>
-  <div class="closing" id="closing">
-    <h2>${esc(content.closing.headline)}</h2>
-    <p>${esc(content.closing.body)}</p>
-  </div>
-  <footer>
-    <div>© ${year} ${esc(content.brand.name)}</div>
-    <div>Built and operated by <a href="https://baljia.ai">Baljia</a></div>
-  </footer>
-</div>`;
-  return { styles, body };
+  // Delegated to v2 renderer (2026-04-29).
+  return { styles: editorialV2Styles(), body: editorialV2Body(content, year, esc) };
 }
 
 // Narrative: how_it_works comes BEFORE what_it_does (problem-journey-solution
 // arc), each section is a chapter-like block with accent-coloured chapter
 // numbers, capabilities are paragraphs not cards, differentiators close it.
 function renderNarrative(content: LandingContent, year: number): { styles: string; body: string } {
-  const stepBlocks = content.how_it_works.steps
-    .map((s, i) => `
-      <div class="nv-chapter">
-        <div class="nv-chapter-num">Chapter ${(i + 1).toString().padStart(2, '0')}</div>
-        <h3>${esc(s.title)}</h3>
-        <p>${esc(s.description)}</p>
-      </div>`)
-    .join('');
-  const capParas = content.what_it_does.capabilities
-    .map((c) => `<div class="nv-cap"><h3>${esc(c.title)}</h3><p>${esc(c.description)}</p></div>`)
-    .join('');
-  const diffPoints = content.what_makes_different.points
-    .map((p) => `<li>${esc(p)}</li>`)
-    .join('');
-
-  const styles = `.wrap { max-width: 780px; margin: 0 auto; padding: 0 var(--container-px); }
-header { padding: 40px 0 0; }
-.hero { padding: 48px 0 56px; }
-.hero h1 { font-family: var(--font-heading); text-transform: var(--heading-tt); letter-spacing: var(--heading-ls); font-weight: var(--heading-w); font-size: clamp(36px, 6vw, 60px); line-height: 1.06; margin: 0 0 24px; max-width: 22ch; }
-.hero p { font-size: 19px; color: var(--ink); opacity: 0.82; margin: 0; max-width: 58ch; line-height: 1.55; }
-section { padding: var(--section-py) 0; }
-section h2 { font-family: var(--font-heading); text-transform: var(--heading-tt); letter-spacing: var(--heading-ls); font-size: clamp(22px, 3vw, 30px); margin: 0 0 36px; }
-.nv-how { background: var(--bg-elev); margin: 0 calc(var(--container-px) * -1); padding: var(--section-py) var(--container-px); border-radius: var(--radius); box-shadow: var(--shadow); }
-.nv-chapter { padding: 24px 0; border-top: var(--border-w) solid var(--line); }
-.nv-chapter:first-of-type { border-top: 0; padding-top: 0; }
-.nv-chapter-num { font-family: var(--font-heading); font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--accent); margin-bottom: 6px; }
-.nv-chapter h3 { font-family: var(--font-heading); font-size: 22px; margin: 0 0 8px; font-weight: var(--heading-w); letter-spacing: var(--heading-ls); }
-.nv-chapter p { font-size: 17px; line-height: 1.6; opacity: 0.85; margin: 0; max-width: 58ch; }
-.nv-caps { display: grid; gap: 32px; }
-.nv-cap h3 { font-family: var(--font-heading); font-size: 20px; margin: 0 0 8px; font-weight: var(--heading-w); letter-spacing: var(--heading-ls); }
-.nv-cap p { font-size: 16px; line-height: 1.6; opacity: 0.85; margin: 0; max-width: 60ch; }
-ul.nv-diff { list-style: none; padding: 0; margin: 0; display: grid; gap: 14px; }
-ul.nv-diff li { font-size: 17px; padding: 14px 18px; border-left: 4px solid var(--accent); background: var(--bg-elev); border-radius: var(--radius); box-shadow: var(--shadow); transition: transform var(--transition); }
-ul.nv-diff li:hover { transform: translateX(2px); }
-.closing { padding: var(--section-py) 0 calc(var(--section-py) * 1.4); border-top: var(--border-w) solid var(--line); text-align: left; }
-.closing h2 { font-size: clamp(26px, 4.2vw, 40px); margin: 0 0 16px; max-width: 24ch; line-height: 1.1; }
-.closing p { font-size: 17px; opacity: 0.82; max-width: 58ch; margin: 0; line-height: 1.55; }`;
-
-  const body = `<div class="wrap">
-  <header>
-    <div class="brand">${esc(content.brand.name)}</div>
-    <div class="brand-tag">${esc(content.brand.tagline)}</div>
-  </header>
-  <div class="hero" id="hero">
-    <h1>${esc(content.hero.headline)}</h1>
-    <p>${esc(content.hero.subhead)}</p>
-  </div>
-  <section id="how" class="nv-how">
-    <h2>${esc(content.how_it_works.heading)}</h2>
-    ${stepBlocks}
-  </section>
-  <section id="what">
-    <h2>${esc(content.what_it_does.heading)}</h2>
-    <div class="nv-caps">${capParas}</div>
-  </section>
-  <section id="diff">
-    <h2>${esc(content.what_makes_different.heading)}</h2>
-    <ul class="nv-diff">${diffPoints}</ul>
-  </section>
-  <div class="closing" id="closing">
-    <h2>${esc(content.closing.headline)}</h2>
-    <p>${esc(content.closing.body)}</p>
-  </div>
-  <footer>
-    <div>© ${year} ${esc(content.brand.name)}</div>
-    <div>Built and operated by <a href="https://baljia.ai">Baljia</a></div>
-  </footer>
-</div>`;
-  return { styles, body };
+  // Delegated to v2 renderer (2026-04-29). v2: alternating full-bleed
+  // chapter bands (regular/accent-soft), dark "how it works" band with
+  // 3-up grid, italic pull-quote differentiators on accent-soft band,
+  // accent-color closing band. Story-driven, no boxed cards.
+  return { styles: narrativeV2Styles(), body: narrativeV2Body(content, year, esc) };
 }
 
 // ─── Family 3: narrative-stacked ──────────────────────────────────────────
