@@ -172,13 +172,16 @@ function verifyNone(task: Task): VerificationResult {
 
 async function verifyDeterministic(task: Task): Promise<VerificationResult> {
   const checks: VerificationCheck[] = [];
+  // advisory_only: failure on these checks should NOT fail the task — they're
+  // for audit/observability. has_report is here because the deployed artifact
+  // (a live Worker URL) is more meaningful than a written-out report; agents
+  // that ship working code without a separate report row should still pass.
+  const advisoryNames = new Set<string>(['has_report']);
 
-  // Check 1 (NEW & CRITICAL): For deploy-shaped tasks, the agent must have
-  // called a DEPLOY tool. Without this check, an agent that runs 20 turns
-  // calling read-only tools and never deploying anything still gets marked
-  // "completed". This is exactly what happened to queryforge's campaign
-  // generator (task 9a36e013-…) — verifyNone said passed=true and the user
-  // got told "✅ done" when nothing was deployed.
+  // Check 1 (HARD REQUIREMENT for deploy-shaped tags): The agent must have
+  // called a DEPLOY tool. queryforge campaign-generator (task 9a36e013-…)
+  // had ZERO deploy calls in 20 turns and still got rubber-stamped before
+  // this check existed.
   const tagNormalized = task.tag.toLowerCase().trim();
   const requiresDeploy = DEPLOY_REQUIRED_TAGS.has(tagNormalized);
   if (requiresDeploy) {
@@ -193,17 +196,18 @@ async function verifyDeterministic(task: Task): Promise<VerificationResult> {
     });
   }
 
-  // Check 2: Task has a report
+  // Check 2 (advisory): Task has a report. Engineering tasks ship code as the
+  // primary artifact — a separate report row is nice to have but not required.
   const reportRows = await db.select({ id: reports.id, title: reports.title })
     .from(reports).where(eq(reports.task_id, task.id));
 
   checks.push({
     name: 'has_report',
     passed: reportRows.length > 0,
-    detail: reportRows.length ? `Found ${reportRows.length} report(s)` : 'No execution report created',
+    detail: reportRows.length ? `Found ${reportRows.length} report(s)` : 'No execution report (advisory — deploy artifact is the proof)',
   });
 
-  // Check 3: Task completed within time limit
+  // Check 3 (hard): Task completed within time limit
   if (task.started_at && task.completed_at) {
     const duration = new Date(task.completed_at).getTime() - new Date(task.started_at).getTime();
     const maxMs = 4 * 60 * 60 * 1000; // 4 hours
@@ -214,21 +218,24 @@ async function verifyDeterministic(task: Task): Promise<VerificationResult> {
     });
   }
 
-  // Check 4: Turn count within limits
+  // Check 4 (hard): Turn count within limits
   checks.push({
     name: 'within_turn_limit',
     passed: task.turn_count <= task.max_turns,
     detail: `Turns: ${task.turn_count}/${task.max_turns}`,
   });
 
-  // Check 5: No error in execution
+  // Check 5 (hard): No error in execution
   checks.push({
     name: 'no_failure',
     passed: task.failure_class === null,
     detail: task.failure_class ? `Failure: ${task.failure_class}` : 'No failures detected',
   });
 
-  const passed = checks.every((c) => c.passed);
+  // Pass = no HARD check failed. Advisory checks can fail without blocking.
+  const hardFailures = checks.filter((c) => !c.passed && !advisoryNames.has(c.name));
+  const passed = hardFailures.length === 0;
+  const advisoryFailures = checks.filter((c) => !c.passed && advisoryNames.has(c.name));
 
   return {
     level: 'deterministic',
@@ -237,10 +244,13 @@ async function verifyDeterministic(task: Task): Promise<VerificationResult> {
     evidence: {
       report_count: reportRows.length,
       requires_deploy: requiresDeploy,
+      advisory_failures: advisoryFailures.map((c) => c.name),
     },
     summary: passed
-      ? `All ${checks.length} deterministic checks passed.`
-      : `${checks.filter((c) => !c.passed).length}/${checks.length} checks failed.`,
+      ? (advisoryFailures.length > 0
+        ? `${checks.length - advisoryFailures.length}/${checks.length} hard checks passed (${advisoryFailures.length} advisory failed: ${advisoryFailures.map((c) => c.name).join(', ')}).`
+        : `All ${checks.length} deterministic checks passed.`)
+      : `${hardFailures.length} hard check(s) failed: ${hardFailures.map((c) => c.name).join(', ')}.`,
   };
 }
 
