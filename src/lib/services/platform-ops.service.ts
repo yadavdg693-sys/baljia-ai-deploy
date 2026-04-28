@@ -460,6 +460,16 @@ export async function triageBug(feedbackId: string): Promise<TriageResult> {
       feedbackId, runId: run.id, turns, costCents,
       reproduces: diagnosis.reproduces, risk: diagnosis.estimated_risk,
     });
+
+    // Critical-severity alert: if this is a real critical bug, email the
+    // operator immediately. Non-blocking — alert failure doesn't affect triage.
+    if (diagnosis.reproduces && bug.severity === 'critical') {
+      try {
+        await alertOnCritical(bug.id, bug.title, bug.severity, diagnosis.diagnosis);
+      } catch (alertErr) {
+        log.warn('Critical alert dispatch errored', { feedbackId, error: alertErr instanceof Error ? alertErr.message : String(alertErr) });
+      }
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     const partialWallSec = Math.round((Date.now() - start) / 1000);
@@ -517,6 +527,74 @@ export async function triageOpenBugs(opts: { maxBugs?: number } = {}): Promise<T
     await new Promise((r) => setTimeout(r, 1000));
   }
   return results;
+}
+
+// ══════════════════════════════════════════════
+// CRITICAL-SEVERITY ALERTING
+// Sends a Postmark email when triage finds a real (reproduces=true)
+// critical-severity bug. Bypasses email.service.ts because there's no
+// company_id for platform alerts.
+// ══════════════════════════════════════════════
+
+async function alertOnCritical(feedbackId: string, bugTitle: string, severity: string, diagnosis: string): Promise<void> {
+  if (severity !== 'critical') return;
+
+  const recipient = process.env.PLATFORM_OPS_ALERT_EMAIL ?? process.env.ADMIN_EMAILS?.split(',')[0]?.trim();
+  if (!recipient) {
+    log.warn('Critical bug found but no PLATFORM_OPS_ALERT_EMAIL or ADMIN_EMAILS configured — alert dropped', { feedbackId });
+    return;
+  }
+  const apiToken = process.env.POSTMARK_SERVER_TOKEN;
+  if (!apiToken) {
+    log.warn('Critical bug found but POSTMARK_SERVER_TOKEN not set — alert dropped', { feedbackId });
+    return;
+  }
+
+  const subject = `[Baljia Platform-Ops] Critical bug awaiting approval: ${bugTitle.slice(0, 80)}`;
+  const dashboardLink = `${process.env.NEXT_PUBLIC_APP_URL ?? 'https://baljia.ai'}/admin/feedback/${feedbackId}`;
+  const body = [
+    `A CRITICAL platform bug has been triaged and is waiting for your review at Gate 1.`,
+    ``,
+    `Title:    ${bugTitle}`,
+    `Severity: ${severity}`,
+    `Bug ID:   ${feedbackId}`,
+    ``,
+    `DIAGNOSIS (excerpt):`,
+    diagnosis.slice(0, 1500),
+    ``,
+    `Review and approve/reject:`,
+    dashboardLink,
+    ``,
+    `— Baljia Platform-Ops Triage`,
+  ].join('\n');
+
+  try {
+    const response = await fetch('https://api.postmarkapp.com/email', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'X-Postmark-Server-Token': apiToken,
+      },
+      body: JSON.stringify({
+        From: 'system@baljia.ai',
+        To: recipient,
+        Subject: subject,
+        TextBody: body,
+        Tag: 'platform-ops-critical',
+        TrackOpens: false,
+        TrackLinks: 'None',
+      }),
+    });
+    if (!response.ok) {
+      const errBody = await response.text().catch(() => '');
+      log.error('Critical alert email send failed', { feedbackId, status: response.status, body: errBody.slice(0, 300) });
+      return;
+    }
+    log.info('Critical alert email sent', { feedbackId, recipient });
+  } catch (err) {
+    log.error('Critical alert email threw', { feedbackId, error: err instanceof Error ? err.message : String(err) });
+  }
 }
 
 // ══════════════════════════════════════════════

@@ -27,11 +27,13 @@ crons = [
   "0 2 * * *",       # baljia-night-shift      — daily 2am UTC
   "0 */6 * * *",     # baljia-recurring        — every 6 hours
   "0 3 * * *",       # baljia-trial-expiry     — daily 3am UTC
-  "*/15 * * * *",    # baljia-platform-ops     — every 15 min
+  "*/15 * * * *",    # baljia-platform-ops     — every 15 min (existing health/regression checks)
   "0 4 * * *",       # baljia-credit-renewal   — daily 4am UTC
   "*/5 * * * *",     # baljia-onboarding-cleanup — every 5 min
   "* * * * *",       # baljia-queue-tick       — every 1 min (CF replacement for Render's worker-boot poller)
   "*/3 * * * *",     # baljia-lease-reclaim    — every 3 min (Render had */5; */5 slot is taken by onboarding-cleanup so we picked */3 — adjacent cadence, defensive lease cleanup runs slightly more often)
+  "5 * * * *",       # baljia-platform-ops-triage — hourly at :05 (offset from queue-tick); reads open bugs from platform_feedback, runs triage agent on each. Honors PLATFORM_OPS_PAUSED env var.
+  "20 * * * *",      # baljia-platform-ops-fix    — hourly at :20 (15 min after triage); writer agent fixes approved bugs + opens PRs; verifier agent reviews open PRs. Honors PLATFORM_OPS_WRITE_DISABLED.
 ]
 
 # ─────────────────────────────────────────────────────────────

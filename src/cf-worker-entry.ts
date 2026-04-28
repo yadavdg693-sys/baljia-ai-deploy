@@ -54,6 +54,8 @@ const CRON_DISPATCH: Record<string, CronRoute> = {
   "*/5 * * * *": { path: "/api/cron/onboarding-cleanup", method: "POST", name: "onboarding-cleanup" },
   "* * * * *":   { path: "/api/cron/queue-tick",         method: "POST", name: "queue-tick" },
   "*/3 * * * *": { path: "/api/cron/lease-reclaim",      method: "POST", name: "lease-reclaim" },
+  "5 * * * *":   { path: "/api/cron/platform-ops-triage", method: "POST", name: "platform-ops-triage" },
+  "20 * * * *":  { path: "/api/cron/platform-ops-fix",    method: "POST", name: "platform-ops-fix" },
 };
 
 interface CronEnv {
