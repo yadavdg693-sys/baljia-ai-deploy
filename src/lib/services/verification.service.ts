@@ -349,6 +349,13 @@ async function verifyBrowserFlow(task: Task): Promise<VerificationResult> {
 
 async function verifyQualityReview(task: Task): Promise<VerificationResult> {
   const checks: VerificationCheck[] = [];
+  // has_recommendations is ADVISORY — many factual research tasks
+  // ("give me 3 facts about X") legitimately have no actionable recs and
+  // shouldn't fail. Production failure observed 2026-04-25 on
+  // "Reddit API rate limits research" (4 turns, 134 words, valid sources)
+  // — verifier required "recommend|suggest|should|action|next step"
+  // regex match. Now informational only.
+  const advisoryNames = new Set<string>(['has_recommendations']);
 
   const reportRows = await db.select({ id: reports.id, title: reports.title, content: reports.content })
     .from(reports).where(eq(reports.task_id, task.id));
@@ -364,14 +371,14 @@ async function verifyQualityReview(task: Task): Promise<VerificationResult> {
     const content = reportRows[0].content;
     const wordCount = content.split(/\s+/).length;
 
-    // Quality: minimum word count
+    // Quality (HARD): minimum word count
     checks.push({
       name: 'minimum_content',
       passed: wordCount >= 100,
       detail: `Report has ${wordCount} words (min: 100)`,
     });
 
-    // Quality: has structure (headers)
+    // Quality (HARD): has structure (headers)
     const hasHeaders = content.includes('#') || content.includes('##');
     checks.push({
       name: 'has_structure',
@@ -379,25 +386,32 @@ async function verifyQualityReview(task: Task): Promise<VerificationResult> {
       detail: hasHeaders ? 'Report has markdown headers' : 'Report lacks structure (no headers)',
     });
 
-    // Quality: has actionable items
+    // Quality (ADVISORY): has actionable items
     const hasActions = /recommend|suggest|should|action|next step/i.test(content);
     checks.push({
       name: 'has_recommendations',
       passed: hasActions,
-      detail: hasActions ? 'Contains actionable recommendations' : 'Missing actionable recommendations',
+      detail: hasActions ? 'Contains actionable recommendations' : 'No actionable recommendations (advisory — fine for factual research)',
     });
   }
 
-  const passed = checks.every((c) => c.passed);
+  const hardFailures = checks.filter((c) => !c.passed && !advisoryNames.has(c.name));
+  const advisoryFailures = checks.filter((c) => !c.passed && advisoryNames.has(c.name));
+  const passed = hardFailures.length === 0;
 
   return {
     level: 'quality_review',
     passed,
     checks,
-    evidence: { report_word_count: reportRows[0]?.content?.split(/\s+/).length ?? 0 },
+    evidence: {
+      report_word_count: reportRows[0]?.content?.split(/\s+/).length ?? 0,
+      advisory_failures: advisoryFailures.map((c) => c.name),
+    },
     summary: passed
-      ? `Quality review passed (${checks.length} checks).`
-      : `Quality issues found: ${checks.filter((c) => !c.passed).map((c) => c.name).join(', ')}`,
+      ? (advisoryFailures.length > 0
+        ? `${checks.length - advisoryFailures.length}/${checks.length} hard checks passed (${advisoryFailures.length} advisory failed: ${advisoryFailures.map((c) => c.name).join(', ')}).`
+        : `Quality review passed (${checks.length} checks).`)
+      : `${hardFailures.length} hard quality check(s) failed: ${hardFailures.map((c) => c.name).join(', ')}.`,
   };
 }
 
