@@ -116,7 +116,8 @@ export async function getTasks(companyId: string): Promise<Task[]> {
     .where(eq(tasks.company_id, companyId))
     .orderBy(asc(tasks.queue_order));
 
-  return result as unknown as unknown as Task[];
+  // (was `as unknown as unknown as Task[]` — triple cast, code smell, no functional impact)
+  return result as unknown as Task[];
 }
 
 export async function getTask(taskId: string): Promise<Task | null> {

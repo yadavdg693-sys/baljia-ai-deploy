@@ -4,6 +4,14 @@ import { db, companies, tasks, documents, reports, creditLedger, documentSuggest
 import { eq, desc, asc, sql, and, gte, inArray } from 'drizzle-orm';
 import { DashboardShell } from '@/components/dashboard/DashboardShell';
 
+// Disable Next.js full-route caching for this page. Without this, a Server
+// Component render can be cached and the founder won't see newly-created
+// tasks until the cache invalidates. Triggered by platform-ops triage on
+// 2026-04-28 — the original bug "Created task not appearing in dashboard"
+// was caused (at least partially) by Server Component caching, not by a
+// DB read-your-writes race (verified via stress reproducer: 0/50 invisible).
+export const dynamic = 'force-dynamic';
+
 interface Props {
   params: Promise<{ companyId: string }>;
 }
