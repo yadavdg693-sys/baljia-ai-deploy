@@ -68,6 +68,7 @@ Skill matrix — read the listed skill BEFORE writing code in that domain:
 | Payments / Stripe / pricing / subscriptions | stripe-payments |
 | File uploads / static assets / image hosting | r2-storage |
 | Email send / notifications / inbound mail | email-postmark |
+| AI features (LLM calls, agent loops, prompt-template logic) | agent-sdk |
 
 If you write code in a domain WITHOUT reading its skill first, you will likely
 ship a pattern that doesn't work on Workers. The skills exist because the LLM's

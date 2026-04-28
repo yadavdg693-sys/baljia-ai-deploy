@@ -2063,6 +2063,8 @@ const SKILL_SUMMARIES: Record<string, string> = {
     'File uploads + asset serving via env.ASSETS binding. Upload patterns, Worker proxy serving, naming conventions, security (don\'t trust content-type from client).',
   'email-postmark':
     'Transactional email send + inbound. Domain-verified at baljia.app, any @baljia.app sender works. Inbound architecture has two paths (Cloudflare Email Routing vs Postmark Inbound) — Support agent needs Postmark Inbound.',
+  'agent-sdk':
+    'AI features inside founder apps — Anthropic / OpenAI / Codex / Gemini integration. SCAFFOLD only (full content TBD); read it as a SIGNAL that AI integration is being attempted and pause for human guidance, or default to the safest path documented inside.',
 };
 
 function handleListSkills(): string {
