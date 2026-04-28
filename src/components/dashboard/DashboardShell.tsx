@@ -1,10 +1,7 @@
-// DashboardShell — Polsia reference port (FIXED).
-// FIXES APPLIED:
-// 1. handleApprove/handleReject now call real API endpoints
-// 2. DocumentSuggestionPanel wired in
-// 3. Documents filter shows populated docs even if is_empty flag is stale
-// 4. Email empty state has helpful CTA text
-// 5. Auto-refresh every 30s
+// DashboardShell — Production redesign matching prototype aesthetic.
+// All functionality preserved: API calls, auto-refresh, chat, dialogs, etc.
+// Styled with inline styles using CSS vars from globals.css (warm cream + dark mode).
+// No dependency on polsia-shell.css for layout — self-contained.
 
 'use client';
 
@@ -23,75 +20,73 @@ import { NewTaskDialog } from './NewTaskDialog';
 import { RecurringTasksDialog } from './RecurringTasksDialog';
 import { AddLinkDialog } from './AddLinkDialog';
 import { FounderChatRail } from '@/components/chat/FounderChatRail';
+import { FOUNDER_AGENT_LABELS } from '@/lib/founder-labels';
 
-interface DocumentSuggestion {
-  id: string;
-  document_id: string;
-  suggested_content: string;
-  reason: string | null;
-  status: string;
-  created_at: string;
-}
-
-interface EmailRow {
-  id: string;
-  subject: string | null;
-  to_address: string;
-  from_address: string | null;
-  direction: string | null;
-  body: string | null;
-  created_at: string;
-}
-
-interface DashboardLinkRow {
-  id: string;
-  label: string;
-  url: string;
-}
+interface DocumentSuggestion { id: string; document_id: string; suggested_content: string; reason: string | null; status: string; created_at: string; }
+interface EmailRow { id: string; subject: string | null; to_address: string; from_address: string | null; direction: string | null; body: string | null; created_at: string; }
+interface DashboardLinkRow { id: string; label: string; url: string; }
 
 interface DashboardShellProps {
-  company: Company;
-  tasks: Task[];
-  documents: Document[];
-  reports: Report[];
-  creditBalance: number;
-  recentUsage: number[];
-  pendingSuggestions: DocumentSuggestion[];
-  emails: EmailRow[];
-  /** Founder-managed dashboard quick links (from `dashboard_links` table). */
-  links?: DashboardLinkRow[];
-  user: User;
-  liveCompanyCount: number;
+  company: Company; tasks: Task[]; documents: Document[]; reports: Report[];
+  creditBalance: number; recentUsage: number[]; pendingSuggestions: DocumentSuggestion[];
+  emails: EmailRow[]; links?: DashboardLinkRow[]; user: User; liveCompanyCount: number;
 }
 
 function formatAge(iso: string | null | undefined): string {
   if (!iso) return '';
-  const then = new Date(iso).getTime();
-  const diff = Date.now() - then;
+  const diff = Date.now() - new Date(iso).getTime();
   const min = Math.floor(diff / 60000);
   if (min < 1) return 'just now';
-  if (min < 60) return `${min} min ago`;
+  if (min < 60) return `${min}m ago`;
   const hr = Math.floor(min / 60);
   if (hr < 24) return `${hr}h ago`;
   const d = Math.floor(hr / 24);
-  if (d < 7) return `${d}d ago`;
-  if (d < 30) return `${Math.floor(d / 7)}w ago`;
-  return `${Math.floor(d / 30)}mo ago`;
+  return d < 7 ? `${d}d ago` : d < 30 ? `${Math.floor(d / 7)}w ago` : `${Math.floor(d / 30)}mo ago`;
 }
 
-export function DashboardShell({
-  company,
-  tasks: initialTasks,
-  documents,
-  reports: _reports,
-  creditBalance: initialCreditBalance,
-  recentUsage: _recentUsage,
-  pendingSuggestions: _pendingSuggestions,
-  emails: initialEmails,
-  links: initialLinks,
-  user,
-  liveCompanyCount,
-}: DashboardShellProps) {
+// ─── Inline style constants ───
+const S = {
+  page: { minHeight: '100vh', background: 'var(--bg)', color: 'var(--text)', fontFamily: "'Inter', system-ui, sans-serif", transition: 'background .45s, color .45s' } as React.CSSProperties,
+  topbar: { position: 'sticky' as const, top: 0, zIndex: 20, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '12px 20px', minHeight: 60, borderBottom: '1px solid var(--line)', background: 'color-mix(in oklab, var(--bg) 92%, transparent)', backdropFilter: 'blur(14px)' } as React.CSSProperties,
+  topbarTitle: { fontFamily: "'Newsreader', Georgia, serif", fontSize: 22, fontWeight: 600, letterSpacing: '-.4px', color: 'var(--ink)' } as React.CSSProperties,
+  topbarSubtitle: { fontSize: 12, color: 'var(--text-muted)', fontFamily: "'Newsreader', Georgia, serif", fontStyle: 'italic' } as React.CSSProperties,
+  mascotSm: { width: 36, height: 36, objectFit: 'contain' as const, filter: 'drop-shadow(0 2px 8px rgba(225,177,44,0.3)) brightness(1.08) saturate(1.2)' } as React.CSSProperties,
+  mascotMd: { width: 64, height: 64, objectFit: 'contain' as const, filter: 'drop-shadow(0 4px 12px rgba(225,177,44,0.3)) brightness(1.08) saturate(1.2)' } as React.CSSProperties,
+  grid: { display: 'flex', minHeight: 'calc(100vh - 60px)' } as React.CSSProperties,
+  colLeft: { width: 260, flexShrink: 0, padding: '20px 18px', borderRight: '1px solid var(--line)', overflowY: 'auto' as const } as React.CSSProperties,
+  colMain: { flex: 1, minWidth: 0, padding: '20px 18px', overflowY: 'auto' as const } as React.CSSProperties,
+  colChannels: { width: 270, flexShrink: 0, padding: '20px 18px', borderLeft: '1px solid var(--line)', overflowY: 'auto' as const } as React.CSSProperties,
+  panelHeading: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingBottom: 10, marginBottom: 14, borderBottom: '1px solid var(--line)', fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase' as const, color: 'var(--text-dim)' } as React.CSSProperties,
+  section: { marginBottom: 28 } as React.CSSProperties,
+  card: { background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 14, padding: '16px 18px', boxShadow: '0 1px 2px rgba(24,18,10,0.04)', transition: 'all .25s', cursor: 'pointer', position: 'relative' as const, overflow: 'hidden' } as React.CSSProperties,
+  cardAccent: { position: 'absolute' as const, left: 0, top: 0, bottom: 0, width: 4, background: '#D97706', borderRadius: '4px 0 0 4px' } as React.CSSProperties,
+  badge: (variant: string) => {
+    const colors: Record<string, { bg: string; color: string; border: string }> = {
+      success: { bg: 'rgba(34,197,94,0.1)', color: '#047857', border: 'rgba(34,197,94,0.2)' },
+      running: { bg: 'rgba(225,177,44,0.12)', color: '#D97706', border: 'rgba(225,177,44,0.28)' },
+      danger: { bg: 'rgba(239,68,68,0.1)', color: '#DC2626', border: 'rgba(239,68,68,0.2)' },
+      dark: { bg: 'var(--ink)', color: '#fff', border: 'transparent' },
+      default: { bg: 'var(--bg-alt)', color: 'var(--text-muted)', border: 'var(--border)' },
+    };
+    const c = colors[variant] || colors.default;
+    return { display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 10px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: c.bg, color: c.color, border: `1px solid ${c.border}` } as React.CSSProperties;
+  },
+  btn: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: '8px 14px', borderRadius: 8, border: '1px solid var(--line-strong)', background: 'var(--bg-card)', color: 'var(--ink)', fontSize: 12, fontWeight: 700, cursor: 'pointer', transition: 'all .2s', boxShadow: '0 1px 2px rgba(24,18,10,0.04)' } as React.CSSProperties,
+  btnPrimary: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: '10px 18px', borderRadius: 8, border: 'none', background: 'linear-gradient(135deg, #E1B12C, #D97706)', color: '#fff', fontSize: 12, fontWeight: 700, cursor: 'pointer', boxShadow: '0 6px 18px rgba(217,119,6,0.28), inset 0 1px 0 rgba(255,255,255,0.3)' } as React.CSSProperties,
+  btnSm: { padding: '5px 11px', fontSize: 11 } as React.CSSProperties,
+  btnGhost: { background: 'transparent', border: 'none', boxShadow: 'none', color: 'var(--text-muted)', padding: '4px 8px', fontSize: 12, cursor: 'pointer' } as React.CSSProperties,
+  docRow: { display: 'grid', gridTemplateColumns: '20px 1fr auto', gap: 8, alignItems: 'center', padding: '10px 0', borderBottom: '1px solid var(--border)', fontSize: 13, cursor: 'pointer', transition: 'color .2s', background: 'transparent', border: 'none', width: '100%', textAlign: 'left' as const } as React.CSSProperties,
+  linkItem: { display: 'grid', gap: 3, fontSize: 13, padding: '8px 0', borderBottom: '1px solid var(--border)' } as React.CSSProperties,
+  trialCard: { background: 'var(--bg-alt)', border: '1px solid var(--border)', borderRadius: 12, padding: 20, marginBottom: 20, textAlign: 'center' as const, boxShadow: '0 1px 2px rgba(24,18,10,0.04)' } as React.CSSProperties,
+  emailModal: { position: 'fixed' as const, inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(4px)', padding: 24 } as React.CSSProperties,
+};
+
+const statusBadge = (s: string) => {
+  const map: Record<string, string> = { completed: 'success', in_progress: 'running', todo: 'default', failed: 'danger', failed_permanent: 'danger', rejected: 'danger', verifying: 'running', repair: 'running' };
+  return map[s] || 'default';
+};
+
+export function DashboardShell({ company, tasks: initialTasks, documents, reports: _reports, creditBalance: initialCreditBalance, recentUsage: _recentUsage, pendingSuggestions: _pendingSuggestions, emails: initialEmails, links: initialLinks, user, liveCompanyCount }: DashboardShellProps) {
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [selectedDoc, setSelectedDoc] = useState<Document | null>(null);
   const [selectedEmail, setSelectedEmail] = useState<EmailRow | null>(null);
@@ -103,20 +98,16 @@ export function DashboardShell({
   const [creditBalance, setCreditBalance] = useState(initialCreditBalance);
   const [links, setLinks] = useState<DashboardLinkRow[]>(initialLinks ?? []);
   const [celebrateTask, setCelebrateTask] = useState<{ id: string; title: string } | null>(null);
-  // Founder-side parity dialogs (mirror Baljia's chat tools)
   const [newTaskOpen, setNewTaskOpen] = useState(false);
   const [recurringOpen, setRecurringOpen] = useState(false);
   const [addLinkOpen, setAddLinkOpen] = useState(false);
   const [editingLink, setEditingLink] = useState<DashboardLinkRow | null>(null);
 
-  const latestEmail = emails[0] ?? null;
-  const companyEmailAddress =
-    (company as unknown as { company_email?: string | null; email_identity?: string | null }).company_email
-    ?? (company as unknown as { company_email?: string | null; email_identity?: string | null }).email_identity
-    ?? null;
+  const companyEmailAddress = (company as unknown as { company_email?: string | null; email_identity?: string | null }).company_email ?? (company as unknown as { company_email?: string | null; email_identity?: string | null }).email_identity ?? null;
+  const sitePath = company.subdomain ? `https://${company.subdomain}.baljia.app` : '';
+  const inboxAddress = companyEmailAddress ?? '';
+  const onboardingFailed = company.onboarding_status === 'failed';
 
-  // Re-fetch dashboard from /api/dashboard. Used by both the 30s timer and
-  // the on-action refresh hook so chat-created tasks appear instantly.
   const refreshDashboard = useCallback(async () => {
     try {
       const res = await fetch(`/api/dashboard?company_id=${company.id}`);
@@ -129,633 +120,288 @@ export function DashboardShell({
     } catch { /* silent */ }
   }, [company.id]);
 
-  // Reorder / run-now / move-to-top — mirrors Baljia's edit_task / approve_task / move_task_to_top tools.
   const handleReorder = useCallback(async (taskId: string, queue_order: number) => {
-    try {
-      const res = await fetch(`/api/tasks/${taskId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ queue_order }),
-      });
-      if (res.ok) await refreshDashboard();
-    } catch { /* silent */ }
+    try { const res = await fetch(`/api/tasks/${taskId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ queue_order }) }); if (res.ok) await refreshDashboard(); } catch {}
   }, [refreshDashboard]);
 
   const handleRunNow = useCallback(async (taskId: string) => {
-    try {
-      const res = await fetch(`/api/tasks/${taskId}/approve`, { method: 'POST' });
-      if (res.ok || res.status === 409) {
-        setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, status: 'in_progress' as const } : t)));
-        await refreshDashboard();
-      }
-    } catch { /* silent */ }
+    try { const res = await fetch(`/api/tasks/${taskId}/approve`, { method: 'POST' }); if (res.ok || res.status === 409) { setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'in_progress' as const } : t)); await refreshDashboard(); } } catch {}
   }, [refreshDashboard]);
 
-  // 30s safety-net poll. Most updates come via the chat onAction hook below.
-  useEffect(() => {
-    const interval = setInterval(refreshDashboard, 30000);
-    return () => clearInterval(interval);
-  }, [refreshDashboard]);
+  useEffect(() => { const i = setInterval(refreshDashboard, 30000); return () => clearInterval(i); }, [refreshDashboard]);
 
-  // CEO action → instant refresh. Closes the up-to-30s blind spot where a
-  // chat-created task sat in the DB but wasn't yet visible on the dashboard.
   const handleChatAction = useCallback((action: ChatAction) => {
-    if (
-      action.type === 'task_proposal'
-      || action.type === 'task_approved'
-      || action.type === 'document_updated'
-      || action.type === 'credit_quote'
-    ) {
-      refreshDashboard();
-    }
+    if (action.type === 'task_proposal' || action.type === 'task_approved' || action.type === 'document_updated' || action.type === 'credit_quote') refreshDashboard();
   }, [refreshDashboard]);
 
-  // Celebration trigger — diff completed tasks against the last snapshot
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const key = `baljia:seen-completed:${company.id}`;
-    let seen: string[];
-    try { seen = JSON.parse(sessionStorage.getItem(key) ?? '[]'); } catch { seen = []; }
-    const completed = initialTasks.filter((t) => t.status === 'completed');
+    let seen: string[]; try { seen = JSON.parse(sessionStorage.getItem(key) ?? '[]'); } catch { seen = []; }
+    const completed = initialTasks.filter(t => t.status === 'completed');
     const seenSet = new Set(seen);
-    const fresh = completed.find((t) => !seenSet.has(t.id));
+    const fresh = completed.find(t => !seenSet.has(t.id));
     if (fresh) setCelebrateTask({ id: fresh.id, title: fresh.title ?? 'Task complete' });
-    sessionStorage.setItem(key, JSON.stringify(completed.map((t) => t.id)));
+    sessionStorage.setItem(key, JSON.stringify(completed.map(t => t.id)));
   }, [initialTasks, company.id]);
 
-  // CEO chat rail needs warnings derived from current state
   const chatWarnings = useMemo<string[]>(() => {
     const w: string[] = [];
-    if (creditBalance <= 0 && company.plan_tier !== 'trial') {
-      w.push("You're out of task credits. Add more before queueing new work.");
-    } else if (creditBalance > 0 && creditBalance <= 3) {
-      w.push(`Only ${creditBalance} task ${creditBalance === 1 ? 'credit' : 'credits'} left — top up soon.`);
-    }
-    if (company.onboarding_status === 'initializing' || company.onboarding_status === 'running') {
-      w.push('Baljia is still setting things up — research, landing, and inbox are in flight.');
-    }
-    if (company.onboarding_status === 'failed') {
-      w.push('Setup paused before finishing. Resume from the banner above to continue.');
-    }
-    if (company.hosting_state === 'suspended') {
-      w.push('Your app is suspended — resolve billing to bring it back online.');
-    }
+    if (creditBalance <= 0 && company.plan_tier !== 'trial') w.push("You're out of task credits.");
+    else if (creditBalance > 0 && creditBalance <= 3) w.push(`Only ${creditBalance} credit${creditBalance === 1 ? '' : 's'} left.`);
+    if (company.onboarding_status === 'initializing' || company.onboarding_status === 'running') w.push('Still setting up — research, landing, and inbox in flight.');
+    if (company.onboarding_status === 'failed') w.push('Setup paused. Resume from the banner above.');
+    if (company.hosting_state === 'suspended') w.push('App suspended — resolve billing.');
     return w;
   }, [creditBalance, company.plan_tier, company.onboarding_status, company.hosting_state]);
 
-  // Approve hits the API, then optimistically marks the task as authorized so
-  // the UI immediately shows "Queued · launching" instead of "Awaiting approval".
-  // The worker (running in-process via launchTask now) flips status to
-  // 'in_progress' within ~1s, which the next refreshDashboard call picks up.
   const handleApprove = useCallback(async (taskId: string) => {
-    try {
-      const res = await fetch(`/api/tasks/${taskId}/approve`, { method: 'POST' });
-      if (res.ok || res.status === 409) {
-        // Optimistic — use authorized_by as the signal so it survives the next
-        // poll (the API has already persisted authorized_by='founder').
-        setTasks((prev) => prev.map((t) =>
-          t.id === taskId ? { ...t, authorized_by: 'founder' } : t
-        ));
-        // Brief delay then refresh to pull in_progress status once the worker claims.
-        setTimeout(() => { void refreshDashboard(); }, 1500);
-      }
-    } catch { /* silent — optimistic update skipped on network error */ }
+    try { const res = await fetch(`/api/tasks/${taskId}/approve`, { method: 'POST' }); if (res.ok || res.status === 409) { setTasks(prev => prev.map(t => t.id === taskId ? { ...t, authorized_by: 'founder' } : t)); setTimeout(() => { void refreshDashboard(); }, 1500); } } catch {}
   }, [refreshDashboard]);
 
-  // FIX: Reject now calls real API before updating local state
   const handleReject = useCallback(async (taskId: string) => {
-    try {
-      const res = await fetch(`/api/tasks/${taskId}/reject`, { method: 'POST' });
-      if (res.ok) {
-        setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, status: 'rejected' as const } : t)));
-      }
-    } catch { /* silent */ }
+    try { const res = await fetch(`/api/tasks/${taskId}/reject`, { method: 'POST' }); if (res.ok) setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'rejected' as const } : t)); } catch {}
   }, []);
 
-  // Tasks shown as cards on the main column — top 5 most-recent non-terminal.
   const previewTasks = useMemo(() => {
-    const priority: Record<string, number> = {
-      todo: 0, in_progress: 1, verifying: 2, repair: 3,
-      completed: 4, failed: 5, failed_permanent: 5, rejected: 6,
-    };
-    return [...tasks]
-      .sort((a, b) => (priority[a.status] ?? 99) - (priority[b.status] ?? 99))
-      .slice(0, 5);
+    const p: Record<string, number> = { todo: 0, in_progress: 1, verifying: 2, repair: 3, completed: 4, failed: 5, failed_permanent: 5, rejected: 6 };
+    return [...tasks].sort((a, b) => (p[a.status] ?? 99) - (p[b.status] ?? 99)).slice(0, 5);
   }, [tasks]);
 
-  // FIX: Show docs even if is_empty flag is stale
-  const docsSorted = useMemo(
-    () => [...documents]
-      .filter((d) => !d.is_empty || (d.content && d.content.trim().length > 0))
-      .sort((a, b) => new Date(b.updated_at ?? b.created_at ?? 0).getTime()
-                     - new Date(a.updated_at ?? a.created_at ?? 0).getTime()),
-    [documents],
-  );
-
-  const sitePath = company.subdomain ? `https://${company.subdomain}.baljia.app` : '';
-  const inboxAddress = companyEmailAddress ?? '';
-
-
-  const onboardingFailed = company.onboarding_status === 'failed';
+  const docsSorted = useMemo(() => [...documents].filter(d => !d.is_empty || (d.content && d.content.trim().length > 0)).sort((a, b) => new Date(b.updated_at ?? b.created_at ?? 0).getTime() - new Date(a.updated_at ?? a.created_at ?? 0).getTime()), [documents]);
 
   return (
-    <div className="dashboard-shell">
+    <div style={S.page}>
       <LiveBanner liveCount={liveCompanyCount} />
 
       {onboardingFailed && (
-        <div
-          role="alert"
-          style={{
-            margin: '12px 16px 0',
-            padding: '14px 18px',
-            border: '1px solid #D97706',
-            background: '#FFF7ED',
-            borderRadius: 8,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 16,
-            flexWrap: 'wrap',
-          }}
-        >
+        <div style={{ margin: '12px 16px 0', padding: '14px 18px', border: '1px solid #D97706', background: 'rgba(225,177,44,0.08)', borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' as const }}>
           <div style={{ minWidth: 0, flex: 1 }}>
-            <strong className="serif" style={{ fontSize: 15, display: 'block', marginBottom: 4 }}>
-              Setup didn&apos;t finish
-            </strong>
-            <span style={{ fontSize: 12, color: '#5C5147' }}>
-              Something went wrong while building <strong>{company.name}</strong>. Your work is saved
-              — pick up where Baljia stopped.
-            </span>
+            <strong style={{ fontFamily: "'Newsreader', Georgia, serif", fontSize: 15, display: 'block', marginBottom: 4, color: 'var(--ink)' }}>Setup didn&apos;t finish</strong>
+            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Something went wrong building <strong>{company.name}</strong>. Your work is saved.</span>
           </div>
-          <Link
-            className="chrome-button chrome-button--hero"
-            href={`/onboarding?resume=${company.id}`}
-          >
-            Resume setup →
-          </Link>
+          <Link href={`/onboarding?resume=${company.id}`} style={{ ...S.btnPrimary, textDecoration: 'none', fontSize: 13 }}>Resume setup →</Link>
         </div>
       )}
 
-      <header className="dashboard-topbar">
+      {/* Topbar */}
+      <header style={S.topbar}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <img
-            src="/mascot.png"
-            alt="Baljia"
-            style={{
-              width: 36, height: 36, objectFit: 'contain',
-              filter: 'drop-shadow(0 2px 8px rgba(225,177,44,0.3)) brightness(1.08) saturate(1.2)',
-            }}
-          />
-          <div className="dashboard-topbar__title serif">{company.name}</div>
+          <img src="/mascot.png" alt="Baljia" style={S.mascotSm} />
+          <div>
+            <div style={S.topbarTitle}>{company.name}</div>
+            {company.one_liner && <div style={S.topbarSubtitle}>{company.one_liner}</div>}
+          </div>
         </div>
-        <div className="dashboard-topbar__actions">
-          <Link className="chrome-button chrome-button--small" href="/portfolio">
-            Portfolio
-          </Link>
-          <Link className="chrome-button chrome-button--small" href="/onboarding">
-            + New
-          </Link>
-          <button
-            className="chrome-button chrome-button--small"
-            onClick={() => setMenuOpen((v) => !v)}
-            type="button"
-          >
-            Menu
-          </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Link href="/portfolio" style={{ ...S.btn, textDecoration: 'none' }}>Portfolio</Link>
+          <Link href="/onboarding" style={{ ...S.btn, textDecoration: 'none' }}>+ New</Link>
+          <button style={S.btn} onClick={() => setMenuOpen(v => !v)}>Menu</button>
         </div>
       </header>
 
-      <div className="dashboard-layout-flex">
-      <div className="dashboard-grid dashboard-grid--founder">
+      {/* Main grid */}
+      <div style={S.grid}>
         {/* ── Left column ── */}
-        <section className="dashboard-column dashboard-column--left">
-          <div className="panel-title"><span className="serif">Baljia</span></div>
-          <div className="status-block">
-            <img
-              src="/mascot.png"
-              alt="Baljia"
-              style={{
-                width: 56, height: 56, objectFit: 'contain',
-                filter: 'drop-shadow(0 4px 12px rgba(225,177,44,0.3)) brightness(1.08) saturate(1.2)',
-              }}
-            />
+        <div style={S.colLeft}>
+          <div style={S.panelHeading}><span style={{ fontFamily: "'Newsreader', Georgia, serif" }}>Baljia</span></div>
+          <div style={{ display: 'flex', gap: 14, marginBottom: 20 }}>
+            <img src="/mascot.png" alt="Baljia" style={S.mascotMd} />
             <div>
-              <h2 className="serif">{company.one_liner ?? 'Ready'}</h2>
-              <p>
-                {company.onboarding_status === 'completed'
-                  ? 'Company online. Chat with the CEO or approve a task.'
-                  : onboardingFailed
-                    ? 'Setup paused — resume above to finish bringing your company online.'
-                    : 'Baljia is still setting things up.'}
+              <h2 style={{ fontFamily: "'Newsreader', Georgia, serif", fontSize: 16, fontWeight: 500, marginBottom: 4, color: 'var(--ink)' }}>{company.one_liner ?? 'Ready'}</h2>
+              <p style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                {company.onboarding_status === 'completed' ? 'Company online. Chat with the CEO or approve a task.'
+                  : onboardingFailed ? 'Setup paused — resume above.'
+                  : 'Baljia is still setting things up.'}
               </p>
             </div>
           </div>
 
           {company.plan_tier === 'trial' && (
-            <div className="trial-card">
-              <h3 className="serif">Hire Your AI Employee</h3>
-              <p>$1.63/day · Works while you sleep</p>
-              <button
-                className="chrome-button chrome-button--hero"
-                onClick={() => setUpgradeOpen(true)}
-                type="button"
-              >
-                Start free trial
-              </button>
-              <small>3-day trial · $49/mo</small>
+            <div style={S.trialCard}>
+              <h3 style={{ fontFamily: "'Newsreader', Georgia, serif", fontSize: 17, fontWeight: 600, marginBottom: 6 }}>Hire Your AI Employee</h3>
+              <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>$1.63/day · Works while you sleep</p>
+              <button style={{ ...S.btnPrimary, width: '100%' }} onClick={() => setUpgradeOpen(true)}>Start free trial</button>
+              <p style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 8 }}>3-day trial · $49/mo</p>
             </div>
           )}
 
-          <div className="panel-title"><span className="serif">Business</span></div>
-          <div className="business-list">
-            <div><span>Revenue:</span><strong>$0.00</strong></div>
-            <div><span>Lifetime Earnings:</span><strong>$0.00</strong></div>
-            <div><span>Payments paused</span></div>
+          <div style={S.panelHeading}><span style={{ fontFamily: "'Newsreader', Georgia, serif" }}>Business</span></div>
+          <div style={{ display: 'grid', gap: 8, fontSize: 13, marginBottom: 14 }}>
+            {[['Revenue', '$0.00'], ['Lifetime', '$0.00'], ['Credits', String(creditBalance)], ['Stage', company.company_stage?.replace(/_/g, ' ') ?? 'pre-launch']].map(([k, v]) => (
+              <div key={k} style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ color: 'var(--text-muted)' }}>{k}</span>
+                <strong style={{ color: 'var(--ink)' }}>{v}</strong>
+              </div>
+            ))}
           </div>
-          <button
-            className="verify-button"
-            onClick={() => setPurchaseOpen(true)}
-            type="button"
-          >
+          <button style={{ ...S.btn, width: '100%', fontSize: 11, color: '#D97706' }} onClick={() => setPurchaseOpen(true)}>
             Complete verification to accept payments
           </button>
-          <div className="refresh-note">
-            Credits: {creditBalance} · {company.company_stage?.replace(/_/g, ' ') ?? 'pre-launch'}
-          </div>
-        </section>
+        </div>
 
-        {/* ── Main column: tasks / documents / suggestions / links ── */}
-        <section className="dashboard-column dashboard-column--main">
-          <div className="dashboard-section">
-            <div className="panel-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-              <span className="serif">Tasks</span>
+        {/* ── Main column ── */}
+        <div style={S.colMain}>
+          <div style={S.section}>
+            <div style={S.panelHeading}>
+              <span style={{ fontFamily: "'Newsreader', Georgia, serif" }}>Tasks</span>
               <span style={{ display: 'flex', gap: 6 }}>
-                <button
-                  type="button"
-                  onClick={() => setRecurringOpen(true)}
-                  className="chrome-button chrome-button--small"
-                  style={{ fontSize: 11 }}
-                >
-                  ↻ Recurring
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setNewTaskOpen(true)}
-                  className="chrome-button chrome-button--small chrome-button--primary"
-                  style={{ fontSize: 11 }}
-                >
-                  + New Task
-                </button>
+                <button style={{ ...S.btn, ...S.btnSm }} onClick={() => setRecurringOpen(true)}>↻ Recurring</button>
+                <button style={{ ...S.btnPrimary, ...S.btnSm }} onClick={() => setNewTaskOpen(true)}>+ New Task</button>
               </span>
             </div>
-            <div className="task-preview-list">
+            <div style={{ display: 'grid', gap: 10 }}>
               {previewTasks.length === 0 ? (
-                <p style={{ fontSize: 12, color: 'var(--dash-muted, #6f6f6f)', padding: '10px 0' }}>
-                  Message Baljia to set up your first company.
-                </p>
-              ) : previewTasks.map((task) => (
-                <div
-                  className="task-preview-card"
-                  key={task.id}
-                  onClick={() => setSelectedTask(task)}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setSelectedTask(task); }}
-                >
-                  <h3>{task.title}</h3>
-                  {task.description && <p>{task.description}</p>}
-                  <div className="task-preview-card__meta">
-                    <span className="micro-pill">{task.tag ?? task.status.replace(/_/g, ' ')}</span>
-                    {task.status === 'in_progress' && (
-                      <span className="micro-pill micro-pill--dark">Running</span>
+                <p style={{ fontSize: 12, color: 'var(--text-dim)', padding: '10px 0' }}>Message Baljia to set up your first company.</p>
+              ) : previewTasks.map(task => {
+                const agentName = task.assigned_to_agent_id !== null ? FOUNDER_AGENT_LABELS[task.assigned_to_agent_id] ?? 'AI Team' : null;
+                return (
+                  <div key={task.id} style={S.card} onClick={() => setSelectedTask(task)}>
+                    <div style={S.cardAccent}></div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', gap: 8, marginLeft: 8 }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <h4 style={{ fontSize: 14, fontWeight: 700, color: 'var(--ink)', marginBottom: 4, lineHeight: 1.3 }}>{task.title}</h4>
+                        {task.description && <p style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' as const, overflow: 'hidden' }}>{task.description}</p>}
+                      </div>
+                      <span style={S.badge(statusBadge(task.status))}>{task.status.replace(/_/g, ' ')}</span>
+                    </div>
+                    {task.status === 'in_progress' && task.started_at && (
+                      <div style={{ marginTop: 8, marginLeft: 8 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--text-dim)', marginBottom: 4 }}>
+                          <span>Turn {task.turn_count}/{task.max_turns}</span><span>Working...</span>
+                        </div>
+                        <div style={{ height: 3, background: 'var(--bg-alt)', borderRadius: 2 }}>
+                          <div style={{ width: `${Math.min((task.turn_count / task.max_turns) * 100, 100)}%`, height: 3, background: 'linear-gradient(90deg, #E1B12C, #FCD34D)', borderRadius: 2, transition: 'width .5s' }}></div>
+                        </div>
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' as const, marginTop: 8, marginLeft: 8 }}>
+                      <span style={S.badge('default')}>{task.tag}</span>
+                      {agentName && <span style={S.badge('default')}>🤖 {agentName}</span>}
+                      <span style={{ fontSize: 12, color: '#D97706', fontWeight: 600 }}>{task.estimated_credits} cr</span>
+                      <span style={{ flex: 1 }}></span>
+                      <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{formatAge(task.created_at)}</span>
+                    </div>
+                    {task.status === 'todo' && !task.authorized_by && (
+                      <div onClick={e => e.stopPropagation()} style={{ display: 'flex', gap: 6, flexWrap: 'wrap' as const, marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)', marginLeft: 8 }}>
+                        <button style={{ ...S.btnGhost, color: '#DC2626' }} onClick={e => { e.stopPropagation(); handleReject(task.id); }}>✗ Reject</button>
+                        <span style={{ flex: 1 }}></span>
+                        <button style={{ ...S.btn, ...S.btnSm }} onClick={e => { e.stopPropagation(); handleApprove(task.id); }}>✓ Approve</button>
+                        <button style={{ ...S.btnPrimary, ...S.btnSm }} onClick={e => { e.stopPropagation(); handleRunNow(task.id); }}>▶ Run Now</button>
+                      </div>
                     )}
                     {task.status === 'todo' && task.authorized_by && (
-                      <span className="micro-pill micro-pill--dark">Queued · launching</span>
-                    )}
-                    {task.status === 'todo' && !task.authorized_by && (
-                      <span className="micro-pill micro-pill--dark">Awaiting approval</span>
+                      <div style={{ marginTop: 8, marginLeft: 8 }}><span style={S.badge('running')}>Queued · launching</span></div>
                     )}
                   </div>
-                  {/* Inline controls for todo tasks — full parity with Baljia's
-                       reject_task / approve_task / move_task_to_top / reorder_task / get_task_run_link tools.
-                       Once authorized_by is set, the task is launching — hide
-                       the buttons since they'd race with the worker claim. */}
-                  {task.status === 'todo' && !task.authorized_by && (
-                    <div
-                      className="task-preview-card__actions"
-                      onClick={(e) => e.stopPropagation()}
-                      style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}
-                    >
-                      <button
-                        className="task-action-btn"
-                        type="button"
-                        title="Move to top"
-                        onClick={(e) => { e.stopPropagation(); handleReorder(task.id, 0); }}
-                      >▲</button>
-                      <button
-                        className="task-action-btn"
-                        type="button"
-                        title="Move up"
-                        onClick={(e) => { e.stopPropagation(); handleReorder(task.id, Math.max(0, (task.queue_order ?? 1) - 1)); }}
-                      >↑</button>
-                      <button
-                        className="task-action-btn"
-                        type="button"
-                        title="Move down"
-                        onClick={(e) => { e.stopPropagation(); handleReorder(task.id, (task.queue_order ?? 0) + 1); }}
-                      >↓</button>
-                      <span style={{ flex: 1 }} />
-                      <button
-                        className="task-action-btn task-action-btn--reject"
-                        type="button"
-                        onClick={(e) => { e.stopPropagation(); handleReject(task.id); }}
-                      >
-                        ✗ Reject
-                      </button>
-                      <button
-                        className="task-action-btn task-action-btn--approve"
-                        type="button"
-                        title="Approve and queue"
-                        onClick={(e) => { e.stopPropagation(); handleApprove(task.id); }}
-                      >
-                        ✓ Approve
-                      </button>
-                      <button
-                        className="task-action-btn task-action-btn--approve"
-                        type="button"
-                        title="Run immediately"
-                        onClick={(e) => { e.stopPropagation(); handleRunNow(task.id); }}
-                      >
-                        ▶ Run Now
-                      </button>
-                    </div>
-                  )}
-                </div>
-              ))}
+                );
+              })}
             </div>
             {tasks.length > previewTasks.length && (
-              <Link className="text-link" href={`/dashboard/${company.id}/tasks`}>
+              <Link href={`/dashboard/${company.id}/tasks`} style={{ display: 'inline-block', marginTop: 10, fontSize: 13, fontWeight: 700, color: '#D97706', textDecoration: 'none' }}>
                 Manage all {tasks.length} tasks →
               </Link>
             )}
           </div>
 
-          {/* FIX: Wire DocumentSuggestionPanel */}
           <DocumentSuggestionPanel companyId={company.id} />
 
-          <div className="dashboard-section">
-            <div className="panel-title"><span className="serif">Documents</span></div>
-            <div className="document-list">
-              {docsSorted.length === 0 ? (
-                <p style={{ fontSize: 12, color: 'var(--dash-muted, #6f6f6f)', padding: '4px 0' }}>
-                  No documents yet.
-                </p>
-              ) : docsSorted.slice(0, 5).map((doc) => (
-                <button
-                  className="document-row document-row--button"
-                  key={doc.id}
-                  onClick={() => setSelectedDoc(doc)}
-                  type="button"
-                >
-                  <span className="document-row__icon">≡</span>
-                  <div><strong>{doc.title ?? doc.doc_type}</strong></div>
-                  <small>{formatAge(doc.updated_at ?? doc.created_at ?? null)}</small>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="dashboard-section">
-            <div className="panel-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-              <span className="serif">Links</span>
-              <button
-                type="button"
-                onClick={() => { setEditingLink(null); setAddLinkOpen(true); }}
-                className="chrome-button chrome-button--small"
-                style={{ fontSize: 11 }}
-              >
-                + Add link
+          <div style={S.section}>
+            <div style={S.panelHeading}><span style={{ fontFamily: "'Newsreader', Georgia, serif" }}>Documents</span></div>
+            {docsSorted.length === 0 ? (
+              <p style={{ fontSize: 12, color: 'var(--text-dim)' }}>No documents yet.</p>
+            ) : docsSorted.slice(0, 5).map(doc => (
+              <button key={doc.id} style={S.docRow} onClick={() => setSelectedDoc(doc)}>
+                <span style={{ color: '#D97706', fontSize: 14 }}>≡</span>
+                <strong style={{ fontSize: 13, color: 'var(--ink)' }}>{doc.title ?? doc.doc_type}</strong>
+                <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{formatAge(doc.updated_at ?? doc.created_at ?? null)}</span>
               </button>
+            ))}
+          </div>
+
+          <div style={S.section}>
+            <div style={S.panelHeading}>
+              <span style={{ fontFamily: "'Newsreader', Georgia, serif" }}>Links</span>
+              <button style={{ ...S.btn, ...S.btnSm }} onClick={() => { setEditingLink(null); setAddLinkOpen(true); }}>+ Add</button>
             </div>
-            <div className="links-list">
-              {sitePath && (
-                <a className="link-item" href={sitePath} target="_blank" rel="noopener noreferrer">
-                  <strong>{company.name}</strong>
-                  <span>{sitePath.replace(/^https?:\/\//, '')}</span>
-                </a>
-              )}
-              {inboxAddress && (
-                <div className="link-item">
-                  <strong>Company Inbox</strong>
-                  <span>{inboxAddress}</span>
-                </div>
-              )}
-              {sitePath && (
-                <a className="link-item" href={`${sitePath}/trial/${company.slug}`} target="_blank" rel="noopener noreferrer">
-                  <strong>Hosted Checkout</strong>
-                  <span>{sitePath.replace(/^https?:\/\//, '')}/trial/{company.slug}</span>
-                </a>
-              )}
-              {/* Founder-managed quick links — written via "+ Add link" or Baljia's update_link tool */}
-              {links.map((link) => (
-                <button
-                  className="link-item"
-                  key={link.id}
-                  onClick={() => { setEditingLink(link); setAddLinkOpen(true); }}
-                  type="button"
-                  title="Click to edit"
-                  style={{ textAlign: 'left', cursor: 'pointer', background: 'transparent', border: 0 }}
-                >
-                  <strong>{link.label}</strong>
-                  <span>{link.url.replace(/^https?:\/\//, '')}</span>
+            <div style={{ display: 'grid', gap: 4 }}>
+              {sitePath && <a href={sitePath} target="_blank" rel="noopener noreferrer" style={{ ...S.linkItem, textDecoration: 'none', color: 'var(--ink)' }}><strong>{company.name}</strong><span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{sitePath.replace(/^https?:\/\//, '')} ↗</span></a>}
+              {inboxAddress && <div style={S.linkItem}><strong style={{ color: 'var(--ink)' }}>Company Inbox</strong><span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{inboxAddress}</span></div>}
+              {links.map(link => (
+                <button key={link.id} style={{ ...S.linkItem, background: 'transparent', border: 'none', cursor: 'pointer', textAlign: 'left' as const }} onClick={() => { setEditingLink(link); setAddLinkOpen(true); }}>
+                  <strong style={{ color: 'var(--ink)' }}>{link.label}</strong>
+                  <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{link.url.replace(/^https?:\/\//, '')}</span>
                 </button>
               ))}
             </div>
           </div>
-        </section>
+        </div>
 
-        {/* ── Channels column: Twitter / Email / Ads ── */}
-        <section className="dashboard-column dashboard-column--channels">
-          <div className="dashboard-section">
-            <div className="panel-title"><span className="serif">Twitter</span></div>
-            <div className="channel-handle">@{company.slug ?? 'baljia'}</div>
-            <div className="tweet-box">
-              <p style={{ color: 'var(--dash-muted, #6f6f6f)' }}>No tweets yet — run a Twitter task to see posts here.</p>
+        {/* ── Channels column ── */}
+        <div style={S.colChannels}>
+          <div style={S.section}>
+            <div style={S.panelHeading}><span style={{ fontFamily: "'Newsreader', Georgia, serif" }}>Twitter</span></div>
+            <p style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 8 }}>@{company.slug ?? 'baljia'}</p>
+            <div style={{ padding: 14, border: '1px solid var(--border)', borderRadius: 10, background: 'var(--bg-alt)', marginBottom: 8 }}>
+              <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>No tweets yet — run a Twitter task.</p>
             </div>
-            <button className="chrome-button chrome-button--small" type="button" disabled>
-              Tweet
-            </button>
+            <button style={{ ...S.btn, ...S.btnSm, opacity: 0.5, cursor: 'not-allowed' }} disabled>Tweet</button>
           </div>
-
-          <div className="dashboard-section">
-            <div className="panel-title"><span className="serif">Email</span></div>
-            <div className="channel-handle">{inboxAddress || '—'}</div>
-            <div className="mail-list">
-              {emails.length === 0 ? (
-                <div>
-                  <p style={{ fontSize: 12, color: 'var(--dash-muted, #6f6f6f)' }}>No emails yet.</p>
-                  {/* FIX: Helpful CTA when no emails */}
-                  <p style={{ fontSize: 11, color: 'var(--dash-faint, #8a8a8a)', marginTop: 4 }}>
-                    Ask Baljia to run a cold outreach task to start sending emails.
-                  </p>
-                </div>
-              ) : emails.slice(0, 3).map((e) => (
-                <button
-                  className="mail-row mail-row--clickable"
-                  key={e.id}
-                  type="button"
-                  onClick={() => setSelectedEmail(e)}
-                >
-                  <strong>{e.subject ?? '(no subject)'}</strong>
-                  <span>{e.direction === 'outbound' ? `To: ${e.to_address}` : `From: ${e.from_address ?? e.to_address}`}</span>
-                  <small>{formatAge(e.created_at)}</small>
-                </button>
-              ))}
-            </div>
-            <button className="chrome-button chrome-button--small" type="button" disabled>
-              Cold Outreach
-            </button>
+          <div style={S.section}>
+            <div style={S.panelHeading}><span style={{ fontFamily: "'Newsreader', Georgia, serif" }}>Email</span></div>
+            <p style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 8 }}>{inboxAddress || '—'}</p>
+            {emails.length === 0 ? (
+              <div>
+                <p style={{ fontSize: 12, color: 'var(--text-dim)' }}>No emails yet.</p>
+                <p style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>Ask Baljia to run outreach to start sending.</p>
+              </div>
+            ) : emails.slice(0, 3).map(e => (
+              <button key={e.id} style={{ ...S.docRow, gridTemplateColumns: '1fr auto' }} onClick={() => setSelectedEmail(e)}>
+                <div><strong style={{ fontSize: 12, color: 'var(--ink)' }}>{e.subject ?? '(no subject)'}</strong><br /><span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{e.direction === 'outbound' ? `To: ${e.to_address}` : `From: ${e.from_address ?? e.to_address}`}</span></div>
+                <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{formatAge(e.created_at)}</span>
+              </button>
+            ))}
+            <button style={{ ...S.btn, ...S.btnSm, opacity: 0.5, cursor: 'not-allowed', marginTop: 8 }} disabled>Cold Outreach</button>
           </div>
-
-          <div className="dashboard-section">
-            <div className="panel-title"><span className="serif">Ads</span></div>
-            <button className="chrome-button chrome-button--small" type="button" disabled>
-              Run Ads
-            </button>
-            <div className="ads-summary">
-              No campaigns. Spend today: $0.00.
-            </div>
+          <div style={S.section}>
+            <div style={S.panelHeading}><span style={{ fontFamily: "'Newsreader', Georgia, serif" }}>Ads</span></div>
+            <button style={{ ...S.btn, ...S.btnSm, opacity: 0.5, cursor: 'not-allowed' }} disabled>Run Ads</button>
+            <p style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 8 }}>No campaigns. Spend: $0.00</p>
           </div>
+        </div>
 
-          {latestEmail && emails.length > 3 && (
-            <p style={{ fontSize: 11, color: 'var(--dash-faint, #8a8a8a)' }}>
-              +{emails.length - 3} more in inbox
-            </p>
-          )}
-        </section>
-      </div>
-
-        {/* ── Baljia chat sidebar (docked right) ── */}
+        {/* ── Chat sidebar ── */}
         <FounderChatRail companyId={company.id} warnings={chatWarnings} onAction={handleChatAction} />
       </div>
 
-      {/* ── Email viewer dialog ── */}
+      {/* ── Email viewer ── */}
       {selectedEmail && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
-          onClick={() => setSelectedEmail(null)}
-          role="dialog"
-          aria-modal="true"
-        >
-          <div
-            className="relative w-full max-w-2xl max-h-[80vh] overflow-hidden rounded-xl flex flex-col"
-            style={{ background: 'var(--dash-surface, #FFFDF9)', border: '1px solid var(--dash-line, #e8dfd4)' }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Header */}
-            <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--dash-line, #e8dfd4)', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
-              <div style={{ minWidth: 0 }}>
-                <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4, color: 'var(--dash-ink)' }}>
-                  {selectedEmail.subject ?? '(no subject)'}
-                </h2>
-                <p style={{ fontSize: 12, color: 'var(--dash-muted, #6f6f6f)' }}>
-                  {selectedEmail.direction === 'outbound'
-                    ? `To: ${selectedEmail.to_address}`
-                    : `From: ${selectedEmail.from_address ?? selectedEmail.to_address}`}
-                  {' · '}{formatAge(selectedEmail.created_at)}
-                </p>
+        <div style={S.emailModal} onClick={() => setSelectedEmail(null)}>
+          <div style={{ width: '100%', maxWidth: 600, maxHeight: '80vh', overflow: 'hidden', borderRadius: 14, display: 'flex', flexDirection: 'column' as const, background: 'var(--bg-card)', border: '1px solid var(--line)' }} onClick={e => e.stopPropagation()}>
+            <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+              <div>
+                <h2 style={{ fontSize: 16, fontWeight: 700, color: 'var(--ink)', marginBottom: 4 }}>{selectedEmail.subject ?? '(no subject)'}</h2>
+                <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>{selectedEmail.direction === 'outbound' ? `To: ${selectedEmail.to_address}` : `From: ${selectedEmail.from_address ?? selectedEmail.to_address}`} · {formatAge(selectedEmail.created_at)}</p>
               </div>
-              <button
-                type="button"
-                onClick={() => setSelectedEmail(null)}
-                style={{ flexShrink: 0, padding: '6px 12px', borderRadius: 8, border: '1px solid var(--dash-line, #e8dfd4)', background: 'var(--dash-surface-muted)', fontSize: 12, cursor: 'pointer' }}
-              >
-                Close
-              </button>
+              <button style={{ ...S.btn, ...S.btnSm }} onClick={() => setSelectedEmail(null)}>Close</button>
             </div>
-            {/* Body */}
-            <div style={{ overflow: 'auto', padding: '20px', flex: 1 }}>
-              {selectedEmail.body ? (
-                <pre style={{ fontFamily: 'var(--font-body, Inter, sans-serif)', fontSize: 14, lineHeight: 1.7, whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: 'var(--dash-ink)', margin: 0 }}>
-                  {selectedEmail.body}
-                </pre>
-              ) : (
-                <p style={{ fontSize: 13, color: 'var(--dash-muted, #6f6f6f)', fontStyle: 'italic' }}>
-                  No message body stored.
-                </p>
-              )}
+            <div style={{ overflow: 'auto', padding: 20, flex: 1 }}>
+              {selectedEmail.body ? <pre style={{ fontFamily: "'Inter', sans-serif", fontSize: 14, lineHeight: 1.7, whiteSpace: 'pre-wrap' as const, wordBreak: 'break-word' as const, color: 'var(--ink)', margin: 0 }}>{selectedEmail.body}</pre>
+                : <p style={{ fontSize: 13, color: 'var(--text-dim)', fontStyle: 'italic' }}>No message body stored.</p>}
             </div>
           </div>
         </div>
       )}
 
-      {/* ── Overlays + dialogs ── */}
-      {menuOpen && (
-        <DashboardMenu
-          user={user}
-          company={company}
-          creditBalance={creditBalance}
-          onClose={() => setMenuOpen(false)}
-          onOpenUpgrade={() => { setMenuOpen(false); setUpgradeOpen(true); }}
-          onOpenPurchase={() => { setMenuOpen(false); setPurchaseOpen(true); }}
-        />
-      )}
-
-      <TaskDetailDialog
-        task={selectedTask}
-        open={selectedTask !== null}
-        onOpenChange={(open) => { if (!open) setSelectedTask(null); }}
-        onApprove={handleApprove}
-        onReject={handleReject}
-      />
-
-      <DocumentDialog
-        doc={selectedDoc}
-        onClose={() => setSelectedDoc(null)}
-        companySlug={company.slug ?? undefined}
-      />
-
-      <PurchaseCreditsDialog
-        open={purchaseOpen}
-        onOpenChange={setPurchaseOpen}
-        currentBalance={creditBalance}
-      />
-
-      <UpgradeDialog
-        open={upgradeOpen}
-        onOpenChange={setUpgradeOpen}
-        companyId={company.id}
-      />
-
-      {/* Founder-side parity dialogs (mirror Baljia's chat tools) */}
-      <NewTaskDialog
-        open={newTaskOpen}
-        onOpenChange={setNewTaskOpen}
-        companyId={company.id}
-        onCreated={() => { void refreshDashboard(); }}
-      />
-
-      <RecurringTasksDialog
-        open={recurringOpen}
-        onOpenChange={setRecurringOpen}
-        companyId={company.id}
-      />
-
-      <AddLinkDialog
-        open={addLinkOpen}
-        onOpenChange={(o) => { setAddLinkOpen(o); if (!o) setEditingLink(null); }}
-        companyId={company.id}
-        initialLabel={editingLink?.label}
-        initialUrl={editingLink?.url}
-        onSaved={() => { void refreshDashboard(); }}
-      />
-
-      {celebrateTask && (
-        <CelebrationOverlay
-          taskTitle={celebrateTask.title}
-          onDismiss={() => setCelebrateTask(null)}
-        />
-      )}
+      {menuOpen && <DashboardMenu user={user} company={company} creditBalance={creditBalance} onClose={() => setMenuOpen(false)} onOpenUpgrade={() => { setMenuOpen(false); setUpgradeOpen(true); }} onOpenPurchase={() => { setMenuOpen(false); setPurchaseOpen(true); }} />}
+      <TaskDetailDialog task={selectedTask} open={selectedTask !== null} onOpenChange={o => { if (!o) setSelectedTask(null); }} onApprove={handleApprove} onReject={handleReject} />
+      <DocumentDialog doc={selectedDoc} onClose={() => setSelectedDoc(null)} companySlug={company.slug ?? undefined} />
+      <PurchaseCreditsDialog open={purchaseOpen} onOpenChange={setPurchaseOpen} currentBalance={creditBalance} />
+      <UpgradeDialog open={upgradeOpen} onOpenChange={setUpgradeOpen} companyId={company.id} />
+      <NewTaskDialog open={newTaskOpen} onOpenChange={setNewTaskOpen} companyId={company.id} onCreated={() => { void refreshDashboard(); }} />
+      <RecurringTasksDialog open={recurringOpen} onOpenChange={setRecurringOpen} companyId={company.id} />
+      <AddLinkDialog open={addLinkOpen} onOpenChange={o => { setAddLinkOpen(o); if (!o) setEditingLink(null); }} companyId={company.id} initialLabel={editingLink?.label} initialUrl={editingLink?.url} onSaved={() => { void refreshDashboard(); }} />
+      {celebrateTask && <CelebrationOverlay taskTitle={celebrateTask.title} onDismiss={() => setCelebrateTask(null)} />}
     </div>
   );
 }

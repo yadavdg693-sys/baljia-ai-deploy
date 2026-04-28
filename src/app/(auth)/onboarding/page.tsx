@@ -16,13 +16,10 @@ interface StageUpdate {
   label?: string;
   company_name?: string;
   error?: string;
-  // activity
   text?: string;
   tool?: string | null;
   timestamp?: number;
-  // mood
   mood?: string;
-  // transformation — idea was reinterpreted
   original?: string;
   refined?: string;
   changes_made?: string | null;
@@ -36,21 +33,11 @@ export interface ActivityLine {
   timestamp: number;
 }
 
-// Stage order — USER-FACING checklist only. Shows the 10 milestones a founder
-// actually cares about seeing progress on. Internal plumbing stages
-// (enrich_geo, persist_context, send_startup_email, provision_founder_app_kickoff,
-// post_launch_tweet, generate_ceo_summary, await_founder_app, generate_magic_link,
-// send_inbox_message, send_completion_email, flush_diagnostics) still fire on
-// the backend and still emit onboarding_activity lines for the scrolling
-// activity feed below — they just don't clutter the main checklist.
-//
-// Journey-specific idea-processing stages (refine_idea / fetch_business_url /
-// invent_idea) stay pending in the UI for journeys that don't run them.
 const STAGE_ORDER = [
   'heartbeat',
-  'refine_idea',                // Build only
-  'fetch_business_url',         // Grow only
-  'invent_idea',                // Surprise Me only
+  'refine_idea',
+  'fetch_business_url',
+  'invent_idea',
   'name_company',
   'provision_infrastructure',
   'generate_market_research',
@@ -62,7 +49,11 @@ const STAGE_ORDER = [
 
 export default function OnboardingPage() {
   return (
-    <Suspense fallback={<div className="min-h-screen bg-surface-primary flex items-center justify-center"><p className="text-text-secondary">Loading...</p></div>}>
+    <Suspense fallback={
+      <div style={{ minHeight: '100vh', background: 'var(--bg)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <p style={{ color: 'var(--text-muted)' }}>Loading...</p>
+      </div>
+    }>
       <OnboardingPageInner />
     </Suspense>
   );
@@ -90,14 +81,10 @@ function OnboardingPageInner() {
   const eventSourceRef = useRef<EventSource | null>(null);
   const resumeTriggered = useRef(false);
 
-  // Auto-resume pipeline for pending_auth companies (redirected from dashboard)
   useEffect(() => {
     if (!resumeCompanyId || resumeTriggered.current) return;
     resumeTriggered.current = true;
-
     const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    // POST to /api/onboarding — the route detects pending_auth and resumes the pipeline.
-    // Journey is read from company.onboarding_journey on the server side.
     fetch('/api/onboarding', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -105,422 +92,291 @@ function OnboardingPageInner() {
     }).then(async (res) => {
       if (!res.ok) {
         const data = await res.json();
-        // 409 = already has completed company — just go to dashboard
-        if (res.status === 409 && data.company_id) {
-          router.push(`/dashboard/${data.company_id}`);
-          return;
-        }
+        if (res.status === 409 && data.company_id) { router.push(`/dashboard/${data.company_id}`); return; }
         throw new Error(data.error ?? 'Failed to resume setup');
       }
-      // Pipeline started — SSE stream will pick up progress via companyId state
     }).catch((err) => {
       setError(err instanceof Error ? err.message : 'Failed to resume setup');
       setStep('level1');
     });
   }, [resumeCompanyId, router]);
 
-  // Start SSE stream once we have a company_id
   useEffect(() => {
     if (!companyId) return;
-
     const es = new EventSource(`/api/onboarding/status?company_id=${companyId}`);
     eventSourceRef.current = es;
-
     es.onmessage = (e) => {
       const update: StageUpdate = JSON.parse(e.data);
-
       if (update.type === 'ping') return;
-
       if (update.type === 'stage' && update.stage) {
         setStages(prev => ({ ...prev, [update.stage!]: update.status ?? 'running' }));
-        if (update.status === 'running' && update.label) {
-          setCurrentStageLabel(update.label);
-        }
+        if (update.status === 'running' && update.label) setCurrentStageLabel(update.label);
       }
-
       if (update.type === 'activity' && update.text) {
-        setActivityLines(prev => [
-          ...prev,
-          {
-            id: ++activityIdRef.current,
-            text: update.text!,
-            tool: update.tool ?? null,
-            stage: update.stage ?? null,
-            timestamp: update.timestamp ?? Date.now(),
-          },
-        ]);
+        setActivityLines(prev => [...prev, { id: ++activityIdRef.current, text: update.text!, tool: update.tool ?? null, stage: update.stage ?? null, timestamp: update.timestamp ?? Date.now() }]);
       }
-
-      if (update.type === 'mood' && update.mood) {
-        setMood(update.mood);
-      }
-
+      if (update.type === 'mood' && update.mood) setMood(update.mood);
       if (update.type === 'transformation' && update.original && update.refined) {
-        setTransformation({
-          original: update.original,
-          refined: update.refined,
-          changes_made: update.changes_made ?? null,
-        });
+        setTransformation({ original: update.original, refined: update.refined, changes_made: update.changes_made ?? null });
       }
-
-      if (update.type === 'completed') {
-        setLogDone(true);
-        es.close();
-        // Short delay so user sees the final "Ready!" state
-        setTimeout(() => router.push(`/dashboard/${companyId}`), 1200);
-      }
-
-      if (update.type === 'failed') {
-        setLogDone(true);
-        es.close();
-        setError(update.error ?? 'Setup failed. Please try again.');
-        setStep('level1');
-      }
-
-      if (update.type === 'timeout') {
-        setLogDone(true);
-        es.close();
-        // Audit #14: Don't blindly navigate — show a recoverable message.
-        // The company exists but setup may be incomplete.
-        setError('Setup is taking longer than expected. You can wait or check your dashboard — some features may still be loading.');
-        setStep('level1');
-      }
+      if (update.type === 'completed') { setLogDone(true); es.close(); setTimeout(() => router.push(`/dashboard/${companyId}`), 1200); }
+      if (update.type === 'failed') { setLogDone(true); es.close(); setError(update.error ?? 'Setup failed.'); setStep('level1'); }
+      if (update.type === 'timeout') { setLogDone(true); es.close(); setError('Setup is taking longer than expected.'); setStep('level1'); }
     };
-
-    es.onerror = () => {
-      // Audit #14: SSE connection lost — don't blindly navigate to a half-ready dashboard.
-      es.close();
-      setError('Connection lost during setup. Your company was created — you can retry or check your dashboard.');
-      setStep('level1');
-    };
-
+    es.onerror = () => { es.close(); setError('Connection lost during setup.'); setStep('level1'); };
     return () => es.close();
   }, [companyId, router]);
 
   async function startOnboarding(journey: OnboardingJourney, input?: string) {
-    setStep('creating');
-    setError(null);
-
+    setStep('creating'); setError(null);
     try {
-      // Capture browser timezone for enrichment
       const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      // Audit #15: Send only the field relevant to the chosen journey
-      const payload = {
-        journey,
-        timezone,
-        ...(journey === 'build_my_idea' ? { idea: input } : {}),
-        ...(journey === 'grow_my_company' ? { business_url: input } : {}),
-      };
-
-      // Try authenticated endpoint first
-      const res = await fetch('/api/onboarding', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-
+      const payload = { journey, timezone, ...(journey === 'build_my_idea' ? { idea: input } : {}), ...(journey === 'grow_my_company' ? { business_url: input } : {}) };
+      const res = await fetch('/api/onboarding', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       if (res.status === 401 && prefillEmail) {
-        // Unauthenticated — use quick-start to create draft, then redirect to login
-        const qsRes = await fetch('/api/quick-start', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...payload, email: prefillEmail }),
-        });
-
-        if (!qsRes.ok) {
-          const data = await qsRes.json();
-          throw new Error(data.error ?? 'Failed to start setup');
-        }
-
-        const data = await qsRes.json();
-        // Redirect to login with dashboard target — pipeline resumes after auth
-        router.push(data.redirect);
-        return;
+        const qsRes = await fetch('/api/quick-start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, email: prefillEmail }) });
+        if (!qsRes.ok) { const data = await qsRes.json(); throw new Error(data.error ?? 'Failed'); }
+        const data = await qsRes.json(); router.push(data.redirect); return;
       }
-
       if (!res.ok) {
         const data = await res.json();
-        // Already has a company — redirect to it
-        if (res.status === 409 && data.company_id) {
-          router.push(`/dashboard/${data.company_id}`);
-          return;
-        }
-        // Unauthenticated without email — redirect to login
-        if (res.status === 401) {
-          router.push('/login?redirect=/onboarding');
-          return;
-        }
-        throw new Error(data.error ?? 'Failed to start setup');
+        if (res.status === 409 && data.company_id) { router.push(`/dashboard/${data.company_id}`); return; }
+        if (res.status === 401) { router.push('/login?redirect=/onboarding'); return; }
+        throw new Error(data.error ?? 'Failed');
       }
-
-      const { company_id } = await res.json();
-      setCompanyId(company_id);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Something went wrong');
-      setStep('level1');
-    }
+      const { company_id } = await res.json(); setCompanyId(company_id);
+    } catch (err) { setError(err instanceof Error ? err.message : 'Something went wrong'); setStep('level1'); }
   }
 
-  // Progress bar: count done stages / total
   const doneCount = Object.values(stages).filter(s => s === 'done').length;
   const progress = Math.round((doneCount / STAGE_ORDER.length) * 100);
 
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-surface-primary p-6">
-      <div className="w-full max-w-lg">
+  // ─── STYLES ───
+  const pageStyle: React.CSSProperties = {
+    minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+    padding: 24, background: 'var(--bg)', color: 'var(--text)',
+    fontFamily: "'Inter', system-ui, sans-serif",
+    transition: 'background .45s, color .45s',
+  };
+  const containerStyle: React.CSSProperties = { width: '100%', maxWidth: 480 };
+  const logoWrapStyle: React.CSSProperties = { textAlign: 'center' as const, marginBottom: 36 };
+  const mascotStyle: React.CSSProperties = {
+    width: 64, height: 64, objectFit: 'contain' as const, margin: '0 auto 14px',
+    display: 'block',
+    filter: 'drop-shadow(0 6px 16px rgba(217,119,6,0.35)) brightness(1.1) saturate(1.3)',
+  };
+  const titleStyle: React.CSSProperties = {
+    fontFamily: "'Newsreader', Georgia, serif", fontSize: 28, fontWeight: 500,
+    letterSpacing: '-.6px', marginBottom: 4, color: 'var(--ink)',
+  };
+  const subtitleStyle: React.CSSProperties = {
+    fontFamily: "'Newsreader', Georgia, serif", fontSize: 13, fontStyle: 'italic',
+    color: '#D97706',
+  };
+  const headingStyle: React.CSSProperties = {
+    fontSize: 20, fontWeight: 600, textAlign: 'center' as const, marginBottom: 20,
+    color: 'var(--ink)',
+  };
+  const cardBtnStyle: React.CSSProperties = {
+    width: '100%', padding: '22px 24px', borderRadius: 14,
+    border: '1px solid var(--line)', background: 'var(--bg-card)',
+    textAlign: 'left' as const, cursor: 'pointer',
+    transition: 'all .25s', boxShadow: '0 1px 2px rgba(24,18,10,0.04)',
+  };
+  const cardTitleStyle: React.CSSProperties = {
+    fontSize: 16, fontWeight: 700, color: 'var(--ink)', marginBottom: 4,
+  };
+  const cardDescStyle: React.CSSProperties = { fontSize: 13, color: 'var(--text-muted)' };
+  const primaryBtnStyle = (enabled: boolean): React.CSSProperties => ({
+    width: '100%', padding: 14, borderRadius: 12, border: 'none',
+    background: enabled ? 'linear-gradient(135deg, #E1B12C, #D97706)' : 'var(--bg-muted)',
+    color: enabled ? '#fff' : 'var(--text-dim)', fontWeight: 700, fontSize: 15,
+    cursor: enabled ? 'pointer' : 'not-allowed',
+    boxShadow: enabled ? '0 6px 18px rgba(217,119,6,0.28), inset 0 1px 0 rgba(255,255,255,0.3)' : 'none',
+    transition: 'all .25s',
+  });
+  const inputStyle: React.CSSProperties = {
+    width: '100%', padding: 14, borderRadius: 12,
+    border: '1px solid var(--line)', background: 'var(--bg-card)',
+    color: 'var(--text)', fontFamily: 'inherit', fontSize: 14,
+    outline: 'none', resize: 'vertical' as const, minHeight: 120,
+  };
+  const backBtnStyle: React.CSSProperties = {
+    background: 'transparent', border: 'none', padding: '4px 0',
+    fontSize: 13, color: 'var(--text-dim)', cursor: 'pointer', marginBottom: 12,
+  };
+  const errorStyle: React.CSSProperties = {
+    marginBottom: 20, padding: 12, borderRadius: 10,
+    background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)',
+    color: '#DC2626', fontSize: 13,
+  };
+  const progressBarBg: React.CSSProperties = {
+    width: '100%', height: 4, background: 'var(--bg-alt)', borderRadius: 2, marginBottom: 16,
+  };
+  const progressBarFill = (pct: number): React.CSSProperties => ({
+    width: `${Math.max(pct, 4)}%`, height: 4,
+    background: 'linear-gradient(90deg, #E1B12C, #FCD34D)',
+    borderRadius: 2, transition: 'width .5s',
+  });
+  const stageLabelStyle: React.CSSProperties = {
+    fontFamily: "'JetBrains Mono', monospace", fontSize: 12,
+    color: '#D97706', marginBottom: 20, minHeight: 16, textAlign: 'center' as const,
+  };
+  const stageListStyle: React.CSSProperties = {
+    background: 'var(--bg-card)', border: '1px solid var(--border)',
+    borderRadius: 12, padding: 16, textAlign: 'left' as const,
+    boxShadow: '0 1px 2px rgba(24,18,10,0.04)',
+  };
+  const stageRowStyle: React.CSSProperties = {
+    display: 'flex', alignItems: 'center', gap: 8,
+    fontFamily: "'JetBrains Mono', monospace", fontSize: 12, padding: '3px 0',
+  };
+  const transformBannerStyle: React.CSSProperties = {
+    marginBottom: 20, padding: 16, borderRadius: 14, textAlign: 'left' as const,
+    background: 'var(--gold-bg)', border: '1px solid var(--gold-border)',
+  };
 
+  return (
+    <div style={pageStyle}>
+      <div style={containerStyle}>
         {/* Logo */}
-        <div className="text-center mb-12">
-          <h1 className="text-4xl font-bold font-[family-name:var(--font-display)] text-baljia-gold mb-2">
-            Baljia
+        <div style={logoWrapStyle}>
+          <img src="/mascot.png" alt="Baljia" style={mascotStyle} />
+          <h1 style={titleStyle}>
+            <span style={{ color: '#A35F05' }}>Baljia</span>
           </h1>
-          <p className="text-text-secondary text-sm">Your AI Angel</p>
+          <p style={subtitleStyle}>Your AI Angel</p>
         </div>
 
-        {/* Error banner */}
-        {error && (
-          <div className="mb-6 p-3 rounded-lg bg-status-error/10 border border-status-error/30 text-status-error text-sm">
-            {error}
-          </div>
-        )}
+        {error && <div style={errorStyle}>{error}</div>}
 
-        {/* Step: Level 1 — Create vs Grow */}
+        {/* Step: Level 1 */}
         {step === 'level1' && (
-          <div className="space-y-4">
-            <h2 className="text-xl font-semibold text-center mb-8 text-text-primary">
-              Let&apos;s get started.
-            </h2>
-
+          <div style={{ display: 'grid', gap: 12 }}>
+            <h2 style={headingStyle}>Let&apos;s get started.</h2>
             <button
+              style={cardBtnStyle}
               onClick={() => setStep('level2')}
-              className={cn(
-                'w-full p-6 rounded-xl border border-border-default bg-surface-card',
-                'hover:border-baljia-gold hover:bg-surface-hover transition-all duration-200',
-                'text-left group'
-              )}
+              onMouseEnter={e => { (e.target as HTMLElement).style.borderColor = '#D97706'; (e.target as HTMLElement).style.transform = 'translateY(-2px)'; (e.target as HTMLElement).style.boxShadow = 'var(--shadow-md)'; }}
+              onMouseLeave={e => { (e.target as HTMLElement).style.borderColor = 'var(--line)'; (e.target as HTMLElement).style.transform = 'none'; (e.target as HTMLElement).style.boxShadow = '0 1px 2px rgba(24,18,10,0.04)'; }}
             >
-              <div className="text-lg font-semibold text-text-primary group-hover:text-baljia-gold transition-colors">
-                Create a new company
-              </div>
-              <div className="text-sm text-text-muted mt-1">
-                Start from scratch — we&apos;ll build everything for you
-              </div>
+              <div style={cardTitleStyle}>Create a new company</div>
+              <div style={cardDescStyle}>Start from scratch — we&apos;ll build everything for you</div>
             </button>
-
             <button
+              style={cardBtnStyle}
               onClick={() => setStep('url_input')}
-              className={cn(
-                'w-full p-6 rounded-xl border border-border-default bg-surface-card',
-                'hover:border-baljia-gold hover:bg-surface-hover transition-all duration-200',
-                'text-left group'
-              )}
+              onMouseEnter={e => { (e.target as HTMLElement).style.borderColor = '#D97706'; (e.target as HTMLElement).style.transform = 'translateY(-2px)'; }}
+              onMouseLeave={e => { (e.target as HTMLElement).style.borderColor = 'var(--line)'; (e.target as HTMLElement).style.transform = 'none'; }}
             >
-              <div className="text-lg font-semibold text-text-primary group-hover:text-baljia-gold transition-colors">
-                Grow my company
-              </div>
-              <div className="text-sm text-text-muted mt-1">
-                I already have a business — help me scale it
-              </div>
+              <div style={cardTitleStyle}>Grow my company</div>
+              <div style={cardDescStyle}>I already have a business — help me scale it</div>
             </button>
           </div>
         )}
 
-        {/* Step: Level 2 — Surprise Me vs Build My Idea */}
+        {/* Step: Level 2 */}
         {step === 'level2' && (
-          <div className="space-y-4">
-            <button
-              onClick={() => setStep('level1')}
-              className="text-sm text-text-muted hover:text-text-secondary mb-4 block"
+          <div style={{ display: 'grid', gap: 12 }}>
+            <button style={backBtnStyle} onClick={() => setStep('level1')}>← Back</button>
+            <h2 style={headingStyle}>Let&apos;s build something.</h2>
+            <button style={cardBtnStyle} onClick={() => startOnboarding('surprise_me')}
+              onMouseEnter={e => { (e.target as HTMLElement).style.borderColor = '#D97706'; (e.target as HTMLElement).style.transform = 'translateY(-2px)'; }}
+              onMouseLeave={e => { (e.target as HTMLElement).style.borderColor = 'var(--line)'; (e.target as HTMLElement).style.transform = 'none'; }}
             >
-              ← Back
+              <div style={cardTitleStyle}>✨ Surprise me</div>
+              <div style={cardDescStyle}>We&apos;ll research you and find an idea that makes sense for you</div>
             </button>
-
-            <h2 className="text-xl font-semibold text-center mb-8 text-text-primary">
-              Let&apos;s build something.
-            </h2>
-
-            <button
-              onClick={() => startOnboarding('surprise_me')}
-              className={cn(
-                'w-full p-6 rounded-xl border border-border-default bg-surface-card',
-                'hover:border-baljia-gold hover:bg-surface-hover transition-all duration-200',
-                'text-left group'
-              )}
+            <button style={cardBtnStyle} onClick={() => setStep('idea_input')}
+              onMouseEnter={e => { (e.target as HTMLElement).style.borderColor = '#D97706'; (e.target as HTMLElement).style.transform = 'translateY(-2px)'; }}
+              onMouseLeave={e => { (e.target as HTMLElement).style.borderColor = 'var(--line)'; (e.target as HTMLElement).style.transform = 'none'; }}
             >
-              <div className="text-lg font-semibold text-text-primary group-hover:text-baljia-gold transition-colors">
-                ✨ Surprise me
-              </div>
-              <div className="text-sm text-text-muted mt-1">
-                We&apos;ll research you and find an idea that makes sense for you
-              </div>
-            </button>
-
-            <button
-              onClick={() => setStep('idea_input')}
-              className={cn(
-                'w-full p-6 rounded-xl border border-border-default bg-surface-card',
-                'hover:border-baljia-gold hover:bg-surface-hover transition-all duration-200',
-                'text-left group'
-              )}
-            >
-              <div className="text-lg font-semibold text-text-primary group-hover:text-baljia-gold transition-colors">
-                💡 Build my idea
-              </div>
-              <div className="text-sm text-text-muted mt-1">
-                I have an idea — let&apos;s bring it to life
-              </div>
+              <div style={cardTitleStyle}>💡 Build my idea</div>
+              <div style={cardDescStyle}>I have an idea — let&apos;s bring it to life</div>
             </button>
           </div>
         )}
 
         {/* Step: Idea Input */}
         {step === 'idea_input' && (
-          <div className="space-y-4">
-            <button
-              onClick={() => setStep('level2')}
-              className="text-sm text-text-muted hover:text-text-secondary mb-4 block"
-            >
-              ← Back
-            </button>
-
-            <h2 className="text-xl font-semibold text-center mb-6 text-text-primary">
-              What&apos;s your idea?
-            </h2>
-
-            <textarea
-              value={idea}
-              onChange={(e) => setIdea(e.target.value)}
+          <div style={{ display: 'grid', gap: 14 }}>
+            <button style={backBtnStyle} onClick={() => setStep('level2')}>← Back</button>
+            <h2 style={headingStyle}>What&apos;s your idea?</h2>
+            <textarea style={inputStyle} value={idea} onChange={e => setIdea(e.target.value)}
               placeholder="e.g. A social media agency for small restaurants"
-              className={cn(
-                'w-full p-4 rounded-xl border border-border-default bg-surface-card',
-                'text-text-primary placeholder:text-text-muted',
-                'focus:border-baljia-gold focus:outline-none focus:ring-1 focus:ring-baljia-gold/50',
-                'resize-none h-32'
-              )}
+              onFocus={e => { e.target.style.borderColor = '#D97706'; e.target.style.boxShadow = '0 0 0 3px rgba(225,177,44,0.14)'; }}
+              onBlur={e => { e.target.style.borderColor = 'var(--line)'; e.target.style.boxShadow = 'none'; }}
             />
-
-            <button
-              onClick={() => startOnboarding('build_my_idea', idea)}
-              disabled={!idea.trim()}
-              className={cn(
-                'w-full p-4 rounded-xl font-semibold transition-all duration-200',
-                idea.trim()
-                  ? 'bg-baljia-gold text-surface-primary hover:bg-baljia-gold-light'
-                  : 'bg-surface-tertiary text-text-muted cursor-not-allowed'
-              )}
-            >
+            <button style={primaryBtnStyle(!!idea.trim())} disabled={!idea.trim()}
+              onClick={() => startOnboarding('build_my_idea', idea)}>
               Start building →
             </button>
           </div>
         )}
 
-        {/* Step: URL Input (Grow My Company) */}
+        {/* Step: URL Input */}
         {step === 'url_input' && (
-          <div className="space-y-4">
-            <button
-              onClick={() => setStep('level1')}
-              className="text-sm text-text-muted hover:text-text-secondary mb-4 block"
-            >
-              ← Back
-            </button>
-
-            <h2 className="text-xl font-semibold text-center mb-6 text-text-primary">
-              What&apos;s your company&apos;s website?
-            </h2>
-
-            <input
-              type="url"
-              value={businessUrl}
-              onChange={(e) => setBusinessUrl(e.target.value)}
-              placeholder="yourcompany.com"
-              className={cn(
-                'w-full p-4 rounded-xl border border-border-default bg-surface-card',
-                'text-text-primary placeholder:text-text-muted',
-                'focus:border-baljia-gold focus:outline-none focus:ring-1 focus:ring-baljia-gold/50'
-              )}
+          <div style={{ display: 'grid', gap: 14 }}>
+            <button style={backBtnStyle} onClick={() => setStep('level1')}>← Back</button>
+            <h2 style={headingStyle}>What&apos;s your company&apos;s website?</h2>
+            <input type="url" style={{ ...inputStyle, minHeight: 'auto' }} value={businessUrl}
+              onChange={e => setBusinessUrl(e.target.value)} placeholder="yourcompany.com"
+              onFocus={e => { e.target.style.borderColor = '#D97706'; e.target.style.boxShadow = '0 0 0 3px rgba(225,177,44,0.14)'; }}
+              onBlur={e => { e.target.style.borderColor = 'var(--line)'; e.target.style.boxShadow = 'none'; }}
             />
-
-            <button
-              onClick={() => startOnboarding('grow_my_company', businessUrl)}
-              disabled={!businessUrl.trim()}
-              className={cn(
-                'w-full p-4 rounded-xl font-semibold transition-all duration-200',
-                businessUrl.trim()
-                  ? 'bg-baljia-gold text-surface-primary hover:bg-baljia-gold-light'
-                  : 'bg-surface-tertiary text-text-muted cursor-not-allowed'
-              )}
-            >
+            <button style={primaryBtnStyle(!!businessUrl.trim())} disabled={!businessUrl.trim()}
+              onClick={() => startOnboarding('grow_my_company', businessUrl)}>
               Get started →
             </button>
           </div>
         )}
 
-        {/* Step: Creating — live pipeline progress */}
-        {step === 'creating' && (
-          <div className="text-center py-8">
-            <div className="text-6xl mb-6 animate-pulse">🪽</div>
-            <h2 className="text-xl font-semibold text-text-primary mb-2">
+        {/* Step: Creating */}
+        {(step === 'creating') && (
+          <div style={{ textAlign: 'center' as const }}>
+            <img src="/mascot.png" alt="" style={{
+              width: 72, height: 72, objectFit: 'contain' as const, margin: '0 auto 16px', display: 'block',
+              filter: 'drop-shadow(0 8px 20px rgba(217,119,6,0.35)) brightness(1.1) saturate(1.3)',
+              animation: 'bob 3s ease-in-out infinite alternate',
+            }} />
+            <h2 style={{ fontSize: 20, fontWeight: 600, marginBottom: 6, color: 'var(--ink)' }}>
               Your AI Angel is setting up your company
             </h2>
-            <p className="text-sm text-text-muted mb-8">
+            <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 24 }}>
               This takes about 30–60 seconds
             </p>
+            <div style={progressBarBg}><div style={progressBarFill(progress)}></div></div>
+            <p style={stageLabelStyle}>{currentStageLabel}</p>
 
-            {/* Progress bar */}
-            <div className="w-full bg-surface-secondary rounded-full h-1.5 mb-6">
-              <div
-                className="bg-baljia-gold h-1.5 rounded-full transition-all duration-500"
-                style={{ width: `${Math.max(progress, 4)}%` }}
-              />
-            </div>
-
-            {/* Current stage label */}
-            <p className="text-sm text-baljia-gold font-mono mb-6 min-h-[1.25rem]">
-              {currentStageLabel}
-            </p>
-
-            {/* Idea-transformation banner — fires when refine_idea meaningfully changes the input */}
             {transformation && (
-              <div className="mb-6 p-4 rounded-xl border border-baljia-gold/40 bg-baljia-gold/5 text-left">
-                <p className="text-xs text-baljia-gold font-semibold uppercase tracking-wider mb-2">
+              <div style={transformBannerStyle}>
+                <p style={{ fontSize: 10, color: '#D97706', fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: 1.5, marginBottom: 8 }}>
                   ✦ We interpreted your idea as
                 </p>
-                <p className="text-sm text-text-primary font-medium mb-3">
+                <p style={{ fontSize: 14, color: 'var(--ink)', fontWeight: 600, marginBottom: 8 }}>
                   {transformation.refined}
                 </p>
                 {transformation.changes_made && (
-                  <p className="text-xs text-text-muted mb-3">
-                    {transformation.changes_made}
-                  </p>
+                  <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>{transformation.changes_made}</p>
                 )}
-                <p className="text-xs text-text-muted italic">
+                <p style={{ fontSize: 12, color: 'var(--text-dim)', fontStyle: 'italic' }}>
                   You typed: &quot;{transformation.original}&quot;
                 </p>
               </div>
             )}
 
-            {/* Stage checklist */}
-            <div className="p-4 rounded-lg bg-surface-secondary border border-border-subtle text-left space-y-1.5">
-              {STAGE_ORDER.map((s) => {
+            <div style={stageListStyle}>
+              {STAGE_ORDER.map(s => {
                 const status = stages[s];
                 return (
-                  <div key={s} className="flex items-center gap-2 font-mono text-xs">
-                    <span className="w-4 text-center">
-                      {status === 'done' ? (
-                        <span className="text-status-success">✓</span>
-                      ) : status === 'running' ? (
-                        <span className="text-baljia-gold animate-pulse">▶</span>
-                      ) : status === 'error' ? (
-                        <span className="text-status-error">✗</span>
-                      ) : (
-                        <span className="text-border-default">·</span>
-                      )}
+                  <div key={s} style={stageRowStyle}>
+                    <span style={{ width: 16, textAlign: 'center' as const }}>
+                      {status === 'done' ? <span style={{ color: '#22C55E' }}>✓</span> :
+                       status === 'running' ? <span style={{ color: '#E1B12C', animation: 'pulse-dot 1s infinite' }}>▶</span> :
+                       status === 'error' ? <span style={{ color: '#EF4444' }}>✗</span> :
+                       <span style={{ color: 'var(--text-dim)' }}>·</span>}
                     </span>
-                    <span className={cn(
-                      status === 'done' ? 'text-text-secondary' :
-                      status === 'running' ? 'text-text-primary' :
-                      'text-text-muted'
-                    )}>
+                    <span style={{ color: status === 'done' ? 'var(--text-muted)' : status === 'running' ? 'var(--ink)' : 'var(--text-dim)' }}>
                       {ONBOARDING_STAGE_LABELS[s] ?? s.replace(/_/g, ' ')}
                     </span>
                   </div>
@@ -528,15 +384,8 @@ function OnboardingPageInner() {
               })}
             </div>
 
-            {/* Live activity log — Phase 1 observability. State is lifted to this
-                page so we use a single SSE stream instead of two. */}
-            <div className="mt-6">
-              <OnboardingLogStrip
-                lines={activityLines}
-                mood={mood}
-                currentStageLabel={currentStageLabel}
-                done={logDone}
-              />
+            <div style={{ marginTop: 20 }}>
+              <OnboardingLogStrip lines={activityLines} mood={mood} currentStageLabel={currentStageLabel} done={logDone} />
             </div>
           </div>
         )}
