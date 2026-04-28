@@ -170,7 +170,12 @@ export async function callAnthropicWithTimeout(
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
       const result = await withLLMTimeout(
-        (signal) => anthropic.messages.create({ ...params, signal }) as Promise<unknown>,
+        // Anthropic SDK takes (body, requestOptions). Passing { signal } as the
+        // SECOND arg — not spread into the body — otherwise the API rejects
+        // with 400 "signal: Extra inputs are not permitted" (regression observed
+        // 2026-04-28 on PRIMARY_LLM_PROVIDER=anthropic). The fallback chain
+        // masked it but Claude was never actually called.
+        (signal) => anthropic.messages.create(params, { signal }) as Promise<unknown>,
         timeoutMs,
         `${label} (attempt ${attempt + 1})`
       );
