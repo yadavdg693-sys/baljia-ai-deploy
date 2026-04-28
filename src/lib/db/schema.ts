@@ -611,8 +611,16 @@ export const dashboardLinks = pgTable('dashboard_links', {
 ]);
 
 // ══════════════════════════════════════════════
-// PLATFORM FEEDBACK (CEO tool)
+// PLATFORM FEEDBACK (CEO tool + agent report_bug)
 // ══════════════════════════════════════════════
+// status values:
+//   'open'              — initial
+//   'awaiting_approval' — triage agent has diagnosed, waiting on Gate 1 (human approve)
+//   'approved_to_fix'   — human approved Gate 1; writer agent will pick this up
+//   'pr_open'           — writer agent opened a PR; verifier reviewed
+//   'resolved'          — PR merged + bug repro confirms no longer reproduces
+//   'rejected'          — human rejected at Gate 1 or Gate 2
+//   'wont_fix'          — explicit decision to leave as-is
 export const platformFeedback = pgTable('platform_feedback', {
   id: uuid('id').primaryKey().defaultRandom(),
   company_id: uuid('company_id').notNull().references(() => companies.id),
@@ -621,9 +629,69 @@ export const platformFeedback = pgTable('platform_feedback', {
   description: text('description'),
   severity: text('severity').default('medium'),
   status: text('status').default('open'),
+  // Phase-A additive columns (additive-only — no rename, no DROP):
+  diagnosis: text('diagnosis'),                                    // triage agent's root-cause writeup (denormalized for UI)
+  estimated_risk: text('estimated_risk'),                          // 'low' | 'medium' | 'high'
+  ops_run_id: uuid('ops_run_id'),                                  // FK to platform_ops_runs.id (latest run that addressed this bug)
+  resolution: text('resolution'),                                  // 'auto_fixed' | 'auto_couldnt_fix' | 'manual' | 'rejected' | 'wont_fix'
+  reproduced_at: timestamp('reproduced_at', { withTimezone: true }),  // when triage agent last confirmed this bug reproduces
+  approved_at: timestamp('approved_at', { withTimezone: true }),   // Gate 1 timestamp
+  approved_by: text('approved_by'),                                // 'human:<email>' or 'auto'
   created_at: timestamp('created_at', { withTimezone: true }).defaultNow(),
 }, (t) => [
   index('idx_platform_feedback_company').on(t.company_id),
+  index('idx_platform_feedback_status').on(t.status),
+]);
+
+// ══════════════════════════════════════════════
+// PLATFORM OPS RUNS — full audit trail of self-healing agent activity
+// One platform_feedback bug produces multiple rows here (triage, writer,
+// verifier phases each get their own row). Read-only for platform; written
+// only by the platform-ops service. Never linked to any founder data.
+// ══════════════════════════════════════════════
+export const platformOpsRuns = pgTable('platform_ops_runs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  feedback_id: uuid('feedback_id').notNull().references(() => platformFeedback.id),
+  agent_role: text('agent_role').notNull(),         // 'triage' | 'writer' | 'verifier'
+  phase: text('phase').notNull(),                   // 'reproduce' | 'diagnose' | 'fix' | 'test' | 'pr' | 'review' | 'merge'
+  status: text('status').notNull().default('running'),  // 'running' | 'done' | 'failed' | 'skipped'
+
+  // Diagnosis fields (triage)
+  diagnosis: text('diagnosis'),
+  root_cause: text('root_cause'),
+  files_to_modify: jsonb('files_to_modify'),        // string[]
+  estimated_risk: text('estimated_risk'),           // 'low' | 'medium' | 'high'
+  reproduces: boolean('reproduces'),                // true if bug still reproduces, false if stale
+
+  // Fix fields (writer)
+  branch_name: text('branch_name'),
+  commit_sha: text('commit_sha'),
+  diff_hash: text('diff_hash'),                     // sha256 of the diff
+  pr_url: text('pr_url'),
+  pr_number: integer('pr_number'),
+
+  // Test/repro evidence
+  repro_evidence: jsonb('repro_evidence'),          // {before, after} reproductions
+  test_evidence: jsonb('test_evidence'),            // test scripts run + outputs
+
+  // Verifier fields
+  verifier_vote: text('verifier_vote'),             // 'approve' | 'reject' | 'needs_changes'
+  verifier_reasoning: text('verifier_reasoning'),
+
+  // Operational accounting
+  turns: integer('turns'),
+  wall_clock_seconds: integer('wall_clock_seconds'),
+  cost_cents: integer('cost_cents'),
+  llm_provider: text('llm_provider'),
+  llm_model: text('llm_model'),
+  error_summary: text('error_summary'),
+
+  created_at: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  completed_at: timestamp('completed_at', { withTimezone: true }),
+}, (t) => [
+  index('idx_platform_ops_runs_feedback').on(t.feedback_id),
+  index('idx_platform_ops_runs_status').on(t.status),
+  index('idx_platform_ops_runs_role_phase').on(t.agent_role, t.phase),
 ]);
 
 // ══════════════════════════════════════════════
