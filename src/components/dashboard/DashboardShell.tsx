@@ -7,6 +7,24 @@
 
 import { useState, useCallback, useEffect, useMemo } from 'react';
 import Link from 'next/link';
+import {
+  DndContext,
+  closestCenter,
+  PointerSensor,
+  KeyboardSensor,
+  TouchSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import type { Company, Task, Document, Report, User, ChatAction } from '@/types';
 import { TaskDetailDialog } from './TaskDetailDialog';
 import { DocumentDialog } from './DocumentDialog';
@@ -85,6 +103,88 @@ const statusBadge = (s: string) => {
   const map: Record<string, string> = { completed: 'success', in_progress: 'running', todo: 'default', failed: 'danger', failed_permanent: 'danger', rejected: 'danger', verifying: 'running', repair: 'running' };
   return map[s] || 'default';
 };
+
+// ─── Sortable task card ───
+// Wraps a task card with @dnd-kit's useSortable so todo tasks can be dragged
+// up/down. Non-todo tasks pass `draggable={false}` and act as plain cards.
+function SortableTaskCard({
+  task, agentName, draggable, onSelect, onApprove, onReject, onRunNow,
+}: {
+  task: Task;
+  agentName: string | null;
+  draggable: boolean;
+  onSelect: () => void;
+  onApprove: (id: string) => void;
+  onReject: (id: string) => void;
+  onRunNow: (id: string) => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: task.id,
+    disabled: !draggable,
+  });
+  const cardStyle: React.CSSProperties = {
+    ...S.card,
+    transform: CSS.Transform.toString(transform),
+    transition: transition ?? undefined,
+    opacity: isDragging ? 0.6 : 1,
+    zIndex: isDragging ? 10 : 'auto',
+  };
+  // Drag listeners only attach when draggable; click-to-open still works
+  // (PointerSensor's distance:8 constraint means a click without drag fires onClick).
+  const dragProps = draggable ? { ...attributes, ...listeners } : {};
+  return (
+    <div
+      ref={setNodeRef}
+      style={cardStyle}
+      className={`dashboard-task-card${isDragging ? ' is-dragging' : ''}`}
+      data-draggable={draggable ? 'true' : 'false'}
+      onClick={onSelect}
+      {...dragProps}
+    >
+      <div style={S.cardAccent}></div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', gap: 8, marginLeft: 8 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <h4 style={{ fontSize: 14, fontWeight: 700, color: 'var(--ink)', marginBottom: 4, lineHeight: 1.3, wordBreak: 'break-word' as const }}>{task.title}</h4>
+          {task.description && <p style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' as const, overflow: 'hidden' }}>{task.description}</p>}
+        </div>
+        <span style={S.badge(statusBadge(task.status))}>{task.status.replace(/_/g, ' ')}</span>
+      </div>
+      {task.status === 'in_progress' && task.started_at && (
+        <div style={{ marginTop: 8, marginLeft: 8 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--text-dim)', marginBottom: 4 }}>
+            <span>Turn {task.turn_count}/{task.max_turns}</span><span>Working...</span>
+          </div>
+          <div style={{ height: 3, background: 'var(--bg-alt)', borderRadius: 2 }}>
+            <div style={{ width: `${Math.min((task.turn_count / task.max_turns) * 100, 100)}%`, height: 3, background: 'linear-gradient(90deg, #E1B12C, #FCD34D)', borderRadius: 2, transition: 'width .5s' }}></div>
+          </div>
+        </div>
+      )}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' as const, marginTop: 8, marginLeft: 8 }}>
+        <span style={S.badge('default')}>{task.tag}</span>
+        {agentName && <span style={S.badge('default')}>🤖 {agentName}</span>}
+        <span style={{ fontSize: 12, color: '#D97706', fontWeight: 600 }}>{task.estimated_credits} cr</span>
+        <span style={{ flex: 1 }}></span>
+        <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{formatAge(task.created_at)}</span>
+      </div>
+      {task.status === 'todo' && !task.authorized_by && (
+        <div
+          onClick={e => e.stopPropagation()}
+          onPointerDown={e => e.stopPropagation()}
+          className="dashboard-task-actions"
+          style={{ display: 'flex', gap: 6, flexWrap: 'wrap' as const, marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)', marginLeft: 8 }}
+        >
+          <button style={{ ...S.btnGhost, color: '#DC2626' }} onClick={e => { e.stopPropagation(); onReject(task.id); }}>✗ Reject</button>
+          <span style={{ flex: 1 }}></span>
+          <button style={{ ...S.btn, ...S.btnSm }} onClick={e => { e.stopPropagation(); onApprove(task.id); }}>✓ Approve</button>
+          <button style={{ ...S.btnPrimary, ...S.btnSm }} onClick={e => { e.stopPropagation(); onRunNow(task.id); }}>▶ Run Now</button>
+        </div>
+      )}
+      {task.status === 'todo' && task.authorized_by && (
+        <div style={{ marginTop: 8, marginLeft: 8 }}><span style={S.badge('running')}>Queued · launching</span></div>
+      )}
+    </div>
+  );
+}
 
 export function DashboardShell({ company, tasks: initialTasks, documents, reports: _reports, creditBalance: initialCreditBalance, recentUsage: _recentUsage, pendingSuggestions: _pendingSuggestions, emails: initialEmails, links: initialLinks, user, liveCompanyCount }: DashboardShellProps) {
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
@@ -165,8 +265,42 @@ export function DashboardShell({ company, tasks: initialTasks, documents, report
 
   const previewTasks = useMemo(() => {
     const p: Record<string, number> = { todo: 0, in_progress: 1, verifying: 2, repair: 3, completed: 4, failed: 5, failed_permanent: 5, rejected: 6 };
-    return [...tasks].sort((a, b) => (p[a.status] ?? 99) - (p[b.status] ?? 99)).slice(0, 5);
+    return [...tasks].sort((a, b) => {
+      const pa = p[a.status] ?? 99;
+      const pb = p[b.status] ?? 99;
+      if (pa !== pb) return pa - pb;
+      return (a.queue_order ?? 0) - (b.queue_order ?? 0);
+    }).slice(0, 5);
   }, [tasks]);
+
+  // ─── Drag-and-drop reordering for the task preview ───
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  const handleDragEnd = useCallback((event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const oldIndex = previewTasks.findIndex(t => t.id === active.id);
+    const newIndex = previewTasks.findIndex(t => t.id === over.id);
+    if (oldIndex === -1 || newIndex === -1) return;
+    const reordered = arrayMove(previewTasks, oldIndex, newIndex);
+    // Optimistic local update so the user sees the reorder instantly.
+    setTasks(prev => {
+      const newOrders = new Map(reordered.map((t, idx) => [t.id, idx]));
+      return prev.map(t => newOrders.has(t.id) ? { ...t, queue_order: newOrders.get(t.id)! } : t);
+    });
+    // Persist new queue_order for each affected task in parallel.
+    Promise.all(reordered.map((t, idx) =>
+      fetch(`/api/tasks/${t.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ queue_order: idx }),
+      }).catch(() => null)
+    )).then(() => { void refreshDashboard(); });
+  }, [previewTasks, refreshDashboard]);
 
   const docsSorted = useMemo(() => [...documents].filter(d => !d.is_empty || (d.content && d.content.trim().length > 0)).sort((a, b) => new Date(b.updated_at ?? b.created_at ?? 0).getTime() - new Date(a.updated_at ?? a.created_at ?? 0).getTime()), [documents]);
 
@@ -201,9 +335,9 @@ export function DashboardShell({ company, tasks: initialTasks, documents, report
       </header>
 
       {/* Main grid */}
-      <div style={S.grid}>
+      <div style={S.grid} className="dashboard-grid">
         {/* ── Left column ── */}
-        <div style={S.colLeft}>
+        <div style={S.colLeft} className="dashboard-col-left">
           <div style={S.panelHeading}><span style={{ fontFamily: "'Newsreader', Georgia, serif" }}>Baljia</span></div>
           <div style={{ display: 'flex', gap: 14, marginBottom: 20 }}>
             <img src="/mascot.png" alt="Baljia" style={S.mascotMd} />
@@ -241,7 +375,7 @@ export function DashboardShell({ company, tasks: initialTasks, documents, report
         </div>
 
         {/* ── Main column ── */}
-        <div style={S.colMain}>
+        <div style={S.colMain} className="dashboard-col-main">
           <div style={S.section}>
             <div style={S.panelHeading}>
               <span style={{ fontFamily: "'Newsreader', Georgia, serif" }}>Tasks</span>
@@ -250,53 +384,30 @@ export function DashboardShell({ company, tasks: initialTasks, documents, report
                 <button style={{ ...S.btnPrimary, ...S.btnSm }} onClick={() => setNewTaskOpen(true)}>+ New Task</button>
               </span>
             </div>
-            <div style={{ display: 'grid', gap: 10 }}>
-              {previewTasks.length === 0 ? (
-                <p style={{ fontSize: 12, color: 'var(--text-dim)', padding: '10px 0' }}>Message Baljia to set up your first company.</p>
-              ) : previewTasks.map(task => {
-                const agentName = task.assigned_to_agent_id !== null ? FOUNDER_AGENT_LABELS[task.assigned_to_agent_id] ?? 'AI Team' : null;
-                return (
-                  <div key={task.id} style={S.card} onClick={() => setSelectedTask(task)}>
-                    <div style={S.cardAccent}></div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', gap: 8, marginLeft: 8 }}>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <h4 style={{ fontSize: 14, fontWeight: 700, color: 'var(--ink)', marginBottom: 4, lineHeight: 1.3 }}>{task.title}</h4>
-                        {task.description && <p style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' as const, overflow: 'hidden' }}>{task.description}</p>}
-                      </div>
-                      <span style={S.badge(statusBadge(task.status))}>{task.status.replace(/_/g, ' ')}</span>
-                    </div>
-                    {task.status === 'in_progress' && task.started_at && (
-                      <div style={{ marginTop: 8, marginLeft: 8 }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--text-dim)', marginBottom: 4 }}>
-                          <span>Turn {task.turn_count}/{task.max_turns}</span><span>Working...</span>
-                        </div>
-                        <div style={{ height: 3, background: 'var(--bg-alt)', borderRadius: 2 }}>
-                          <div style={{ width: `${Math.min((task.turn_count / task.max_turns) * 100, 100)}%`, height: 3, background: 'linear-gradient(90deg, #E1B12C, #FCD34D)', borderRadius: 2, transition: 'width .5s' }}></div>
-                        </div>
-                      </div>
-                    )}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' as const, marginTop: 8, marginLeft: 8 }}>
-                      <span style={S.badge('default')}>{task.tag}</span>
-                      {agentName && <span style={S.badge('default')}>🤖 {agentName}</span>}
-                      <span style={{ fontSize: 12, color: '#D97706', fontWeight: 600 }}>{task.estimated_credits} cr</span>
-                      <span style={{ flex: 1 }}></span>
-                      <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{formatAge(task.created_at)}</span>
-                    </div>
-                    {task.status === 'todo' && !task.authorized_by && (
-                      <div onClick={e => e.stopPropagation()} style={{ display: 'flex', gap: 6, flexWrap: 'wrap' as const, marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)', marginLeft: 8 }}>
-                        <button style={{ ...S.btnGhost, color: '#DC2626' }} onClick={e => { e.stopPropagation(); handleReject(task.id); }}>✗ Reject</button>
-                        <span style={{ flex: 1 }}></span>
-                        <button style={{ ...S.btn, ...S.btnSm }} onClick={e => { e.stopPropagation(); handleApprove(task.id); }}>✓ Approve</button>
-                        <button style={{ ...S.btnPrimary, ...S.btnSm }} onClick={e => { e.stopPropagation(); handleRunNow(task.id); }}>▶ Run Now</button>
-                      </div>
-                    )}
-                    {task.status === 'todo' && task.authorized_by && (
-                      <div style={{ marginTop: 8, marginLeft: 8 }}><span style={S.badge('running')}>Queued · launching</span></div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+              <SortableContext items={previewTasks.map(t => t.id)} strategy={verticalListSortingStrategy}>
+                <div style={{ display: 'grid', gap: 10 }}>
+                  {previewTasks.length === 0 ? (
+                    <p style={{ fontSize: 12, color: 'var(--text-dim)', padding: '10px 0' }}>Message Baljia to set up your first company.</p>
+                  ) : previewTasks.map(task => {
+                    const agentName = task.assigned_to_agent_id !== null ? FOUNDER_AGENT_LABELS[task.assigned_to_agent_id] ?? 'AI Team' : null;
+                    const draggable = task.status === 'todo' && !task.authorized_by;
+                    return (
+                      <SortableTaskCard
+                        key={task.id}
+                        task={task}
+                        agentName={agentName}
+                        draggable={draggable}
+                        onSelect={() => setSelectedTask(task)}
+                        onApprove={handleApprove}
+                        onReject={handleReject}
+                        onRunNow={handleRunNow}
+                      />
+                    );
+                  })}
+                </div>
+              </SortableContext>
+            </DndContext>
             {tasks.length > previewTasks.length && (
               <Link href={`/dashboard/${company.id}/tasks`} style={{ display: 'inline-block', marginTop: 10, fontSize: 13, fontWeight: 700, color: '#D97706', textDecoration: 'none' }}>
                 Manage all {tasks.length} tasks →
@@ -338,7 +449,7 @@ export function DashboardShell({ company, tasks: initialTasks, documents, report
         </div>
 
         {/* ── Channels column ── */}
-        <div style={S.colChannels}>
+        <div style={S.colChannels} className="dashboard-col-channels">
           <div style={S.section}>
             <div style={S.panelHeading}><span style={{ fontFamily: "'Newsreader', Georgia, serif" }}>Twitter</span></div>
             <p style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 8 }}>@{company.slug ?? 'baljia'}</p>

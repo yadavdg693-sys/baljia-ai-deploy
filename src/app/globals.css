@@ -182,3 +182,51 @@ body.dark {
     transition-duration: .01ms !important;
   }
 }
+
+/* ═══ Dashboard responsive layout ═══
+ * The 3-column dashboard (left sidebar 260px / main / channels 270px) needs
+ * to collapse on smaller screens. Inline styles in DashboardShell.tsx can't
+ * have media queries, so we override via these classes — the component
+ * applies .dashboard-grid + .dashboard-col-{left,main,channels} on the root.
+ */
+
+@media (max-width: 1100px) {
+  /* Tablet — drop the right channels column inline; stack it under main */
+  .dashboard-grid { flex-direction: column !important; height: auto !important; min-height: calc(100vh - 60px); }
+  .dashboard-col-left,
+  .dashboard-col-main,
+  .dashboard-col-channels {
+    width: 100% !important;
+    border-right: none !important;
+    border-left: none !important;
+    border-bottom: 1px solid var(--line);
+    padding: 16px 14px !important;
+  }
+  .dashboard-col-channels { border-bottom: none; }
+  .dashboard-task-actions { flex-wrap: wrap !important; gap: 8px !important; }
+}
+
+@media (max-width: 720px) {
+  /* Phone — tighter spacing, action buttons full-width */
+  .dashboard-col-left,
+  .dashboard-col-main,
+  .dashboard-col-channels {
+    padding: 12px 12px !important;
+  }
+  .dashboard-task-actions {
+    flex-direction: column !important;
+    align-items: stretch !important;
+  }
+  .dashboard-task-actions > button { width: 100%; justify-content: center !important; }
+  .dashboard-task-actions > span { display: none; }
+}
+
+/* Drag handle visual affordance */
+.dashboard-task-card { user-select: none; }
+.dashboard-task-card.is-dragging {
+  opacity: 0.5;
+  cursor: grabbing !important;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.15) !important;
+}
+.dashboard-task-card[data-draggable="true"] { cursor: grab; }
+.dashboard-task-card[data-draggable="true"]:active { cursor: grabbing; }
