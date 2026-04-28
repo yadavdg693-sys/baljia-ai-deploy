@@ -593,3 +593,140 @@ export async function migrateTrialToPaid(companyId: string): Promise<MigrationRe
     },
   };
 }
+
+// ══════════════════════════════════════════════
+// PHASE 3 — TRIAL EXPIRY ARCHIVAL
+// Trial ended without conversion. Save the founder's code to GitHub as a
+// portable artifact ("Trial expired YYYY-MM-DD"), tear down the live
+// CF Worker. Founder loses the live URL but keeps the code.
+// ══════════════════════════════════════════════
+
+export interface ArchiveResult {
+  success: boolean;
+  reason?: string;
+  artifacts?: {
+    githubRepo?: string;
+    bytesArchived?: number;
+  };
+}
+
+/**
+ * Archive a trial-expired company's CF Worker to GitHub and tear it down.
+ * Idempotent: safe to retry. If no Worker exists, returns success with nothing.
+ *
+ * Trust signal for non-converters: their code is preserved at github.com/
+ * BALAJIapps/{slug}, recoverable any time. They lose the live URL but
+ * not the work.
+ */
+export async function archiveExpiredTrialApp(companyId: string): Promise<ArchiveResult> {
+  log.info('Archiving expired trial app', { companyId });
+
+  const [company] = await db
+    .select({
+      id: companies.id,
+      slug: companies.slug,
+      github_repo: companies.github_repo,
+    })
+    .from(companies)
+    .where(eq(companies.id, companyId))
+    .limit(1);
+
+  if (!company) return { success: false, reason: 'Company not found' };
+  if (!company.slug) return { success: false, reason: 'Company has no slug' };
+
+  const subdomain = company.slug;
+
+  // 1. Read current Worker source. If no Worker, nothing to archive.
+  const cfSource = await getWorkerScriptSource(workerScriptName(subdomain));
+  if (!cfSource) {
+    log.info('No CF Worker to archive', { companyId, subdomain });
+    return { success: true, artifacts: {} };
+  }
+
+  // 2. Ensure GitHub repo exists
+  let repoFullName = company.github_repo;
+  if (!repoFullName) {
+    const repo = await provisionCompanyRepo(companyId, subdomain);
+    if (!repo?.full_name) {
+      return { success: false, reason: 'Failed to create GitHub repo for archival' };
+    }
+    repoFullName = repo.full_name;
+    await db.update(companies).set({ github_repo: repoFullName }).where(eq(companies.id, companyId));
+  }
+
+  // 3. Push worker.js + a README explaining the archive
+  const today = new Date().toISOString().split('T')[0];
+  const archiveReadme = `# ${subdomain} (archived ${today})
+
+This repository contains the Cloudflare Worker code that powered
+${subdomain}.baljia.app during your Baljia trial.
+
+The trial period ended without subscription. The live app was taken down,
+but your code is preserved here verbatim.
+
+## Recover
+
+Subscribe to Baljia anytime — we'll redeploy this code for you in minutes.
+Or clone this repo and deploy it elsewhere (Cloudflare Workers, Render,
+Vercel, your own server) — it's standard ES-module Worker code.
+
+## Files
+
+- \`worker.js\` — the Cloudflare Worker source as it was running on day ${today}
+`;
+
+  const workerPushOk = await pushFileToRepo(
+    repoFullName,
+    'worker.js',
+    cfSource.source,
+    `Trial expired ${today} — code preserved (final commit before takedown)`,
+  );
+  const readmePushOk = await pushFileToRepo(
+    repoFullName,
+    'README.md',
+    archiveReadme,
+    `Trial expired ${today} — archive notice`,
+  );
+  if (!workerPushOk || !readmePushOk) {
+    return { success: false, reason: 'Failed to push archive to GitHub', artifacts: { githubRepo: repoFullName } };
+  }
+  log.info('Archive pushed to GitHub', { companyId, repo: repoFullName, bytes: cfSource.bytes });
+
+  // 4. Tear down CF Worker + route
+  try {
+    const zoneId = process.env.CLOUDFLARE_ZONE_ID_APP!;
+    const apiToken = process.env.CLOUDFLARE_API_TOKEN!;
+    const listRes = await fetch(`${CF_API}/zones/${zoneId}/workers/routes`, {
+      headers: { Authorization: `Bearer ${apiToken}` },
+    });
+    const listData = await listRes.json() as { result?: Array<{ id: string; script: string }> };
+    const route = listData.result?.find((r) => r.script === workerScriptName(subdomain));
+    if (route) {
+      await deleteWorkerRoute(route.id);
+      log.info('CF route deleted', { companyId, routeId: route.id });
+    }
+  } catch (err) {
+    log.warn('CF route cleanup failed during archive (non-fatal)', { companyId, error: err instanceof Error ? err.message : String(err) });
+  }
+
+  try {
+    await deleteWorkerScript(workerScriptName(subdomain));
+    log.info('CF Worker deleted on archive', { companyId, scriptName: workerScriptName(subdomain) });
+  } catch (err) {
+    log.warn('CF Worker delete failed during archive (non-fatal)', { companyId, error: err instanceof Error ? err.message : String(err) });
+  }
+
+  // 5. Update company state — hosting_state archived, app no longer live
+  await db.update(companies).set({
+    hosting_state: 'suspended',  // 'archived' isn't a hosting_state enum value; suspended is closest
+  }).where(eq(companies.id, companyId));
+
+  log.info('Archive complete', { companyId, repo: repoFullName });
+  return {
+    success: true,
+    artifacts: {
+      githubRepo: repoFullName,
+      bytesArchived: cfSource.bytes,
+    },
+  };
+}
