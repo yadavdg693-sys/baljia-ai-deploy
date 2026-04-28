@@ -297,6 +297,30 @@ export async function launchTask(taskId: string, opts: LaunchOptions = {}): Prom
       actual_credits_charged: opts.subscriptionFunded ? 0 : task.estimated_credits,
     });
 
+    // 6.5. Persist execution_log + turn_count to DB BEFORE verification runs.
+    // Without this, verifier's deploy_evidence check (which queries
+    // task_executions.execution_log) sees null → 0 deploy tool calls →
+    // fails the task even when the agent successfully called cf_deploy_app.
+    // Bug observed 2026-04-28 task bdc6210c — Worker deployed (8503B) but
+    // task marked failed because the log wasn't visible to verifier yet.
+    // The final persist at the end of this function is now redundant for
+    // execution_log but stays for the other fields (status, error_summary,
+    // verification_evidence). Idempotent.
+    try {
+      await db.update(taskExecutions)
+        .set({
+          execution_log: execution.execution_log,
+          turn_count: execution.turn_count,
+          wall_clock_seconds: execution.wall_clock_seconds,
+        })
+        .where(eq(taskExecutions.id, execution.id));
+    } catch (preVerifyPersistError) {
+      log.warn('Failed to persist execution_log before verification (verifier may see empty log)', {
+        taskId,
+        error: preVerifyPersistError instanceof Error ? preVerifyPersistError.message : String(preVerifyPersistError),
+      });
+    }
+
     // 7. Verification is MANDATORY — verifier is the sole authority for final status
     const verification = await verifyAndUpdate(taskId);
     execution.verification_evidence = verification as unknown as Record<string, unknown>;

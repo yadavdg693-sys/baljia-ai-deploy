@@ -18,7 +18,7 @@ import {
   isCloudflareDeployConfigured,
 } from '@/lib/services/cf-deploy.service';
 
-const PREFERRED_SLUG = 'plinqa';
+const PREFERRED_SLUG = 'plinqa';  // 100 credits + starter tier (30/day cap)
 
 // Terse task — what a real founder would actually type, NOT a verbose
 // implementation guide. Mirrors how queryforge's "Build campaign draft
