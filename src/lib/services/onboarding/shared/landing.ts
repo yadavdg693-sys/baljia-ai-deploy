@@ -62,6 +62,11 @@ import {
   editorialV2Styles, editorialV2Body,
   narrativeV2Styles, narrativeV2Body,
 } from './landing-renderer-v2';
+import {
+  narrativeStackedV2Styles, narrativeStackedV2Body,
+  magazineGridV2Styles, magazineGridV2Body,
+  comparisonLedV2Styles, comparisonLedV2Body,
+} from './landing-renderer-v2-extras';
 import type { PipelineContext, MarketResearchResult } from '../types';
 
 const log = createLogger('OnboardingLanding');
@@ -708,386 +713,39 @@ function renderNarrative(content: LandingContent, year: number): { styles: strin
 }
 
 // ─── Family 3: narrative-stacked ──────────────────────────────────────────
-// Type-led, story-driven, no cards. Each capability becomes a full-width
-// section with a giant prefix headline + paragraph. Steps become a single
-// flowing numbered list with type-led numerals. Differentiators become
-// italicised pull-quotes inset on a tinted background. Section dividers are
-// color blocks, not borders. Reads like an essay rather than a SaaS page.
+// Type-led, essay-style. Alternating full-bleed bands (regular/accent-soft)
+// for capabilities, dark band for "how it works", accent-color closing band.
+// v2 (2026-04-29): killed the boxy `.narr-quote` (bordered/padded background
+// rectangle). Differentiators now use hanging-indent typography with an
+// accent dash prefix — same visual hierarchy without the box.
 function renderNarrativeStacked(content: LandingContent, year: number): { styles: string; body: string } {
-  const capSections = content.what_it_does.capabilities
-    .map((c, i) => `
-      <section class="narr-section narr-section--${i % 2 === 0 ? 'even' : 'odd'}" id="${i === 0 ? 'what' : ''}">
-        <div class="narr-section-inner">
-          <div class="narr-prefix">${(i + 1).toString().padStart(2, '0')}</div>
-          <h2 class="narr-h">${esc(c.title)}</h2>
-          <p class="narr-p">${esc(c.description)}</p>
-        </div>
-      </section>`)
-    .join('');
-  const stepFlow = content.how_it_works.steps
-    .map((s) => `
-      <li class="narr-step">
-        <span class="narr-step-num">${s.number}</span>
-        <div class="narr-step-body">
-          <h3>${esc(s.title)}</h3>
-          <p>${esc(s.description)}</p>
-        </div>
-      </li>`)
-    .join('');
-  const pullQuotes = content.what_makes_different.points
-    .map((p) => `<blockquote class="narr-quote"><p>${esc(p)}</p></blockquote>`)
-    .join('');
-
-  const styles = `.wrap { max-width: 100%; margin: 0; padding: 0; }
-.narr-header { padding: 56px var(--container-px) 24px; max-width: 880px; margin: 0 auto; }
-.narr-hero { padding: 96px var(--container-px) 80px; max-width: 880px; margin: 0 auto; }
-.narr-hero h1 { font-family: var(--font-heading); text-transform: var(--heading-tt); letter-spacing: var(--heading-ls); font-weight: var(--heading-w); font-size: clamp(48px, 9vw, 96px); line-height: 0.96; margin: 0 0 32px; max-width: 16ch; }
-.narr-hero p { font-size: 22px; line-height: 1.5; max-width: 52ch; margin: 0; opacity: 0.85; }
-.narr-section { padding: clamp(80px, 12vw, 140px) 0; }
-.narr-section--even { background: var(--bg); color: var(--ink); }
-.narr-section--odd { background: var(--accent-soft); color: var(--ink); }
-.narr-section-inner { max-width: 880px; margin: 0 auto; padding: 0 var(--container-px); }
-.narr-prefix { font-family: var(--font-heading); font-size: 14px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--accent); margin-bottom: 24px; opacity: 0.95; }
-.narr-h { font-family: var(--font-heading); text-transform: var(--heading-tt); letter-spacing: var(--heading-ls); font-weight: var(--heading-w); font-size: clamp(36px, 6vw, 64px); line-height: 1.04; margin: 0 0 28px; max-width: 18ch; }
-.narr-p { font-size: 20px; line-height: 1.55; max-width: 56ch; margin: 0; opacity: 0.88; }
-.narr-how { background: var(--ink); color: var(--bg); padding: clamp(80px, 12vw, 140px) 0; }
-.narr-how-inner { max-width: 880px; margin: 0 auto; padding: 0 var(--container-px); }
-.narr-how h2 { font-family: var(--font-heading); text-transform: var(--heading-tt); letter-spacing: var(--heading-ls); font-size: 14px; opacity: 0.65; margin: 0 0 48px; }
-ol.narr-steps { list-style: none; padding: 0; margin: 0; counter-reset: narr-counter; }
-.narr-step { display: grid; grid-template-columns: 96px 1fr; gap: 24px; padding: 32px 0; border-top: 1px solid rgba(255,255,255,0.12); }
-.narr-step:first-child { border-top: 0; padding-top: 0; }
-.narr-step-num { font-family: var(--font-heading); font-size: clamp(54px, 8vw, 84px); line-height: 0.9; opacity: 0.5; font-weight: var(--heading-w); }
-.narr-step-body h3 { font-family: var(--font-heading); font-size: clamp(22px, 3vw, 28px); margin: 8px 0 8px; font-weight: var(--heading-w); }
-.narr-step-body p { font-size: 18px; line-height: 1.55; opacity: 0.78; margin: 0; max-width: 50ch; }
-.narr-diff { padding: clamp(80px, 12vw, 140px) 0; background: var(--bg-elev); }
-.narr-diff-inner { max-width: 880px; margin: 0 auto; padding: 0 var(--container-px); }
-.narr-diff h2 { font-family: var(--font-heading); text-transform: var(--heading-tt); letter-spacing: var(--heading-ls); font-size: 14px; opacity: 0.65; margin: 0 0 48px; }
-.narr-quote { margin: 0 0 32px; padding: 24px 32px; background: var(--accent-soft); border-left: 6px solid var(--accent); }
-.narr-quote p { font-family: var(--font-heading); font-style: italic; font-size: clamp(22px, 3vw, 30px); line-height: 1.35; margin: 0; max-width: 36ch; font-weight: 500; }
-.narr-closing { padding: clamp(120px, 16vw, 200px) 0; background: var(--accent); color: var(--bg); }
-.narr-closing-inner { max-width: 880px; margin: 0 auto; padding: 0 var(--container-px); text-align: left; }
-.narr-closing h2 { font-family: var(--font-heading); text-transform: var(--heading-tt); letter-spacing: var(--heading-ls); font-weight: var(--heading-w); font-size: clamp(40px, 7vw, 76px); line-height: 1.04; margin: 0 0 24px; max-width: 18ch; }
-.narr-closing p { font-size: 20px; line-height: 1.55; max-width: 52ch; margin: 0; opacity: 0.92; }
-.narr-footer { padding: 32px var(--container-px) 48px; max-width: 880px; margin: 0 auto; font-size: 13px; color: var(--ink-soft); display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
-.narr-footer a { color: var(--ink-soft); text-decoration: none; border-bottom: var(--border-w) solid transparent; }
-.narr-footer a:hover { color: var(--accent); border-bottom-color: var(--accent); }`;
-
-  const body = `<div class="wrap">
-  <header class="narr-header">
-    <div class="brand">${esc(content.brand.name)}</div>
-    <div class="brand-tag">${esc(content.brand.tagline)}</div>
-  </header>
-  <div class="narr-hero" id="hero">
-    <h1>${esc(content.hero.headline)}</h1>
-    <p>${esc(content.hero.subhead)}</p>
-  </div>
-  ${capSections}
-  <section class="narr-how" id="how">
-    <div class="narr-how-inner">
-      <h2>${esc(content.how_it_works.heading)}</h2>
-      <ol class="narr-steps">${stepFlow}
-      </ol>
-    </div>
-  </section>
-  <section class="narr-diff" id="diff">
-    <div class="narr-diff-inner">
-      <h2>${esc(content.what_makes_different.heading)}</h2>
-      ${pullQuotes}
-    </div>
-  </section>
-  <section class="narr-closing" id="closing">
-    <div class="narr-closing-inner">
-      <h2>${esc(content.closing.headline)}</h2>
-      <p>${esc(content.closing.body)}</p>
-    </div>
-  </section>
-  <footer class="narr-footer">
-    <div>© ${year} ${esc(content.brand.name)}</div>
-    <div>Built and operated by <a href="https://baljia.ai">Baljia</a></div>
-  </footer>
-</div>`;
-  return { styles, body };
+  return { styles: narrativeStackedV2Styles(), body: narrativeStackedV2Body(content, year, esc) };
 }
 
 // ─── Family 4: magazine-grid ──────────────────────────────────────────────
-// Asymmetric publication-style layout. Hero is full-bleed with a sidebar
-// metadata column ("Issue / Built for / Year"). "What it does" is a 2-column
-// staggered grid where one feature spans 2 columns and the others stack.
-// "How it works" becomes a kicker-tagged horizontal flow. Differentiators
-// are 3 large numbered statements with serif-leaning display.
+// Asymmetric publication-style layout. Hero with sidebar metadata column,
+// 2-column staggered "what it does" grid (lead spans + small stack),
+// kicker-tagged "how it works" horizontal flow, large numbered statements
+// for differentiators.
+// v2 (2026-04-29): removed cell borders entirely. Lead cell uses
+// `accent-soft` background + 4px accent left rule for emphasis. Sidebar
+// uses thin accent top-bar instead of left-border. Statements lose the
+// border-left columns — pure typographic hierarchy now.
 function renderMagazineGrid(content: LandingContent, year: number): { styles: string; body: string } {
-  const caps = content.what_it_does.capabilities;
-  // First capability = wide (spans 2 cols), remaining = stack. Defensive in
-  // case the LLM ever returns more than 3.
-  const lead = caps[0];
-  const rest = caps.slice(1);
-  const restCells = rest
-    .map((c, i) => `
-        <div class="mag-cell mag-cell--small">
-          <span class="mag-cell-tag">No. ${(i + 2).toString().padStart(2, '0')}</span>
-          <h3>${esc(c.title)}</h3>
-          <p>${esc(c.description)}</p>
-        </div>`)
-    .join('');
-  const stepRow = content.how_it_works.steps
-    .map((s) => `
-        <div class="mag-step">
-          <span class="mag-step-kicker">Step ${s.number.toString().padStart(2, '0')}</span>
-          <h3>${esc(s.title)}</h3>
-          <p>${esc(s.description)}</p>
-        </div>`)
-    .join('');
-  const diffStmts = content.what_makes_different.points
-    .map((p, i) => `
-        <div class="mag-stmt">
-          <span class="mag-stmt-num">${(i + 1).toString().padStart(2, '0')}</span>
-          <p>${esc(p)}</p>
-        </div>`)
-    .join('');
-
-  const styles = `.wrap { max-width: 1200px; margin: 0 auto; padding: 0 var(--container-px); }
-header.mag-header { padding: 32px 0 24px; display: flex; justify-content: space-between; align-items: baseline; border-bottom: 1px solid var(--line); }
-.mag-meta-strip { font-family: var(--font-heading); font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--ink-soft); }
-.mag-hero { display: grid; grid-template-columns: 1fr 220px; gap: 48px; padding: 80px 0 64px; border-bottom: 1px solid var(--line); }
-.mag-hero h1 { font-family: var(--font-heading); text-transform: var(--heading-tt); letter-spacing: var(--heading-ls); font-weight: var(--heading-w); font-size: clamp(44px, 7vw, 84px); line-height: 1.02; margin: 0 0 32px; max-width: 18ch; }
-.mag-hero p { font-size: 20px; line-height: 1.5; max-width: 50ch; margin: 0; opacity: 0.82; }
-.mag-sidebar { border-left: 1px solid var(--line); padding-left: 28px; font-family: var(--font-heading); }
-.mag-sidebar dt { font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--accent); margin-top: 16px; }
-.mag-sidebar dt:first-child { margin-top: 0; }
-.mag-sidebar dd { font-size: 15px; margin: 4px 0 0; color: var(--ink); }
-.mag-section { padding: var(--section-py) 0; border-bottom: 1px solid var(--line); }
-.mag-section h2 { font-family: var(--font-heading); text-transform: uppercase; letter-spacing: 0.16em; font-size: 12px; color: var(--ink-soft); margin: 0 0 32px; font-weight: var(--heading-w); }
-.mag-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 24px; }
-.mag-cell { padding: 28px; background: var(--bg-elev); border: 1px solid var(--line); border-radius: var(--radius); transition: border-color var(--transition); }
-.mag-cell:hover { border-color: var(--accent); }
-.mag-cell--lead { grid-row: span 2; padding: 36px; display: flex; flex-direction: column; justify-content: space-between; min-height: 280px; }
-.mag-cell--lead h3 { font-family: var(--font-heading); font-size: clamp(28px, 3.6vw, 40px); margin: 0 0 16px; font-weight: var(--heading-w); letter-spacing: var(--heading-ls); }
-.mag-cell--lead p { font-size: 17px; line-height: 1.55; opacity: 0.85; margin: 0; }
-.mag-cell-tag { display: block; font-family: var(--font-heading); font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--accent); margin-bottom: 10px; }
-.mag-cell--small h3 { font-family: var(--font-heading); font-size: 18px; margin: 0 0 8px; font-weight: var(--heading-w); }
-.mag-cell--small p { font-size: 15px; line-height: 1.55; opacity: 0.8; margin: 0; }
-.mag-flow { display: grid; grid-template-columns: repeat(3, 1fr); gap: 32px; }
-.mag-step { padding-top: 16px; border-top: 3px solid var(--accent); }
-.mag-step-kicker { font-family: var(--font-heading); font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--accent); display: block; margin-bottom: 12px; }
-.mag-step h3 { font-family: var(--font-heading); font-size: clamp(20px, 2.5vw, 24px); margin: 0 0 10px; font-weight: var(--heading-w); }
-.mag-step p { font-size: 15px; line-height: 1.55; opacity: 0.82; margin: 0; }
-.mag-statements { display: grid; grid-template-columns: repeat(3, 1fr); gap: 32px; }
-.mag-stmt { padding: 24px 0 24px 12px; border-left: 1px solid var(--line); }
-.mag-stmt-num { font-family: var(--font-heading); font-size: clamp(40px, 5vw, 60px); color: var(--accent); display: block; line-height: 1; margin-bottom: 16px; font-weight: var(--heading-w); opacity: 0.9; }
-.mag-stmt p { font-family: var(--font-heading); font-size: clamp(20px, 2.4vw, 26px); line-height: 1.25; margin: 0; font-weight: 500; max-width: 18ch; }
-.mag-closing { padding: calc(var(--section-py) * 1.4) 0 var(--section-py); display: grid; grid-template-columns: 1fr 1fr; gap: 64px; align-items: end; }
-.mag-closing h2 { font-family: var(--font-heading); text-transform: var(--heading-tt); letter-spacing: var(--heading-ls); font-size: clamp(32px, 5vw, 56px); margin: 0; max-width: 18ch; line-height: 1.04; }
-.mag-closing p { font-size: 18px; line-height: 1.55; opacity: 0.82; margin: 0; max-width: 44ch; }
-@media (max-width: 760px) {
-  .mag-hero { grid-template-columns: 1fr; gap: 32px; }
-  .mag-sidebar { border-left: 0; border-top: 1px solid var(--line); padding: 28px 0 0; }
-  .mag-grid { grid-template-columns: 1fr; }
-  .mag-cell--lead { grid-row: auto; }
-  .mag-flow, .mag-statements { grid-template-columns: 1fr; }
-  .mag-closing { grid-template-columns: 1fr; gap: 24px; }
-}`;
-
-  const body = `<div class="wrap">
-  <header class="mag-header">
-    <div>
-      <div class="brand">${esc(content.brand.name)}</div>
-      <div class="brand-tag">${esc(content.brand.tagline)}</div>
-    </div>
-    <div class="mag-meta-strip">Issue 01 / ${year}</div>
-  </header>
-  <div class="mag-hero" id="hero">
-    <div>
-      <h1>${esc(content.hero.headline)}</h1>
-      <p>${esc(content.hero.subhead)}</p>
-    </div>
-    <dl class="mag-sidebar">
-      <dt>Issue</dt><dd>01 / ${year}</dd>
-      <dt>Built for</dt><dd>${esc(content.brand.tagline)}</dd>
-      <dt>Section</dt><dd>Day-Zero Edition</dd>
-    </dl>
-  </div>
-  <section class="mag-section" id="what">
-    <h2>${esc(content.what_it_does.heading)}</h2>
-    <div class="mag-grid">
-      ${lead ? `<div class="mag-cell mag-cell--lead">
-        <div>
-          <span class="mag-cell-tag">Lead Story · No. 01</span>
-          <h3>${esc(lead.title)}</h3>
-        </div>
-        <p>${esc(lead.description)}</p>
-      </div>` : ''}
-      <div class="mag-cell-stack">${restCells}
-      </div>
-    </div>
-  </section>
-  <section class="mag-section" id="how">
-    <h2>${esc(content.how_it_works.heading)}</h2>
-    <div class="mag-flow">${stepRow}
-    </div>
-  </section>
-  <section class="mag-section" id="diff">
-    <h2>${esc(content.what_makes_different.heading)}</h2>
-    <div class="mag-statements">${diffStmts}
-    </div>
-  </section>
-  <div class="mag-closing" id="closing">
-    <h2>${esc(content.closing.headline)}</h2>
-    <p>${esc(content.closing.body)}</p>
-  </div>
-  <footer>
-    <div>© ${year} ${esc(content.brand.name)}</div>
-    <div>Built and operated by <a href="https://baljia.ai">Baljia</a></div>
-  </footer>
-</div>`;
-  return { styles, body };
+  return { styles: magazineGridV2Styles(), body: magazineGridV2Body(content, year, esc) };
 }
 
 // ─── Family 5: comparison-led ─────────────────────────────────────────────
-// Utility-rich, table-driven. "What it does" becomes a 4-column matrix table
-// (icon-mark / feature / benefit / who-it-helps). "How it works" stays a
-// numbered flow but in a denser horizontal strip. Differentiators become a
-// comparison table with ✓/✗ rows showing how this product compares to a
-// generic "status quo" column. Sections are denser, business-tool-like.
+// Utility-rich, table-driven. "What it does" is a capability matrix table,
+// "how it works" is a numbered horizontal strip, differentiators are a ✓/✗
+// comparison table vs. status quo.
+// v2 (2026-04-29): tables stay (they ARE the content) but the surrounding
+// box chrome is gone — outer borders dropped, no rounded-overflow wrapper,
+// plain accent eyebrow text instead of a bordered pill, hero aside has an
+// accent top-rule instead of a full bordered card. Inner row dividers stay
+// (functional, not decorative). ✓/✗ uses color, not background blocks.
 function renderComparisonLed(content: LandingContent, year: number): { styles: string; body: string } {
-  const matrixRows = content.what_it_does.capabilities
-    .map((c, i) => `
-        <tr class="cmp-feature-row">
-          <td class="cmp-feature-mark">${(i + 1).toString().padStart(2, '0')}</td>
-          <td class="cmp-feature-name">${esc(c.title)}</td>
-          <td class="cmp-feature-bullet">${esc(c.description)}</td>
-        </tr>`)
-    .join('');
-  const stepStrip = content.how_it_works.steps
-    .map((s) => `
-        <li class="cmp-step">
-          <span class="cmp-step-num">${s.number}</span>
-          <h3>${esc(s.title)}</h3>
-          <p>${esc(s.description)}</p>
-        </li>`)
-    .join('');
-  const diffRows = content.what_makes_different.points
-    .map((p) => `
-        <tr class="cmp-diff-row">
-          <td class="cmp-diff-claim">${esc(p)}</td>
-          <td class="cmp-diff-mark cmp-diff-mark--us"><span aria-hidden="true">✓</span><span class="visually-hidden">Yes</span></td>
-          <td class="cmp-diff-mark cmp-diff-mark--them"><span aria-hidden="true">✗</span><span class="visually-hidden">No</span></td>
-        </tr>`)
-    .join('');
-
-  const styles = `.wrap { max-width: 1080px; margin: 0 auto; padding: 0 var(--container-px); }
-header.cmp-header { padding: 32px 0 16px; display: flex; justify-content: space-between; align-items: baseline; border-bottom: var(--border-w) solid var(--line); }
-.cmp-eyebrow { font-family: var(--font-heading); font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--accent); padding: 4px 10px; border: var(--border-w) solid var(--accent); border-radius: var(--radius); }
-.cmp-hero { padding: 64px 0 48px; display: grid; grid-template-columns: 1.25fr 1fr; gap: 56px; align-items: end; border-bottom: var(--border-w) solid var(--line); }
-.cmp-hero h1 { font-family: var(--font-heading); text-transform: var(--heading-tt); letter-spacing: var(--heading-ls); font-weight: var(--heading-w); font-size: clamp(36px, 5.4vw, 60px); line-height: 1.06; margin: 0 0 24px; max-width: 18ch; }
-.cmp-hero p { font-size: 18px; line-height: 1.55; opacity: 0.84; margin: 0; max-width: 48ch; }
-.cmp-hero-aside { background: var(--bg-elev); border: var(--border-w) solid var(--line); border-radius: var(--radius); padding: 24px; box-shadow: var(--shadow); }
-.cmp-hero-aside dl { margin: 0; display: grid; gap: 14px; }
-.cmp-hero-aside dt { font-family: var(--font-heading); font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--ink-soft); margin: 0; }
-.cmp-hero-aside dd { margin: 2px 0 0; font-size: 14px; color: var(--ink); }
-.cmp-section { padding: var(--section-py) 0; border-bottom: var(--border-w) solid var(--line); }
-.cmp-section-h { display: flex; align-items: baseline; justify-content: space-between; margin: 0 0 24px; }
-.cmp-section-h h2 { font-family: var(--font-heading); text-transform: uppercase; letter-spacing: 0.14em; font-size: 14px; margin: 0; color: var(--ink-soft); font-weight: var(--heading-w); }
-.cmp-section-h .cmp-meta { font-family: var(--font-heading); font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-soft); }
-table.cmp-matrix { width: 100%; border-collapse: collapse; border: var(--border-w) solid var(--line); border-radius: var(--radius); overflow: hidden; }
-table.cmp-matrix thead th { font-family: var(--font-heading); font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; text-align: left; padding: 14px 18px; background: var(--bg-elev); border-bottom: var(--border-w) solid var(--line); color: var(--ink-soft); font-weight: var(--heading-w); }
-table.cmp-matrix tbody td { padding: 18px; border-bottom: var(--border-w) solid var(--line); vertical-align: top; }
-table.cmp-matrix tbody tr:last-child td { border-bottom: 0; }
-.cmp-feature-mark { width: 56px; font-family: var(--font-heading); color: var(--accent); font-weight: var(--heading-w); font-size: 14px; }
-.cmp-feature-name { width: 240px; font-family: var(--font-heading); font-weight: var(--heading-w); font-size: 16px; }
-.cmp-feature-bullet { font-size: 15px; line-height: 1.55; opacity: 0.85; }
-ol.cmp-steps { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; border: var(--border-w) solid var(--line); border-radius: var(--radius); overflow: hidden; }
-.cmp-step { padding: 24px; border-right: var(--border-w) solid var(--line); background: var(--bg); }
-.cmp-step:last-child { border-right: 0; }
-.cmp-step-num { display: inline-block; font-family: var(--font-heading); font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--accent); margin-bottom: 10px; }
-.cmp-step h3 { font-family: var(--font-heading); font-size: 17px; margin: 0 0 6px; font-weight: var(--heading-w); }
-.cmp-step p { font-size: 14.5px; line-height: 1.55; opacity: 0.82; margin: 0; }
-table.cmp-table { width: 100%; border-collapse: collapse; border: var(--border-w) solid var(--line); border-radius: var(--radius); overflow: hidden; }
-table.cmp-table thead th { font-family: var(--font-heading); font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; text-align: left; padding: 14px 18px; background: var(--bg-elev); border-bottom: var(--border-w) solid var(--line); color: var(--ink-soft); font-weight: var(--heading-w); }
-table.cmp-table thead th.cmp-col-us { color: var(--accent); }
-table.cmp-table tbody td { padding: 16px 18px; border-bottom: var(--border-w) solid var(--line); vertical-align: middle; }
-table.cmp-table tbody tr:last-child td { border-bottom: 0; }
-.cmp-diff-claim { font-size: 15px; line-height: 1.5; max-width: 38ch; }
-.cmp-diff-mark { width: 88px; text-align: center; font-family: var(--font-heading); font-weight: var(--heading-w); font-size: 18px; }
-.cmp-diff-mark--us { color: var(--accent); background: var(--accent-soft); }
-.cmp-diff-mark--them { color: var(--ink-soft); opacity: 0.6; }
-.visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
-.cmp-closing { padding: calc(var(--section-py) * 1.4) 0 var(--section-py); display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: start; }
-.cmp-closing h2 { font-family: var(--font-heading); text-transform: var(--heading-tt); letter-spacing: var(--heading-ls); font-size: clamp(28px, 4vw, 44px); margin: 0; max-width: 20ch; line-height: 1.06; }
-.cmp-closing p { font-size: 17px; line-height: 1.55; opacity: 0.84; margin: 0; max-width: 44ch; }
-@media (max-width: 760px) {
-  .cmp-hero { grid-template-columns: 1fr; gap: 32px; }
-  ol.cmp-steps { grid-template-columns: 1fr; }
-  .cmp-step { border-right: 0; border-bottom: var(--border-w) solid var(--line); }
-  .cmp-step:last-child { border-bottom: 0; }
-  .cmp-closing { grid-template-columns: 1fr; gap: 16px; }
-  .cmp-feature-name { width: auto; }
-}`;
-
-  const body = `<div class="wrap">
-  <header class="cmp-header">
-    <div>
-      <div class="brand">${esc(content.brand.name)}</div>
-      <div class="brand-tag">${esc(content.brand.tagline)}</div>
-    </div>
-    <span class="cmp-eyebrow">Reference · ${year}</span>
-  </header>
-  <div class="cmp-hero" id="hero">
-    <div>
-      <h1>${esc(content.hero.headline)}</h1>
-      <p>${esc(content.hero.subhead)}</p>
-    </div>
-    <aside class="cmp-hero-aside">
-      <dl>
-        <div><dt>Status</dt><dd>Pre-launch</dd></div>
-        <div><dt>Reference</dt><dd>${esc(content.brand.name)}/01</dd></div>
-        <div><dt>Updated</dt><dd>${year}</dd></div>
-      </dl>
-    </aside>
-  </div>
-  <section class="cmp-section" id="what">
-    <div class="cmp-section-h">
-      <h2>${esc(content.what_it_does.heading)}</h2>
-      <span class="cmp-meta">Capability matrix</span>
-    </div>
-    <table class="cmp-matrix" role="table">
-      <thead>
-        <tr><th scope="col">Ref</th><th scope="col">Capability</th><th scope="col">What it gets you</th></tr>
-      </thead>
-      <tbody>${matrixRows}
-      </tbody>
-    </table>
-  </section>
-  <section class="cmp-section" id="how">
-    <div class="cmp-section-h">
-      <h2>${esc(content.how_it_works.heading)}</h2>
-      <span class="cmp-meta">Sequence</span>
-    </div>
-    <ol class="cmp-steps">${stepStrip}
-    </ol>
-  </section>
-  <section class="cmp-section" id="diff">
-    <div class="cmp-section-h">
-      <h2>${esc(content.what_makes_different.heading)}</h2>
-      <span class="cmp-meta">vs. status quo</span>
-    </div>
-    <table class="cmp-table" role="table">
-      <thead>
-        <tr><th scope="col">Position</th><th scope="col" class="cmp-col-us">${esc(content.brand.name)}</th><th scope="col">Status quo</th></tr>
-      </thead>
-      <tbody>${diffRows}
-      </tbody>
-    </table>
-  </section>
-  <div class="cmp-closing" id="closing">
-    <h2>${esc(content.closing.headline)}</h2>
-    <p>${esc(content.closing.body)}</p>
-  </div>
-  <footer>
-    <div>© ${year} ${esc(content.brand.name)}</div>
-    <div>Built and operated by <a href="https://baljia.ai">Baljia</a></div>
-  </footer>
-</div>`;
-  return { styles, body };
+  return { styles: comparisonLedV2Styles(), body: comparisonLedV2Body(content, year, esc) };
 }
 
 // Exported for offline smoke tests. Production code path stays inside

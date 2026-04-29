@@ -44,7 +44,14 @@ const SAMPLE = {
   },
 };
 
-const FAMILIES = ['utility-cards', 'editorial', 'narrative'] as const;
+const FAMILIES = [
+  'utility-cards',
+  'editorial',
+  'narrative',
+  'narrative-stacked',
+  'magazine-grid',
+  'comparison-led',
+] as const;
 const OUT_DIR = join(process.cwd(), 'tmp-landing-v2-samples');
 
 async function main() {
@@ -75,6 +82,9 @@ async function main() {
       'utility-cards': /border-left:\s*3px\s+solid\s+var\(--accent\)/,  // v2 cards have left-edge accent
       'editorial': /\.divider/,                                            // v2 editorial uses thin accent dividers
       'narrative': /\.chapter--accent|\.how-band/,                         // v2 narrative has alternating bands
+      'narrative-stacked': /\.narr-quote::before/,                         // v2 narr-stacked: typographic dash, no boxed quote
+      'magazine-grid': /\.mag-sidebar::before|\.mag-cell--lead\s*\{[^}]*border-left:\s*4px/,  // v2 mag: sidebar accent top-bar + lead cell accent rule
+      'comparison-led': /table\.cmp-matrix\s*\{[^}]*border:\s*none/,       // v2 cmp: tables stay, outer border gone
     }[family];
 
     const matches = v2Markers.test(html);
