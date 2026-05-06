@@ -446,6 +446,20 @@ export function getBrowserTools() {
         required: ['image_url'],
       },
     },
+    {
+      name: 'http_fetch',
+      description: 'Make a plain HTTP request (NO browser, NO Browserbase). Use this BEFORE browser_navigate when you only need to read JSON/HTML/text — public REST APIs, static pages, RSS, sitemaps, robots.txt. Saves real money compared to spinning up a cloud browser. Falls back to browser_navigate ONLY if the page returns JS-required content (SPA shell, anti-bot challenge, 403). Returns status + headers + body (truncated to 10K chars).',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          url: { type: 'string' as const, description: 'Full URL to fetch' },
+          method: { type: 'string' as const, description: 'HTTP method: GET (default), POST, PUT, DELETE, PATCH' },
+          headers: { type: 'object' as const, description: 'Optional headers as key-value pairs (e.g. {"Authorization":"Bearer …"})' },
+          body: { type: 'string' as const, description: 'Optional request body (string; JSON-stringify yourself if needed)' },
+        },
+        required: ['url'],
+      },
+    },
   ];
 }
 
@@ -970,6 +984,45 @@ export async function handleBrowserTool(
         return `OCR of ${imageUrl} (${words.length} words):\n\n${truncated}`;
       } catch (err) {
         return `OCR failed for ${imageUrl}: ${err instanceof Error ? err.message : 'Unknown'}`;
+      }
+    }
+
+    // ── Cheap HTTP fetch (no Browserbase) ──
+    case 'http_fetch': {
+      const url = input.url as string;
+      const method = ((input.method as string) || 'GET').toUpperCase();
+      const headers = (input.headers as Record<string, string> | undefined) ?? {};
+      const body = input.body as string | undefined;
+      try {
+        const response = await fetch(url, {
+          method,
+          headers,
+          body: method === 'GET' || method === 'HEAD' ? undefined : body,
+          // Reasonable timeout — long enough for slow APIs, short enough to fail fast
+          signal: AbortSignal.timeout(20_000),
+        });
+        const contentType = response.headers.get('content-type') ?? '';
+        const text = await response.text();
+        const truncated = text.length > 10_000 ? text.substring(0, 10_000) + '\n…(truncated, full length: ' + text.length + ')' : text;
+
+        // Heuristic: detect JS-required SPA shells so the agent knows to fall back
+        const looksLikeSpa = response.status === 200
+          && contentType.includes('text/html')
+          && text.length < 5000
+          && /<div[^>]+id=["'](root|app|__next|__nuxt)["']/.test(text)
+          && !/<h1|<article|<main[^>]*>[\s\S]+<\/main>/.test(text);
+
+        const fallbackHint = looksLikeSpa
+          ? '\n\n⚠️ This looks like a JavaScript-required SPA shell — the real content is rendered client-side. Fall back to browser_navigate for this URL.'
+          : (response.status === 403 || response.status === 429)
+            ? `\n\n⚠️ Got HTTP ${response.status} — this site may block plain fetches. Fall back to browser_navigate (Browserbase has anti-bot evasion).`
+            : '';
+
+        log.info('http_fetch', { url, status: response.status, bytes: text.length });
+        return `HTTP ${response.status} ${response.statusText}\nContent-Type: ${contentType}\nLength: ${text.length} chars\n\n${truncated}${fallbackHint}`;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Unknown';
+        return `http_fetch failed for ${url}: ${msg}\n\n(If the error is network/CORS/timeout-related, fall back to browser_navigate.)`;
       }
     }
 

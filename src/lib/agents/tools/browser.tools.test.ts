@@ -2,7 +2,7 @@
 // Mocks @/lib/db (Drizzle fluent API), drizzle-orm, and @/lib/logger so handlers
 // can be exercised without a real DB connection.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // ── DB mock chains ─────────────────────────────────────────────────────────
 const insertChain = {
@@ -388,5 +388,99 @@ describe('ocr_click_text', () => {
       screenshot_url: 'https://cdn.example.com/shot.png',
     }, makeTask());
     expect(result).toContain('Text "Fake Button" not found on page via OCR');
+  });
+});
+
+describe('http_fetch', () => {
+  let originalFetch: typeof globalThis.fetch;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it('returns a JSON API response with status + body', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ ok: true, items: [1, 2, 3] }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    )) as typeof globalThis.fetch;
+    const { handleBrowserTool } = await import('./browser.tools');
+    const result = await handleBrowserTool('http_fetch', {
+      url: 'https://api.example.com/v1/items',
+    }, makeTask());
+    expect(result).toContain('HTTP 200');
+    expect(result).toContain('application/json');
+    expect(result).toContain('"ok":true');
+  });
+
+  it('flags a JS-required SPA shell with a fallback hint', async () => {
+    const spaHtml = '<!DOCTYPE html><html><body><div id="root"></div><script src="/app.js"></script></body></html>';
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response(spaHtml, {
+      status: 200, headers: { 'content-type': 'text/html' },
+    })) as typeof globalThis.fetch;
+    const { handleBrowserTool } = await import('./browser.tools');
+    const result = await handleBrowserTool('http_fetch', {
+      url: 'https://spa.example.com/',
+    }, makeTask());
+    expect(result).toContain('SPA shell');
+    expect(result).toContain('Fall back to browser_navigate');
+  });
+
+  it('flags 403/429 with anti-bot fallback hint', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response('Forbidden', {
+      status: 403, headers: { 'content-type': 'text/plain' },
+    })) as typeof globalThis.fetch;
+    const { handleBrowserTool } = await import('./browser.tools');
+    const result = await handleBrowserTool('http_fetch', {
+      url: 'https://protected.example.com/',
+    }, makeTask());
+    expect(result).toContain('HTTP 403');
+    expect(result).toContain('block plain fetches');
+    expect(result).toContain('browser_navigate');
+  });
+
+  it('truncates large bodies', async () => {
+    const big = 'x'.repeat(15_000);
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response(big, {
+      status: 200, headers: { 'content-type': 'text/plain' },
+    })) as typeof globalThis.fetch;
+    const { handleBrowserTool } = await import('./browser.tools');
+    const result = await handleBrowserTool('http_fetch', {
+      url: 'https://big.example.com/',
+    }, makeTask());
+    expect(result).toContain('truncated, full length: 15000');
+  });
+
+  it('passes custom method, headers, and body', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(new Response('{"created":true}', {
+      status: 201, headers: { 'content-type': 'application/json' },
+    }));
+    globalThis.fetch = fetchSpy as typeof globalThis.fetch;
+    const { handleBrowserTool } = await import('./browser.tools');
+    await handleBrowserTool('http_fetch', {
+      url: 'https://api.example.com/items',
+      method: 'POST',
+      headers: { Authorization: 'Bearer abc123' },
+      body: '{"name":"new"}',
+    }, makeTask());
+    const callArgs = fetchSpy.mock.calls[0];
+    expect(callArgs[0]).toBe('https://api.example.com/items');
+    expect(callArgs[1].method).toBe('POST');
+    expect(callArgs[1].headers).toEqual({ Authorization: 'Bearer abc123' });
+    expect(callArgs[1].body).toBe('{"name":"new"}');
+  });
+
+  it('reports a friendly error on network failure', async () => {
+    globalThis.fetch = vi.fn().mockRejectedValue(new Error('ECONNREFUSED')) as typeof globalThis.fetch;
+    const { handleBrowserTool } = await import('./browser.tools');
+    const result = await handleBrowserTool('http_fetch', {
+      url: 'https://dead.example.com/',
+    }, makeTask());
+    expect(result).toContain('http_fetch failed');
+    expect(result).toContain('ECONNREFUSED');
+    expect(result).toContain('fall back to browser_navigate');
   });
 });

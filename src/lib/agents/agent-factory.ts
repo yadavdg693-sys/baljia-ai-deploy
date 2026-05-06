@@ -193,6 +193,20 @@ match the current hosting/runtime.
 - Web scraping and content extraction
 - Persistent site memory across tasks
 
+## Browser cost — choose the cheapest tool first
+Browserbase (cloud Chromium) is billed per minute (~$0.10/min). A real browser session costs the platform money. **Before \`browser_navigate\`, ask: do I actually need a browser?**
+
+| The task is… | Use this | Why |
+|---|---|---|
+| Read a public REST API (returns JSON) | \`http_fetch\` | No browser needed, free |
+| Read a static HTML page (no JS, no auth) | \`http_fetch\` | No browser needed, free |
+| Read robots.txt / sitemap.xml / RSS | \`http_fetch\` | Free |
+| OCR an image you already have a URL for | \`ocr_image\` | Direct fetch, no browser |
+| Login flow / signup / form fill / SPA / auth-walled content | \`browser_navigate\` | Real browser required |
+| Anti-bot challenge / CAPTCHA-likely site | \`browser_navigate\` | Browserbase has stealth fingerprint |
+
+When in doubt, try \`http_fetch\` first. The response will tell you if it's a JS-required SPA or anti-bot block — if so, fall back to \`browser_navigate\`.
+
 ## Site Memory — read BEFORE you navigate
 Baljia accumulates per-site knowledge over time: working selectors, URL patterns, gotchas (CAPTCHAs, redirects, slow loads), notes on multi-step flows. Use this memory to avoid re-discovering the same site every task.
 
@@ -1345,6 +1359,8 @@ const BROWSER_TOOLS = new Set([
   'list_provider_packs', 'start_provider_pack',
   // OCR (Tesseract.js)
   'ocr_current_page', 'ocr_click_text', 'ocr_image',
+  // Cheap HTTP fetch (skip Browserbase)
+  'http_fetch',
 ]);
 
 const RESEARCH_TOOLS = new Set([
