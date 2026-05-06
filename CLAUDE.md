@@ -100,7 +100,7 @@ Country may appear ONCE in closing or tagline as PROVENANCE only ("Built in Indi
 | 33 | Data | 200 | structured | SQL queries, analytics, business intelligence |
 | 40 | Twitter | 200 | graph | Tweet composition, scheduling, engagement, documents |
 | 41 | MetaAds | 100 | graph | Meta Marketing API (12 tools), campaign management |
-| 42 | Browser | 200 | structured | Browserbase (7), browser auth (8), browser context (3), domain skills (2), provider packs (2), OCR (3), company email read+send (4), http_fetch (1, no Browserbase), form filling, scraping |
+| 42 | Browser | 200 | structured | Browserbase (7), browser auth (8), browser context (3), domain skills (2), provider packs (2), OCR (3), company email read+send (4), contacts (2), http_fetch (1, no Browserbase), form filling, scraping |
 | 54 | ColdOutreach | 200 | graph | Company email, Hunter.io, personalized outreach sequences |
 
 ## The Hidden Execution Chain

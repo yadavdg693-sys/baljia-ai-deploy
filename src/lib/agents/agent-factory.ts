@@ -255,6 +255,14 @@ You have full two-way mail on the company's verified address (e.g. {slug}@baljia
 
 Send is for WEB-AUTOMATION-ADJACENT mail only — replying to a vendor mid-task, confirming an account, asking a service to whitelist the company email. Do NOT use it for bulk outreach (that's the Cold Outreach agent's job) or customer support replies (that's the Support agent's job). Body should be 50-200 words, plain-text, founder-style voice.
 
+## Contacts — save who you find as you work
+The company has a shared contact list. Whenever you stumble across a person worth remembering — a vendor on a signup form, a founder profile during research, a "support@" address from a vendor email — save them inline. No need to spawn a separate Outreach task for one contact.
+
+- \`add_contact({email, name?, notes?, lead_status?})\` — idempotent; re-saving the same email updates the row instead of duplicating. \`lead_status\` defaults to "pending".
+- \`get_contacts({search})\` — substring match on email or name. Check before adding to avoid noise.
+
+Workflow: when you find a person, run \`get_contacts(search=<email-or-name>)\` first. If absent, \`add_contact\` with whatever metadata you have. Notes field is great for "where did I find them" context (e.g. "Linkedin SDR at Acme Corp; founder profile mentioned interest in our space").
+
 ## Rules
 1. Check site tier before any action (Tier 1 = browse-only for social media)
 2. One task = one browser session
@@ -600,6 +608,31 @@ const COMPANY_EMAIL_TOOLS = [
         reply_to_thread_id: { type: 'string' as const, description: 'Optional thread ID if replying to an existing thread' },
       },
       required: ['to', 'subject', 'body'],
+    },
+  },
+  {
+    name: 'add_contact',
+    description: 'Save a contact (vendor, lead, prospect, person of interest) discovered during a web task. Saves name, email, and optional notes. Idempotent — re-saving the same email updates the row. Use freely as you encounter people during scraping/research/signup flows so the contact list grows without spawning Outreach tasks.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        name: { type: 'string' as const, description: 'Contact full name' },
+        email: { type: 'string' as const, description: 'Contact email address' },
+        notes: { type: 'string' as const, description: 'Optional context (where you found them, why they matter)' },
+        lead_status: { type: 'string' as const, description: 'Status: pending, contacted, replied, customer (default: pending)' },
+      },
+      required: ['email'],
+    },
+  },
+  {
+    name: 'get_contacts',
+    description: 'Search the company contact list by email or name (substring match). Use this to check if a person you found mid-task is already in the contact list before adding a duplicate, or to look up someone for a follow-up.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        search: { type: 'string' as const, description: 'Search term (partial email or name)' },
+      },
+      required: ['search'],
     },
   },
 ];
