@@ -231,6 +231,16 @@ OCR is slower than CSS-based interaction (~2-5 seconds per page) — prefer sele
 
 If OCR finds the text but at low confidence (<60), the screenshot is probably blurry or the language pack is wrong — try a fresh screenshot or a different lang code.
 
+## Email — read AND send from the company inbox
+You have full two-way mail on the company's verified address (e.g. {slug}@baljia.app):
+
+- \`get_inbox\` — list recent inbound emails for this company.
+- \`get_email_thread(thread_id)\` — read the full thread when you need context.
+- \`wait_for_email(from_domain, subject_contains)\` — block up to 60s for an inbound email matching a pattern (use this immediately after triggering a verification email).
+- \`send_company_email(to, subject, body, reply_to_thread_id?)\` — send a plain-text reply or new message FROM the company's address. Pass \`reply_to_thread_id\` to keep the thread.
+
+Send is for WEB-AUTOMATION-ADJACENT mail only — replying to a vendor mid-task, confirming an account, asking a service to whitelist the company email. Do NOT use it for bulk outreach (that's the Cold Outreach agent's job) or customer support replies (that's the Support agent's job). Body should be 50-200 words, plain-text, founder-style voice.
+
 ## Rules
 1. Check site tier before any action (Tier 1 = browse-only for social media)
 2. One task = one browser session
@@ -562,6 +572,20 @@ const COMPANY_EMAIL_TOOLS = [
         from_domain: { type: 'string' as const, description: 'Expected sender domain (e.g. "twitter.com")' },
         subject_contains: { type: 'string' as const, description: 'Partial subject match (e.g. "verify", "confirm")' },
       },
+    },
+  },
+  {
+    name: 'send_company_email',
+    description: 'Send a plain-text email FROM the company inbox (e.g. founder@company.baljia.app). Use this to reply to a verification/onboarding request, contact a vendor mid-task, or send a confirmation back to a service. Replies thread automatically when you pass reply_to_thread_id. Plain-text only, ~50-200 words.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        to: { type: 'string' as const, description: 'Recipient email address' },
+        subject: { type: 'string' as const, description: 'Email subject' },
+        body: { type: 'string' as const, description: 'Plain-text email body (50-200 words)' },
+        reply_to_thread_id: { type: 'string' as const, description: 'Optional thread ID if replying to an existing thread' },
+      },
+      required: ['to', 'subject', 'body'],
     },
   },
 ];
@@ -1239,6 +1263,34 @@ async function handleToolCall(
       return `No matching email received within 60 seconds. Pattern: from_domain=${fromDomain ?? 'any'}, subject_contains=${subjectContains ?? 'any'}`;
     }
 
+    case 'send_company_email': {
+      const { db, companies } = await import('@/lib/db');
+      const { eq } = await import('drizzle-orm');
+      const { sendEmail } = await import('@/lib/services/email.service');
+      try {
+        // Fetch the company's verified outbound address (set during onboarding,
+        // e.g. {slug}@baljia.app). Fall back to support@baljia.app if missing.
+        const [row] = await db
+          .select({ company_email: companies.company_email })
+          .from(companies)
+          .where(eq(companies.id, task.company_id))
+          .limit(1);
+        const fromAddress = row?.company_email || 'support@baljia.app';
+
+        const { messageId } = await sendEmail({
+          to: toolInput.to as string,
+          from: fromAddress,
+          subject: toolInput.subject as string,
+          textBody: toolInput.body as string,
+          companyId: task.company_id,
+          threadId: (toolInput.reply_to_thread_id as string) ?? undefined,
+        });
+        return `Email sent from ${fromAddress} to ${toolInput.to}: "${toolInput.subject}" (messageId: ${messageId})`;
+      } catch (err) {
+        return `Failed to send email: ${err instanceof Error ? err.message : 'Unknown error'}`;
+      }
+    }
+
     default:
       // Dispatch to domain-specific tool handlers
       return handleDomainTool(toolName, toolInput, task);
@@ -1526,8 +1578,17 @@ async function runWithClaude(
   }
   if (!anthropic) throw new Error('Anthropic client unavailable');
 
+  // For full_agent engineering tasks: force immediate tool use in the first turn.
+  // A text-only "planning" response on turn 1 causes the loop to break on turn 2
+  // (toolUseBlocks.length === 0 → break). This message explicitly demands the
+  // first tool call so the agent cannot coast with a written plan.
+  const isEngineeringFullAgent = agentId === 30 && (task.execution_mode === 'full_agent' || !task.execution_mode);
+  const firstUserMessage = isEngineeringFullAgent
+    ? `Execute your task now. Your FIRST action must be a tool call — call list_skills immediately. Do NOT write a plan or summary first. Call list_skills now.`
+    : `Execute the task described in your briefing. Begin.`;
+
   const messages: Anthropic.MessageParam[] = [
-    { role: 'user', content: `Execute the task described in your briefing. Begin.` },
+    { role: 'user', content: firstUserMessage },
   ];
 
   let turnCount = 0;
