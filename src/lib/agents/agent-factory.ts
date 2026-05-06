@@ -1404,6 +1404,8 @@ const DATA_TOOLS = new Set([
   'query_database', 'inspect_schema', 'get_metrics', 'analyze_trends',
   // Founder's product DB (shared with Engineering)
   'query_company_db', 'get_database_info', 'get_company_tech', 'render_get_logs',
+  // One-shot infra status convenience helpers
+  'get_service_status', 'list_company_services', 'get_preview_url',
 ]);
 
 const SUPPORT_TOOLS = new Set([

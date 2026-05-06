@@ -72,34 +72,49 @@ export function getDataTools() {
     // ── Infra Visibility (read-only, shared with Engineering) ──
     {
       name: 'get_company_tech',
-      description: 'Get current tech setup for this company: GitHub repo, Cloudflare Worker/R2, Neon DB. Use to understand what infrastructure exists.',
+      description: 'Get current tech setup for this company: GitHub repo, Render service, Neon DB. Use to understand what infrastructure exists.',
       input_schema: {
         type: 'object' as const,
         properties: {},
       },
     },
     {
-      name: 'cf_get_logs',
-      description: 'Get Cloudflare Worker invocation logs for THIS company\'s Tier 2/3 founder app. Returns minute-bucketed counts of requests grouped by HTTP status and outcome (ok/exception/exceededCpu/scriptThrew). Use to diagnose errors and understand real user behaviour. Only works for apps deployed via cf_deploy_app — Tier 1 landing pages do not have per-founder logs.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          since_minutes: { type: 'number' as const, description: 'Lookback window in minutes (default 60, max 1440 = 24h).' },
-          limit: { type: 'number' as const, description: 'Max rows returned (default 100, hard max 500).' },
-          errors_only: { type: 'boolean' as const, description: 'When true, only return buckets where outcome != ok or status >= 400.' },
-        },
-      },
-    },
-    {
-      name: 'platform_render_get_logs',
-      description: 'LEGACY / PLATFORM-ONLY: Get runtime logs from a Render service. Founder apps run on Cloudflare — for those use cf_get_logs. This tool only works for platform-owned Render services (baljia.ai itself). Returns empty for founder companies that don\'t have a Render service.',
+      name: 'render_get_logs',
+      description: 'Get Render deploy/runtime logs for this company founder app. Use after get_company_tech to diagnose failing Render services.',
       input_schema: {
         type: 'object' as const,
         properties: {
           service_id: { type: 'string' as const, description: 'Render service ID (from get_company_tech)' },
+          log_type: { type: 'string' as const, enum: ['service', 'deploy'], description: 'service for runtime logs, deploy for latest deploy logs.' },
           num_lines: { type: 'number' as const, description: 'Number of log lines (default: 100, max: 500)' },
         },
         required: ['service_id'],
+      },
+    },
+    {
+      name: 'get_service_status',
+      description: 'One-shot health check for the founder\'s deployed app: combines Render service state + URL liveness in a single call. Faster than running get_company_tech + check_url_health separately. Returns OK / DEGRADED / DOWN with details.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          service_id: { type: 'string' as const, description: 'Optional Render service ID. If omitted, uses the company\'s primary render_service_id.' },
+        },
+      },
+    },
+    {
+      name: 'list_company_services',
+      description: 'List all Render services associated with this company (web services, background workers, static sites). Returns service IDs, names, types, and live URLs.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {},
+      },
+    },
+    {
+      name: 'get_preview_url',
+      description: 'Get the founder\'s live app URL in one call (no JSON blob to parse). Returns the deployed URL for their primary Render service, or null if not deployed yet.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {},
       },
     },
   ];
@@ -343,14 +358,99 @@ ${Object.entries(eventCounts).map(([t, c]) => `- ${t}: ${c}`).join('\n') || 'No 
       return handleEngineeringTool('get_company_tech', {}, task);
     }
 
-    case 'cf_get_logs': {
-      const { handleEngineeringTool } = await import('./engineering.tools');
-      return handleEngineeringTool('cf_get_logs', input, task);
-    }
-
-    case 'platform_render_get_logs': {
+    case 'render_get_logs': {
       const { handleEngineeringTool } = await import('./engineering.tools');
       return handleEngineeringTool('render_get_logs', input, task);
+    }
+
+    case 'get_service_status': {
+      const { db, companies } = await import('@/lib/db');
+      const { eq } = await import('drizzle-orm');
+      const [company] = await db
+        .select({ render_service_id: companies.render_service_id, subdomain: companies.subdomain, name: companies.name })
+        .from(companies)
+        .where(eq(companies.id, task.company_id))
+        .limit(1);
+      if (!company) return 'Company not found.';
+
+      const serviceId = (input.service_id as string | undefined) ?? company.render_service_id;
+      if (!serviceId) {
+        return `${company.name} — DOWN (no Render service provisioned yet). Use list_company_services if you expect one.`;
+      }
+
+      const { handleEngineeringTool } = await import('./engineering.tools');
+      const serviceText = await handleEngineeringTool('render_get_service', { service_id: serviceId }, task);
+      const urlMatch = serviceText.match(/https?:\/\/[^\s'")]+/);
+      const url = urlMatch?.[0] ?? null;
+
+      let healthLine = 'URL: not found in service info';
+      let verdict: 'OK' | 'DEGRADED' | 'DOWN' = 'DEGRADED';
+      if (url) {
+        const healthText = await handleEngineeringTool('check_url_health', { url }, task);
+        const upMatch = /\b(200|2\d\d|status:\s*200)\b/.test(healthText);
+        const downMatch = /\b(5\d\d|timeout|unreachable|failed)\b/i.test(healthText);
+        verdict = upMatch ? 'OK' : downMatch ? 'DOWN' : 'DEGRADED';
+        healthLine = `URL: ${url} → ${verdict}\n${healthText.split('\n').slice(0, 4).join('\n')}`;
+      } else {
+        verdict = 'DEGRADED';
+      }
+
+      return [
+        `## ${company.name} — Service Status: ${verdict}`,
+        `Service: ${serviceId}`,
+        ``,
+        `### Render service info`,
+        serviceText.split('\n').slice(0, 8).join('\n'),
+        ``,
+        `### Health`,
+        healthLine,
+      ].join('\n');
+    }
+
+    case 'list_company_services': {
+      const { db, companies } = await import('@/lib/db');
+      const { eq } = await import('drizzle-orm');
+      const [company] = await db
+        .select({ render_service_id: companies.render_service_id, name: companies.name })
+        .from(companies)
+        .where(eq(companies.id, task.company_id))
+        .limit(1);
+      if (!company) return 'Company not found.';
+      if (!company.render_service_id) return `${company.name} has no Render services provisioned yet.`;
+
+      const { handleEngineeringTool } = await import('./engineering.tools');
+      // render_list_services lists ALL services on the Render account; we filter
+      // to the one(s) tied to this company by service ID. Future: store multiple
+      // service IDs per company for full coverage.
+      const allServicesText = await handleEngineeringTool('render_list_services', {}, task);
+      const ours = allServicesText
+        .split('\n')
+        .filter((line) => line.includes(company.render_service_id ?? '__never__'));
+      if (ours.length === 0) {
+        return `${company.name} — primary service ${company.render_service_id} not found in account list.\n\n(Render account services:\n${allServicesText.split('\n').slice(0, 10).join('\n')})`;
+      }
+      return `## ${company.name} — Render services\n${ours.join('\n')}`;
+    }
+
+    case 'get_preview_url': {
+      const { db, companies } = await import('@/lib/db');
+      const { eq } = await import('drizzle-orm');
+      const [company] = await db
+        .select({ render_service_id: companies.render_service_id, subdomain: companies.subdomain, name: companies.name })
+        .from(companies)
+        .where(eq(companies.id, task.company_id))
+        .limit(1);
+      if (!company) return 'Company not found.';
+      if (!company.render_service_id) {
+        return `${company.name} — no live URL (Render service not provisioned yet).`;
+      }
+      const { handleEngineeringTool } = await import('./engineering.tools');
+      const serviceText = await handleEngineeringTool('render_get_service', { service_id: company.render_service_id }, task);
+      const urlMatch = serviceText.match(/https?:\/\/[^\s'")]+/);
+      if (!urlMatch) {
+        return `${company.name} — service exists (${company.render_service_id}) but no URL extracted yet. Service may still be deploying.`;
+      }
+      return `${company.name} — live URL: ${urlMatch[0]}`;
     }
 
     default:

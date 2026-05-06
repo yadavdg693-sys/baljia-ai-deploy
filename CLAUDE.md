@@ -97,7 +97,7 @@ Country may appear ONCE in closing or tagline as PROVENANCE only ("Built in Indi
 | 29 | Research | 200 | structured | Tavily web search, competitive analysis, source citing |
 | 30 | Engineering | 200 | agentic | Infrastructure provisioning, code generation, deployment, GitHub |
 | 32 | Support | 200 | structured | Company email, conditional Gmail, customer communications |
-| 33 | Data | 200 | structured | SQL queries, analytics, business intelligence |
+| 33 | Data | 200 | structured | SQL (platform + founder DB), schema inspection, metrics, trend analysis, founder app health (status / list services / preview URL), Render logs |
 | 40 | Twitter | 200 | graph | Tweet composition, scheduling, engagement, documents |
 | 41 | MetaAds | 100 | graph | Meta Marketing API (12 tools), campaign management |
 | 42 | Browser | 200 | structured | Browserbase (7), browser auth (8), browser context (3), domain skills (2), provider packs (2), OCR (3), company email read+send (4), contacts (2), http_fetch (1, no Browserbase), form filling, scraping |
