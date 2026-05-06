@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "idx_contacts_company_email_unique" ON "contacts" USING btree ("company_id","email");

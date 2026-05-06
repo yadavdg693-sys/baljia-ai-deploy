@@ -471,6 +471,11 @@ export const contacts = pgTable('contacts', {
   created_at: timestamp('created_at', { withTimezone: true }).defaultNow(),
 }, (t) => [
   index('idx_contacts_company').on(t.company_id),
+  // Required for the onConflictDoUpdate target in add_contact handlers
+  // (support.tools.ts + outreach.tools.ts). Without this, INSERT ... ON CONFLICT
+  // (company_id, email) fails with Postgres 42P10. NULL emails are allowed
+  // multiple times — UNIQUE on a nullable column treats NULLs as distinct.
+  uniqueIndex('idx_contacts_company_email_unique').on(t.company_id, t.email),
 ]);
 
 // ══════════════════════════════════════════════

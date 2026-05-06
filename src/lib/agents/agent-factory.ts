@@ -637,7 +637,7 @@ const COMPANY_EMAIL_TOOLS = [
   },
 ];
 
-function getAgentTools(agentId: number) {
+export function getAgentTools(agentId: number) {
   // Add domain-specific tools
   switch (agentId) {
     case 30: return [...BASE_TOOLS, ...getEngineeringTools()];                        // Engineering
@@ -839,7 +839,7 @@ When you've finished the task, provide a clear summary of:
 // TOOL HANDLER — execute tools called by the agent
 // ══════════════════════════════════════════════
 
-async function handleToolCall(
+export async function handleToolCall(
   toolName: string,
   toolInput: Record<string, unknown>,
   task: Task,

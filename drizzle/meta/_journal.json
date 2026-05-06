@@ -29,6 +29,13 @@
       "when": 1778067688766,
       "tag": "0003_unique_jack_power",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1778088182735,
+      "tag": "0004_petite_garia",
+      "breakpoints": true
     }
   ]
 }
