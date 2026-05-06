@@ -510,6 +510,27 @@ export const domainSkills = pgTable('domain_skills', {
 ]);
 
 // ══════════════════════════════════════════════
+// PROVIDER BOOTSTRAP PACKS — pre-built signup recipes (global, not per-company)
+// Browser Agent reads via start_provider_pack(provider_id) when tasked with
+// provisioning an API key from a known SaaS provider.
+// ══════════════════════════════════════════════
+export const providerPacks = pgTable('provider_packs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  provider_id: varchar('provider_id', { length: 100 }).notNull().unique(), // 'openai' | 'stripe' | 'github' | etc.
+  display_name: varchar('display_name', { length: 200 }).notNull(),
+  category: varchar('category', { length: 50 }).notNull(),                  // 'llm' | 'payments' | 'hosting' | 'devtools' | 'observability' | 'storage'
+  signup_url: varchar('signup_url', { length: 500 }).notNull(),
+  api_key_url: varchar('api_key_url', { length: 500 }),                     // where the API key is generated post-signup
+  steps: jsonb('steps').$type<Array<{ kind: string; instruction: string; selector?: string; expected?: string }>>().notNull(),
+  api_key_env_var: varchar('api_key_env_var', { length: 100 }),             // canonical env var name, e.g. 'OPENAI_API_KEY'
+  notes: text('notes'),                                                      // gotchas, free tier limits, manual checkpoints
+  created_at: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow(),
+}, (t) => [
+  index('idx_provider_packs_category').on(t.category),
+]);
+
+// ══════════════════════════════════════════════
 // FAILURE FINGERPRINTS
 // ══════════════════════════════════════════════
 export const failureFingerprints = pgTable('failure_fingerprints', {

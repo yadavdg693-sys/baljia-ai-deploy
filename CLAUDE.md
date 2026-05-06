@@ -100,7 +100,7 @@ Country may appear ONCE in closing or tagline as PROVENANCE only ("Built in Indi
 | 33 | Data | 200 | structured | SQL queries, analytics, business intelligence |
 | 40 | Twitter | 200 | graph | Tweet composition, scheduling, engagement, documents |
 | 41 | MetaAds | 100 | graph | Meta Marketing API (12 tools), campaign management |
-| 42 | Browser | 200 | structured | Browserbase (7), browser auth (8), browser context (3), domain skills (2), form filling, scraping |
+| 42 | Browser | 200 | structured | Browserbase (7), browser auth (8), browser context (3), domain skills (2), provider packs (2), OCR (3), form filling, scraping |
 | 54 | ColdOutreach | 200 | graph | Company email, Hunter.io, personalized outreach sequences |
 
 ## The Hidden Execution Chain
@@ -225,6 +225,10 @@ From SPEC-CTRL-105:
 **Learnings:** Separate CRUD/search system. Shape: `learning_id`, `company_id`, `source_task_id`, `category`, `insight`, `confidence`, `tags`. Searchable by workers during execution.
 
 **Domain skills (Browser agent only):** Cross-task memory of what works on each site. Stored in `domain_skills` table (company-scoped). Five kinds: `selector`, `url_pattern`, `wait`, `trap`, `note`. Browser agent must call `read_domain_skills` before navigating to a site, and `record_domain_skill` after a successful interaction. Confidence increments by 10 (capped at 100) on each successful re-record. Never store secrets here — use `save_credentials`. Phase 1 of the Browser Agent capability expansion (see `docs/superpowers/plans/2026-05-06-browser-agent-capability-expansion.md`).
+
+**Provider bootstrap packs (Browser agent only):** Pre-built signup recipes for known SaaS providers — `openai`, `anthropic`, `stripe`, `render`, `github`, `postmark`, `sentry`, `cloudflare-r2`. Stored in `provider_packs` table (global, not per-company). Tools: `list_provider_packs(category?)` and `start_provider_pack(provider_id)`. Each recipe is an ordered list of steps (kinds: `navigate`, `fill`, `click`, `verify_email`, `capture`, `save`, `manual`). `manual` steps mean STOP and surface to founder (e.g., KYC, captcha). Phase 2.
+
+**OCR (Browser agent only):** Powered by Tesseract.js (in-process WASM, free, no API key). Tools: `ocr_current_page`, `ocr_click_text`, `ocr_image`. Use when CSS selectors fail — canvas-rendered dashboards, image-rendered keys, PDFs, cross-origin iframes. ~2-5s per call (slower than DOM); prefer selectors when they work. `ocr_click_text` finds visible text by OCR and dispatches a click at the resolved coordinates via `document.elementFromPoint`. Phase 4. Phases 3 (CAPTCHA solving via 2captcha) deferred until API key obtained.
 
 **ContextPacket:** Bounded execution context assembled per-run. Includes: memory layers, prior reports, failure fingerprints, company state, compiled briefing.
 

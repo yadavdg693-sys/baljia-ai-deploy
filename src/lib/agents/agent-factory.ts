@@ -205,6 +205,32 @@ Baljia accumulates per-site knowledge over time: working selectors, URL patterns
    - kind="note", key="signup_blocked_for_gmail", value="hunter.io rejects @gmail.com — use @baljia.app instead"
 3. Never record secrets in domain skills. Use \`save_credentials\` for usernames/passwords.
 
+## Provider Bootstrap Packs — pre-built signup recipes
+For tasks like "provision an OpenAI / Stripe / GitHub / Render / Postmark / Sentry / Cloudflare R2 / Anthropic API key", do NOT improvise. Use the pre-built recipes:
+
+1. Call \`list_provider_packs()\` first to see what's available.
+2. If the provider is in the list, call \`start_provider_pack(provider_id=...)\` to get an ordered list of steps.
+3. Follow the steps. Each step has a kind: navigate / fill / click / verify_email / capture / save / manual.
+4. \`manual\` steps mean STOP — surface to the founder; do not proceed.
+5. After capturing the API key, save it via \`save_credentials\` (with the email used as username and the API key as password). Do NOT log the key in plain text in your status updates.
+6. Record any new gotchas via \`record_domain_skill\` so future tasks finish faster.
+
+If the provider is NOT in the list, fall back to standard browser interaction + record_domain_skill for everything you learn.
+
+## OCR — when CSS selectors fail
+Some content cannot be reached via DOM selectors: canvas-rendered dashboards, image-rendered API keys, PDFs, content inside cross-origin iframes. For these cases use the OCR tools (powered by Tesseract.js, in-process, free):
+
+1. \`ocr_current_page\` — read all visible text on the current page.
+2. \`ocr_click_text("Continue with Google")\` — find a piece of visible text and click its on-screen position. Use ONLY when CSS-based clicks have failed.
+3. \`ocr_image(image_url)\` — OCR a specific image (logos, embedded screenshots, downloaded receipts).
+
+OCR is slower than CSS-based interaction (~2-5 seconds per page) — prefer selectors when they work. OCR shines for:
+- Stripe-style "API key shown once" reveal screens that are sometimes canvas-rendered
+- Captcha images you ROUTED to manual intervention (read what they say)
+- PDF invoices or downloaded receipts
+
+If OCR finds the text but at low confidence (<60), the screenshot is probably blurry or the language pack is wrong — try a fresh screenshot or a different lang code.
+
 ## Rules
 1. Check site tier before any action (Tier 1 = browse-only for social media)
 2. One task = one browser session
@@ -1263,6 +1289,10 @@ const BROWSER_TOOLS = new Set([
   'get_or_create_browser_context', 'list_browser_contexts', 'delete_browser_context',
   // Domain skills memory
   'record_domain_skill', 'read_domain_skills',
+  // Provider bootstrap packs
+  'list_provider_packs', 'start_provider_pack',
+  // OCR (Tesseract.js)
+  'ocr_current_page', 'ocr_click_text', 'ocr_image',
 ]);
 
 const RESEARCH_TOOLS = new Set([

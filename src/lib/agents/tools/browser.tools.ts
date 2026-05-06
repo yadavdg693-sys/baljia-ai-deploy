@@ -6,10 +6,11 @@
 // Env: BROWSERBASE_API_KEY, BROWSERBASE_PROJECT_ID
 
 import type { Task } from '@/types';
-import { db, browserCredentials, domainSkills } from '@/lib/db';
+import { db, browserCredentials, domainSkills, providerPacks } from '@/lib/db';
 import { eq, and, desc, sql } from 'drizzle-orm';
 import { createLogger } from '@/lib/logger';
 import { createCipheriv, createDecipheriv, randomBytes } from 'crypto';
+import { runOcr, findTextOnPage, fetchImageBuffer } from './ocr-engine';
 
 const log = createLogger('Browser');
 
@@ -386,6 +387,63 @@ export function getBrowserTools() {
           kind: { type: 'string' as const, description: 'Optional filter: selector | url_pattern | wait | trap | note. If omitted, returns all kinds.' },
         },
         required: ['domain'],
+      },
+    },
+    {
+      name: 'list_provider_packs',
+      description: 'List the SaaS providers Baljia has pre-built signup recipes for (e.g. OpenAI, Stripe, GitHub). Use this when the task asks you to provision an API key or account — call list_provider_packs first to see if a known recipe exists, then start_provider_pack to get the steps.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          category: { type: 'string' as const, description: 'Optional filter: llm | payments | hosting | devtools | observability | storage | email' },
+        },
+      },
+    },
+    {
+      name: 'start_provider_pack',
+      description: 'Get the pre-built signup recipe for a known SaaS provider. Returns ordered steps the agent should follow (navigate, fill, click, capture, save). Always check list_provider_packs first to see what is available. After completion, save the obtained API key as a credential and record any new learnings via record_domain_skill.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          provider_id: { type: 'string' as const, description: 'The provider id, e.g. "openai", "stripe", "github". See list_provider_packs.' },
+        },
+        required: ['provider_id'],
+      },
+    },
+    {
+      name: 'ocr_current_page',
+      description: 'OCR the current page screenshot to read visible text that is rendered as canvas, image, PDF, or behind a login. Use this when CSS selectors cannot reach the content (canvas-based dashboards, image-rendered API keys, PDFs). Returns the extracted text. Requires browser_screenshot to have been called first OR a screenshot URL.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          screenshot_url: { type: 'string' as const, description: 'Optional URL of a screenshot to OCR (from a recent browser_screenshot result). If omitted, takes a fresh screenshot.' },
+          lang: { type: 'string' as const, description: 'Tesseract language code, defaults to "eng". Use "eng+hin" for Hindi+English.' },
+        },
+      },
+    },
+    {
+      name: 'ocr_click_text',
+      description: 'Find a piece of visible text on the current page using OCR and click its on-screen position. Use ONLY when CSS-based clicks fail (canvas widgets, custom-drawn buttons, iframes you cannot reach). After running OCR, computes click coordinates and dispatches a click via JavaScript. Returns the matched text and click result.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          target_text: { type: 'string' as const, description: 'Text to look for on the page, e.g. "Continue with Google"' },
+          screenshot_url: { type: 'string' as const, description: 'Optional URL of a recent screenshot. If omitted, takes a fresh one.' },
+          lang: { type: 'string' as const, description: 'Tesseract language code, defaults to "eng".' },
+        },
+        required: ['target_text'],
+      },
+    },
+    {
+      name: 'ocr_image',
+      description: 'Fetch an image by URL and run OCR on it. Use this for images embedded on a page (logos, diagrams, screenshots in docs) or downloaded receipts/invoices. Returns extracted text.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          image_url: { type: 'string' as const, description: 'Full URL of the image to OCR.' },
+          lang: { type: 'string' as const, description: 'Tesseract language code, defaults to "eng".' },
+        },
+        required: ['image_url'],
       },
     },
   ];
@@ -781,6 +839,138 @@ export async function handleBrowserTool(
         `[${r.kind}] ${r.key} (confidence ${r.confidence}): ${r.value}`,
       ).join('\n');
       return `Skills for ${domain} (${rows.length} entries):\n${formatted}`;
+    }
+
+    // ── Provider bootstrap packs ──
+    case 'list_provider_packs': {
+      const category = input.category as string | undefined;
+      const where = category ? eq(providerPacks.category, category) : undefined;
+      const rows = await db.select({
+        provider_id: providerPacks.provider_id,
+        display_name: providerPacks.display_name,
+        category: providerPacks.category,
+        signup_url: providerPacks.signup_url,
+        api_key_env_var: providerPacks.api_key_env_var,
+      })
+        .from(providerPacks)
+        .where(where as never);
+      if (rows.length === 0) {
+        return category
+          ? `No provider packs in category "${category}".`
+          : 'No provider packs available.';
+      }
+      const formatted = rows
+        .map((r) => `- ${r.provider_id} (${r.category}): ${r.display_name} → env var: ${r.api_key_env_var ?? 'n/a'}`)
+        .join('\n');
+      return `Available provider packs (${rows.length}):\n${formatted}\n\nUse start_provider_pack(provider_id) to get the recipe.`;
+    }
+
+    case 'start_provider_pack': {
+      const providerId = input.provider_id as string;
+      const [pack] = await db.select().from(providerPacks).where(eq(providerPacks.provider_id, providerId)).limit(1);
+      if (!pack) {
+        return `No provider pack found for "${providerId}". Use list_provider_packs to see available providers.`;
+      }
+      const stepLines = (pack.steps ?? []).map((s, i) => {
+        const sel = s.selector ? ` [selector: ${s.selector}]` : '';
+        const exp = s.expected ? ` (expected: ${s.expected})` : '';
+        return `  ${i + 1}. [${s.kind}] ${s.instruction}${sel}${exp}`;
+      }).join('\n');
+      return [
+        `# Provider Pack: ${pack.display_name} (${pack.category})`,
+        ``,
+        `Signup URL: ${pack.signup_url}`,
+        pack.api_key_url ? `API Key URL: ${pack.api_key_url}` : '',
+        pack.api_key_env_var ? `Save the obtained key as: ${pack.api_key_env_var}` : '',
+        ``,
+        `## Steps`,
+        stepLines,
+        ``,
+        pack.notes ? `## Notes\n${pack.notes}` : '',
+        ``,
+        `Tip: After completion, save the API key via save_credentials(domain="${pack.signup_url.replace(/^https?:\/\//, '').split('/')[0]}", username="<email-used>", password="<api-key>") and record any tricky steps via record_domain_skill so future tasks finish faster.`,
+      ].filter(Boolean).join('\n');
+    }
+
+    // ── OCR (Tesseract.js) ──
+    case 'ocr_current_page': {
+      const lang = (input.lang as string) || 'eng';
+      try {
+        let imageBuffer: Buffer;
+        if (input.screenshot_url) {
+          imageBuffer = await fetchImageBuffer(input.screenshot_url as string);
+        } else {
+          if (!isBrowserbaseConfigured()) {
+            return `[OCR] No screenshot_url provided and Browserbase not configured. Provide screenshot_url or set BROWSERBASE_API_KEY.`;
+          }
+          // Take a fresh screenshot via Browserbase
+          const result = await executeBrowserCommand(task.id, 'screenshot', { label: 'ocr-current-page' });
+          // Browserbase screenshots return either a URL or base64 — try parsing
+          const parsed = JSON.parse(result || '{}') as { screenshot?: string; url?: string };
+          if (parsed.url) {
+            imageBuffer = await fetchImageBuffer(parsed.url);
+          } else if (parsed.screenshot) {
+            imageBuffer = Buffer.from(parsed.screenshot, 'base64');
+          } else {
+            return `[OCR] Could not extract screenshot from Browserbase response: ${result.substring(0, 200)}`;
+          }
+        }
+        const { fullText, words } = await runOcr(imageBuffer, lang);
+        const truncated = fullText.length > 4000 ? fullText.substring(0, 4000) + '\n…(truncated)' : fullText;
+        return `OCR result (${words.length} words detected):\n\n${truncated}`;
+      } catch (err) {
+        return `OCR failed: ${err instanceof Error ? err.message : 'Unknown'}`;
+      }
+    }
+
+    case 'ocr_click_text': {
+      const targetText = input.target_text as string;
+      const lang = (input.lang as string) || 'eng';
+      try {
+        let imageBuffer: Buffer;
+        if (input.screenshot_url) {
+          imageBuffer = await fetchImageBuffer(input.screenshot_url as string);
+        } else {
+          if (!isBrowserbaseConfigured()) {
+            return `[OCR Click] Browserbase not configured. Cannot take screenshot.`;
+          }
+          const result = await executeBrowserCommand(task.id, 'screenshot', { label: 'ocr-click' });
+          const parsed = JSON.parse(result || '{}') as { screenshot?: string; url?: string };
+          if (parsed.url) {
+            imageBuffer = await fetchImageBuffer(parsed.url);
+          } else if (parsed.screenshot) {
+            imageBuffer = Buffer.from(parsed.screenshot, 'base64');
+          } else {
+            return `[OCR Click] Could not extract screenshot.`;
+          }
+        }
+        const match = await findTextOnPage(imageBuffer, targetText, lang);
+        if (!match) {
+          return `Text "${targetText}" not found on page via OCR. Try a shorter/exact phrase or take a fresh screenshot.`;
+        }
+        // Dispatch the click via Playwright evaluate at the OCR-derived coordinates
+        if (!isBrowserbaseConfigured()) {
+          return `Found "${match.matched}" at (${match.x}, ${match.y}) confidence ${match.confidence.toFixed(0)}, but Browserbase not configured to click.`;
+        }
+        const clickScript = `(function(){const el=document.elementFromPoint(${match.x},${match.y});if(!el)return 'no-element-at-point';el.click();return el.tagName+(el.id?'#'+el.id:'')+(el.className?'.'+el.className:'').substring(0,80);})()`;
+        const clickResult = await executeBrowserCommand(task.id, 'evaluate', { script: clickScript });
+        return `OCR found "${match.matched}" at (${match.x}, ${match.y}), confidence ${match.confidence.toFixed(0)}. Click result: ${clickResult}`;
+      } catch (err) {
+        return `OCR click failed: ${err instanceof Error ? err.message : 'Unknown'}`;
+      }
+    }
+
+    case 'ocr_image': {
+      const imageUrl = input.image_url as string;
+      const lang = (input.lang as string) || 'eng';
+      try {
+        const imageBuffer = await fetchImageBuffer(imageUrl);
+        const { fullText, words } = await runOcr(imageBuffer, lang);
+        const truncated = fullText.length > 4000 ? fullText.substring(0, 4000) + '\n…(truncated)' : fullText;
+        return `OCR of ${imageUrl} (${words.length} words):\n\n${truncated}`;
+      } catch (err) {
+        return `OCR failed for ${imageUrl}: ${err instanceof Error ? err.message : 'Unknown'}`;
+      }
     }
 
     default:
