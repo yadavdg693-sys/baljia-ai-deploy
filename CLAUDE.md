@@ -186,8 +186,10 @@ From SPEC-BILL-001:
 | Runtime AI | LLM token costs, browser minutes, search calls | Platform absorbs (included in plan) |
 
 **Credit rules:**
-- 1 task = 1 credit always (deducted at todo → in_progress)
-- Failed tasks consume credit (no auto-refund)
+- **Most tasks = 1 credit; heavy Browser tasks = 2 credits.** Specifically: tasks routed to Browser agent (id 42) where CEO scoped `complexity >= 7` cost 2 credits. Everything else = 1 credit. ~80% of tasks stay at 1 credit.
+- Reasoning: Browserbase cloud Chromium is billed per-minute. Heavy Browser flows (full SaaS signups with email verification, multi-step KYC, anti-bot-heavy sites) genuinely cost the platform $0.80–$1.50 in Browserbase + LLM tokens. Charging 1 credit there is a loss; 2 credits aligns with real cost.
+- Implementation: `getCreditCostForTask(tag, complexity)` in `src/lib/services/router.service.ts`. CEO passes `complexity` (1-10) on every `create_task` call; the helper returns 1 or 2 based on agent + complexity.
+- Failed tasks consume credit(s) (no auto-refund)
 - Credits don't roll over between billing periods
 - Night shifts use separate capacity, not manual credits
 - Free planning lane: chat/planning/scoping never costs credits — platform absorbs LLM cost, bounded by rate limiting
@@ -314,7 +316,7 @@ These are NON-NEGOTIABLE architectural choices. Do not deviate:
 5. Public-surface visibility = configuration-driven
 6. Single-domain deployment sufficient
 7. Research = read-only web (Tavily); Browser = interactive web
-8. Free planning, paid execution (credits consumed at worker start ONLY)
+8. Free planning, paid execution (credits consumed at worker start ONLY). 1 credit per task default; 2 credits for heavy Browser tasks (complexity ≥ 7) to cover Browserbase per-minute billing.
 9. OAuth connections unlock with execution (not pre-trial)
 10. Execution log transparency = first-class
 11. Data-driven product improvement = explicit, policy-backed, bounded
@@ -446,7 +448,7 @@ npx tsx src/scripts/seed-db.ts  # Seed 9 agents into DB
 
 8. **Trial credit budget is ambiguous:** Source says both "10 credits" and "5 base + 10 welcome = 15." We default to 10 until clarified. See `decide-later.md`.
 
-9. **Complexity (1-10) is planning metadata only.** Does NOT change credit cost, agent selection, tools, or runtime cap.
+9. **Complexity (1-10) drives credit cost for Browser tasks ONLY.** Browser-routed tasks at complexity ≥ 7 charge 2 credits; everything else (including high-complexity Engineering / Research / Data tasks) charges 1 credit. Complexity does NOT change agent selection, tools, or runtime cap.
 
 10. **Worker is NOT the final authority.** Verifier sets final task status. Never let a worker mark its own task as completed.
 

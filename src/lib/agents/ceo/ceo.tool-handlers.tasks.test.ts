@@ -133,6 +133,7 @@ vi.mock('@/lib/services/failure.service', () => ({
 vi.mock('@/lib/services/router.service', () => ({
   routeTask: vi.fn().mockReturnValue(29),
   getAgentName: vi.fn().mockReturnValue('Research'),
+  getCreditCostForTask: vi.fn().mockReturnValue(1),
 }));
 
 vi.mock('@/lib/services/memory.service', () => ({
@@ -351,6 +352,86 @@ describe('CEO tool handlers — create_task', () => {
         estimated_credits: 1,
       });
     }
+  });
+
+  it('passes complexity through to getCreditCostForTask, charges 2 credits for heavy Browser task', async () => {
+    const governance = await import('@/lib/services/governance.service');
+    const taskService = await import('@/lib/services/task.service');
+    const events = await import('@/lib/services/event.service');
+    const failure = await import('@/lib/services/failure.service');
+    const router = await import('@/lib/services/router.service');
+
+    vi.mocked(governance.evaluateTask).mockResolvedValueOnce({
+      can_execute: true,
+      execution_mode: 'full_agent',
+      verification_level: 'browser_flow',
+    });
+    vi.mocked(failure.getKnownIssuesForTag).mockResolvedValueOnce([]);
+    vi.mocked(taskService.createTask).mockResolvedValueOnce(
+      makeTask({ id: 't-heavy', title: 'Sign up for OpenAI and get API key', tag: 'account-setup' }) as never,
+    );
+    vi.mocked(events.emit).mockResolvedValueOnce({} as never);
+    vi.mocked(router.routeTask).mockReturnValueOnce(42);
+    vi.mocked(router.getAgentName).mockReturnValueOnce('Browser');
+    vi.mocked(router.getCreditCostForTask).mockReturnValueOnce(2);
+
+    const { handleToolCall } = await import('@/lib/agents/ceo/ceo.tools');
+    const result = await handleToolCall(
+      'create_task',
+      {
+        title: 'Sign up for OpenAI and get API key',
+        description: 'Use the openai provider pack',
+        tag: 'account-setup',
+        complexity: 8,
+      },
+      COMPANY_ID,
+    );
+
+    expect(router.getCreditCostForTask).toHaveBeenCalledWith('account-setup', 8);
+    const createArg = vi.mocked(taskService.createTask).mock.calls.at(-1)![0];
+    expect(createArg).toMatchObject({ estimated_credits: 2 });
+    expect(result.content).toContain('2 credits');
+    if (result.action?.type === 'task_proposal') {
+      expect(result.action.data).toMatchObject({ estimated_credits: 2 });
+    }
+  });
+
+  it('clamps out-of-range complexity (defaults missing → 5; clamps negative; clamps >10)', async () => {
+    const governance = await import('@/lib/services/governance.service');
+    const taskService = await import('@/lib/services/task.service');
+    const events = await import('@/lib/services/event.service');
+    const failure = await import('@/lib/services/failure.service');
+    const router = await import('@/lib/services/router.service');
+
+    vi.mocked(governance.evaluateTask).mockResolvedValue({
+      can_execute: true,
+      execution_mode: 'full_agent',
+      verification_level: 'none',
+    });
+    vi.mocked(failure.getKnownIssuesForTag).mockResolvedValue([]);
+    vi.mocked(taskService.createTask).mockResolvedValue(makeTask({ id: 't-c' }) as never);
+    vi.mocked(events.emit).mockResolvedValue({} as never);
+    vi.mocked(router.routeTask).mockReturnValue(42);
+    vi.mocked(router.getAgentName).mockReturnValue('Browser');
+    vi.mocked(router.getCreditCostForTask).mockReturnValue(1);
+
+    const { handleToolCall } = await import('@/lib/agents/ceo/ceo.tools');
+
+    // Missing complexity → defaults to 5
+    await handleToolCall('create_task', { title: 't', description: 'd', tag: 'scrape' }, COMPANY_ID);
+    expect(router.getCreditCostForTask).toHaveBeenLastCalledWith('scrape', 5);
+
+    // Negative → clamp to 1
+    await handleToolCall('create_task', { title: 't', description: 'd', tag: 'scrape', complexity: -3 }, COMPANY_ID);
+    expect(router.getCreditCostForTask).toHaveBeenLastCalledWith('scrape', 1);
+
+    // >10 → clamp to 10
+    await handleToolCall('create_task', { title: 't', description: 'd', tag: 'scrape', complexity: 99 }, COMPANY_ID);
+    expect(router.getCreditCostForTask).toHaveBeenLastCalledWith('scrape', 10);
+
+    // Float → rounded
+    await handleToolCall('create_task', { title: 't', description: 'd', tag: 'scrape', complexity: 6.7 }, COMPANY_ID);
+    expect(router.getCreditCostForTask).toHaveBeenLastCalledWith('scrape', 7);
   });
 
   it('blocks on non-credit governance blocker (e.g. OAuth missing) — does NOT create task', async () => {

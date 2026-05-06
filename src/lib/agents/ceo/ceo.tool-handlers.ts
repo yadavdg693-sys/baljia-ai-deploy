@@ -9,7 +9,7 @@ import * as documentService from '@/lib/services/document.service';
 import * as governanceService from '@/lib/services/governance.service';
 import * as failureService from '@/lib/services/failure.service';
 import * as eventService from '@/lib/services/event.service';
-import { routeTask, getAgentName } from '@/lib/services/router.service';
+import { routeTask, getAgentName, getCreditCostForTask } from '@/lib/services/router.service';
 import { db, tasks as tasksTable, taskExecutions, recurringTasks, companies, reports, emailThreads, tweets, dashboardLinks, adCampaigns, platformFeedback, platformEvents, users, subscriptions } from '@/lib/db';
 import { eq, and, desc, ilike, sql } from 'drizzle-orm';
 import { createLogger } from '@/lib/logger';
@@ -196,6 +196,9 @@ async function handleCreateTask(input: Record<string, unknown>, companyId: strin
   const description = input.description as string;
   const tag = input.tag as string;
   const relatedTaskIds = (input.related_task_ids as string[] | undefined) ?? [];
+  // Complexity 1-10. CEO must pass this; clamp into range and default to 5 if missing.
+  const rawComplexity = typeof input.complexity === 'number' ? input.complexity : 5;
+  const complexity = Math.max(1, Math.min(10, Math.round(rawComplexity)));
 
   // Step 1 — Classify execution mode + check prerequisites (NOT credits)
   const decision = await governanceService.evaluateTask({ title, description, tag, companyId });
@@ -214,9 +217,10 @@ async function handleCreateTask(input: Record<string, unknown>, companyId: strin
     }
   } catch { /* non-blocking */ }
 
-  // Step 3 — Route to agent and create the task (even at 0 credits — task queues, runs later)
+  // Step 3 — Route to agent + compute credit cost (Browser+heavy = 2, else 1)
   const agentId = routeTask(tag);
   const agentName = getAgentName(agentId);
+  const creditCost = getCreditCostForTask(tag, complexity);
 
   const task = await taskService.createTask({
     company_id: companyId, title, description, tag,
@@ -224,7 +228,7 @@ async function handleCreateTask(input: Record<string, unknown>, companyId: strin
     execution_mode: decision.execution_mode,
     verification_level: decision.verification_level,
     assigned_to_agent_id: agentId,
-    estimated_credits: 1,
+    estimated_credits: creditCost,
     related_task_ids: relatedTaskIds.length > 0 ? relatedTaskIds : undefined,
     authorized_by: 'founder',
     authorization_reason: 'CEO proposed, founder approved via chat',
@@ -242,13 +246,14 @@ async function handleCreateTask(input: Record<string, unknown>, companyId: strin
   const creditNote = decision.credit_warning
     ? '\n\nYou\'re at 0 credits right now. The task is queued — add credits when you\'re ready to run it.'
     : '';
+  const creditLabel = creditCost === 1 ? '1 credit' : `${creditCost} credits`;
   return {
-    content: `Task created: "${task.title}" [${task.id}] — 1 credit. ${agentName} agent will handle this.\n\nRun link: ${runLink}${knownIssueWarning}${failureNote}${creditNote}`,
+    content: `Task created: "${task.title}" [${task.id}] — ${creditLabel}. ${agentName} agent will handle this.\n\nRun link: ${runLink}${knownIssueWarning}${failureNote}${creditNote}`,
     action: {
       type: 'task_proposal',
       data: {
         task_id: task.id, title: task.title, description: task.description, tag: task.tag,
-        estimated_credits: 1, agent_name: agentName, run_link: runLink,
+        estimated_credits: creditCost, agent_name: agentName, run_link: runLink,
       },
     },
   };

@@ -178,16 +178,25 @@ When in doubt: write the reply, then delete half of it.
 **Credit expiration:** Not currently enforced. If asked, say honestly: "I don't have information about whether credits expire. I'd rather tell you that than make something up."
 
 ## Credit Rules (you know these — don't ask governance)
-- **1 manually-run task = 1 credit. Always.** No exceptions, no scaling by complexity.
+- **Most tasks = 1 credit.** Quick browser checks, content drafts, research, posts, support replies, simple engineering tasks — all 1 credit.
+- **Heavy Browser tasks = 2 credits.** Specifically: Browser-routed tasks where you scoped \`complexity >= 7\` (full SaaS signup with email verification, multi-step KYC, anti-bot-heavy sites, anything that holds a Browserbase session for 8+ minutes). Why: Browserbase cloud Chromium is billed per-minute and these tasks genuinely cost the platform $1+ in runtime — 1 credit there is a loss.
+- **You set complexity (1-10) on every task you create.** Be honest: trivial API call = 1, typical login flow = 5, full signup with verify = 8. The credit math falls out of complexity automatically.
 - **Credit is consumed when execution starts** (todo → in_progress), not when created.
-- **Failed tasks consume the credit.** No auto-refund. The credit pays for the attempt, not the outcome.
+- **Failed tasks consume the credit(s).** No auto-refund. The credit pays for the attempt, not the outcome.
 - **Zero credits = manual queue pauses.** Tasks sit in the queue, nothing executes during the day. Work isn't lost — code already shipped stays deployed. Night shifts still run if the founder has allowance left, since they don't use credits.
 - **Chatting, planning, scoping, research = free.** Only manually-triggered task execution costs credits.
 - **Night-shift cycles don't cost credits.** They're covered by the subscription allowance (see Night Shifts section).
 - When founder runs out: tell them their balance, suggest buying a credit pack or upgrading their plan. Don't panic.
-- When proposing tasks: mention cost inline "(1 credit)" once. Don't repeat.
+- When proposing tasks: mention cost inline "(1 credit)" or "(2 credits)" once. Don't repeat. If 2 credits, briefly say why: "Full signup with email verify — 2 credits."
 - During strategy/methodology discussions: credits are irrelevant. Don't mention them.
 - Connect credits to their project: "That MVP is ~8 tasks. You've got 3 credits — enough for auth + database + API. Grab more to finish the full loop."
+
+### Browser task complexity guide (set this honestly)
+- **1-3 (1 credit):** http_fetch a public API, read robots.txt, check a single URL is alive, read inbox, search contacts. Costs platform pennies.
+- **4-6 (1 credit):** Login + check status, scrape a single page, take a screenshot, read a logged-in dashboard. ~$0.30-0.60 platform cost.
+- **7-10 (2 credits):** Full SaaS signup with email verification, multi-step KYC, anti-bot-heavy site, OCR-heavy canvas dashboard. ~$0.80-1.50 platform cost.
+
+If unsure between 6 and 7, prefer 6 (1 credit) unless the task involves account creation OR email verification OR multi-step authenticated flow.
 
 ## When Tasks Fail
 - Credit is gone. Be honest: "The credit is consumed whether the task succeeds or fails."
@@ -261,7 +270,7 @@ You're their angel. You watch over the company. You think ahead. You act.`;
 const CEO_RULES = `## Hard Rules
 1. **Act on direct ask.** Imperatives ("create a task to X", "queue X", "set up X", "do X") AND confirmations ("yes", "go", "do it", "build it") = call \`create_task\` (or \`approve_task\` for confirmations on existing proposals) IMMEDIATELY using the founder's wording as title and description. Never ask "are you sure?" or "what exactly do you mean?" — if it's specific enough to be a task, ship it. Don't run pre-scope research for single-task asks; pre-scope research is only for "build me [whole product]" requests.
 2. **Research before asking.** If you can web_search it, search first. Questions are a last resort.
-3. **One credit mention per task.** Inline "(1 credit)" when proposing. Never repeat.
+3. **One credit mention per task.** Inline "(1 credit)" or "(2 credits — full signup with verify)" when proposing. Never repeat. If charging 2, give a one-liner reason so the founder isn't surprised.
 4. **Scope smartly.** Small request = one task. Complex product = dependency-ordered breakdown with feature table.
 5. **Founder-safe language.** No agent IDs, no architecture details, no internal jargon.
 6. **Chatting is free.** Only task execution costs credits. Research, planning, strategy = free.
@@ -278,18 +287,26 @@ export async function assembleCEOPrompt(companyId: string): Promise<string> {
   try {
     const [company] = await db.select({
       name: companies.name, slug: companies.slug, one_liner: companies.one_liner,
-      company_stage: companies.company_stage, lifecycle: companies.lifecycle, plan_tier: companies.plan_tier,
+      lifecycle: companies.lifecycle, plan_tier: companies.plan_tier,
+      custom_domain: companies.custom_domain, subdomain: companies.subdomain,
     }).from(companies).where(eq(companies.id, companyId)).limit(1);
 
     if (company) {
+      const cfHost = company.subdomain ?? company.slug;
+      const liveUrl = company.custom_domain
+        ? `https://${company.custom_domain}`
+        : cfHost
+        ? `https://${cfHost}.baljia.app`
+        : 'Not deployed yet';
+
       sections.push(`## Company Context
 - **Name:** ${company.name}
 - **One-liner:** ${company.one_liner ?? 'Not set yet'}
-- **Stage:** ${company.company_stage}
+- **Live URL:** ${liveUrl}
 - **Lifecycle:** ${(company.lifecycle ?? 'trial_active').replace(/_/g, ' ')}
 - **Plan:** ${company.plan_tier}
 
-Use this context naturally. Reference the company's business when relevant — connect the founder's questions to their specific situation.`);
+Read the company context, recent activity, and documents below to judge where this company actually is — there are no fixed lifecycle stages. If activity is low, they're early in operating tempo. If outreach is happening but conversion isn't, validation is the bottleneck. If the live URL is missing, deployment is the gap. Judge case by case from real signals; never reach for a templated stage label.`);
     }
   } catch {
     // Continue without company context
@@ -317,7 +334,7 @@ Use this context naturally. Reference the company's business when relevant — c
     // Continue without documents
   }
 
-  // Task queue state
+  // Task queue state + recent activity (replaces stage-based judgment)
   try {
     const tasks = await taskService.getTasks(companyId);
     const statusCounts: Record<string, number> = {};
@@ -327,7 +344,32 @@ Use this context naturally. Reference the company's business when relevant — c
     const summary = Object.entries(statusCounts)
       .map(([status, count]) => `${status.replace(/_/g, ' ')}: ${count}`)
       .join(', ');
-    sections.push(`## Task Queue\n${summary || 'No tasks yet'}`);
+
+    const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const completedRecent = tasks.filter((t) =>
+      t.status === 'completed' && t.completed_at && new Date(t.completed_at).getTime() >= sevenDaysAgo,
+    );
+    const lastCompleted = tasks
+      .filter((t) => t.status === 'completed' && t.completed_at)
+      .sort((a, b) => new Date(b.completed_at!).getTime() - new Date(a.completed_at!).getTime())
+      .slice(0, 3);
+    const recentFailures = tasks
+      .filter((t) => (t.status === 'failed' || t.status === 'failed_permanent') && t.updated_at)
+      .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
+      .slice(0, 2);
+
+    let activity = `## Task Queue\n${summary || 'No tasks yet'}`;
+    activity += `\n\n## Recent Activity (last 7 days)\n- Tasks completed: ${completedRecent.length}`;
+    if (lastCompleted.length > 0) {
+      activity += `\n\n**Last completed:**\n${lastCompleted.map((t) => `- ${t.title}`).join('\n')}`;
+    }
+    if (recentFailures.length > 0) {
+      activity += `\n\n**Recent failures (read these — they tell you what's stuck):**\n${recentFailures
+        .map((t) => `- ${t.title}${t.failure_class ? ` [${t.failure_class}]` : ''}`)
+        .join('\n')}`;
+    }
+
+    sections.push(activity);
   } catch {
     // Continue without task state
   }

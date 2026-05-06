@@ -65,16 +65,17 @@ const TASK_TOOLS = [
   },
   {
     name: 'create_task',
-    description: 'Create a new task. Routes to the right agent based on tag. 1 credit per task, deducted when execution starts. Task needs founder approval before execution.',
+    description: 'Create a new task. Routes to the right agent based on tag. Credits deducted when execution starts. Most tasks cost 1 credit; heavy Browser-agent tasks (complexity ≥ 7 with browser tag) cost 2 credits to cover Browserbase session time. Task needs founder approval before execution.',
     input_schema: {
       type: 'object' as const,
       properties: {
         title: { type: 'string' as const, description: 'Clear, action-oriented task title' },
         description: { type: 'string' as const, description: 'Detailed description of what should be done' },
-        tag: { type: 'string' as const, description: 'Task category (e.g. landing-page, research, api, tweet, outreach)' },
+        tag: { type: 'string' as const, description: 'Task category (e.g. landing-page, research, api, tweet, outreach, scrape, account-setup)' },
+        complexity: { type: 'number' as const, description: 'Task complexity 1-10. 1-3 = trivial (single API call, status check). 4-6 = typical (login + form fill, single-page scrape). 7-10 = heavy (full SaaS signup with verification, multi-step flows, anti-bot-heavy sites). Drives credit cost for Browser-routed tasks.' },
         related_task_ids: { type: 'array' as const, items: { type: 'string' as const }, description: 'IDs of related tasks (e.g. failed task being retried, so agent knows what was already tried)' },
       },
-      required: ['title', 'description', 'tag'],
+      required: ['title', 'description', 'tag', 'complexity'],
     },
   },
   {

@@ -99,6 +99,7 @@ vi.mock('@/lib/services/credit.service', () => ({
 vi.mock('@/lib/services/router.service', () => ({
   routeTask: vi.fn().mockReturnValue(29),
   getAgentName: vi.fn().mockReturnValue('Research'),
+  getCreditCostForTask: vi.fn().mockReturnValue(1),
 }));
 
 vi.mock('@/lib/services/task.service', () => ({

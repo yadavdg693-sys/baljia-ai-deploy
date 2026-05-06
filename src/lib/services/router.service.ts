@@ -179,3 +179,23 @@ export function getAgentName(agentId: number): string {
   };
   return names[agentId] ?? 'Engineering';
 }
+
+/**
+ * Compute the credit cost for a task based on its tag (which routes to an
+ * agent) and its complexity (1-10, set by the CEO during scoping).
+ *
+ * Rationale: most tasks cost the platform $0.05-$0.40 in real runtime
+ * (LLM tokens + API calls). 1 credit is fair for those. But heavy Browser
+ * Agent runs (full SaaS signups with email verification, multi-step KYC,
+ * anti-bot-heavy sites) cost $0.80-$1.50 in Browserbase + LLM tokens.
+ * Charging 1 credit for those is a loss; charging 2 credits aligns with
+ * actual platform cost.
+ *
+ * Threshold: complexity 7 or higher AND routed to Browser agent → 2 credits.
+ * Everything else → 1 credit. ~80% of tasks stay at 1 credit.
+ */
+export function getCreditCostForTask(tag: string, complexity: number): number {
+  const agentId = routeTask(tag);
+  if (agentId === 42 && complexity >= 7) return 2;
+  return 1;
+}
