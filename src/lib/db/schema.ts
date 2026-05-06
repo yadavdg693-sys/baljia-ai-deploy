@@ -80,7 +80,6 @@ export const companies = pgTable('companies', {
   execution_state: varchar('execution_state', { length: 50 }).default('active'),
   billing_state: varchar('billing_state', { length: 50 }).default('free'),
   hosting_state: varchar('hosting_state', { length: 50 }).default('live'),
-  company_stage: varchar('company_stage', { length: 50 }).default('early'),
   subdomain: varchar('subdomain', { length: 255 }),
   email_identity: varchar('email_identity', { length: 255 }),
   github_repo: varchar('github_repo', { length: 255 }),
@@ -428,7 +427,6 @@ export const nightShiftCycles = pgTable('night_shift_cycles', {
   id: uuid('id').primaryKey().defaultRandom(),
   company_id: uuid('company_id').notNull().references(() => companies.id),
   cycle_number: integer('cycle_number'),
-  company_stage: varchar('company_stage', { length: 50 }),
   trust_score: decimal('trust_score', { precision: 3, scale: 2 }),
   planned_tasks: jsonb('planned_tasks').$type<string[]>(), // UUID[] stored as JSON
   executed_tasks: jsonb('executed_tasks').$type<string[]>(),
@@ -489,6 +487,26 @@ export const browserCredentials = pgTable('browser_credentials', {
   created_at: timestamp('created_at', { withTimezone: true }).defaultNow(),
 }, (t) => [
   uniqueIndex('idx_browser_creds_unique').on(t.company_id, t.site_domain),
+]);
+
+// ══════════════════════════════════════════════
+// DOMAIN SKILLS — cross-task memory of site selectors / patterns / traps
+// Browser Agent reads before navigating; records after a successful interaction.
+// ══════════════════════════════════════════════
+export const domainSkills = pgTable('domain_skills', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  company_id: uuid('company_id').notNull().references(() => companies.id),
+  site_domain: varchar('site_domain', { length: 255 }).notNull(),
+  skill_kind: varchar('skill_kind', { length: 50 }).notNull(), // 'selector' | 'url_pattern' | 'wait' | 'trap' | 'note'
+  key: varchar('key', { length: 255 }).notNull(),               // e.g. 'login_button', 'home_url', 'captcha_appears_at'
+  value: text('value').notNull(),                                // the actual selector / URL pattern / instruction
+  confidence: integer('confidence').default(50),                 // 0-100, increments on success / decrements on miss
+  last_used_at: timestamp('last_used_at', { withTimezone: true }),
+  created_at: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow(),
+}, (t) => [
+  uniqueIndex('idx_domain_skills_unique').on(t.company_id, t.site_domain, t.skill_kind, t.key),
+  index('idx_domain_skills_lookup').on(t.company_id, t.site_domain),
 ]);
 
 // ══════════════════════════════════════════════
@@ -629,6 +647,12 @@ export const platformFeedback = pgTable('platform_feedback', {
   description: text('description'),
   severity: text('severity').default('medium'),
   status: text('status').default('open'),
+  source: text('source').default('user'), // 'user' | 'agent' | 'system' | 'onboarding'
+  area: text('area'),                     // e.g. 'onboarding', 'billing', 'dashboard'
+  fingerprint: text('fingerprint'),       // stable key for de-duping system-detected issues
+  metadata: jsonb('metadata').$type<Record<string, unknown>>(),
+  occurrence_count: integer('occurrence_count').default(1),
+  last_seen_at: timestamp('last_seen_at', { withTimezone: true }).defaultNow(),
   // Phase-A additive columns (additive-only — no rename, no DROP):
   diagnosis: text('diagnosis'),                                    // triage agent's root-cause writeup (denormalized for UI)
   estimated_risk: text('estimated_risk'),                          // 'low' | 'medium' | 'high'
@@ -641,6 +665,9 @@ export const platformFeedback = pgTable('platform_feedback', {
 }, (t) => [
   index('idx_platform_feedback_company').on(t.company_id),
   index('idx_platform_feedback_status').on(t.status),
+  index('idx_platform_feedback_source_status').on(t.source, t.status),
+  index('idx_platform_feedback_area').on(t.area),
+  index('idx_platform_feedback_fingerprint').on(t.fingerprint),
 ]);
 
 // ══════════════════════════════════════════════

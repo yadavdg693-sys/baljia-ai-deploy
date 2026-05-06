@@ -12,6 +12,9 @@ import * as eventService from '@/lib/services/event.service';
 import { routeTask, getAgentName } from '@/lib/services/router.service';
 import { db, tasks as tasksTable, taskExecutions, recurringTasks, companies, reports, emailThreads, tweets, dashboardLinks, adCampaigns, platformFeedback, platformEvents, users, subscriptions } from '@/lib/db';
 import { eq, and, desc, ilike, sql } from 'drizzle-orm';
+import { createLogger } from '@/lib/logger';
+
+const log = createLogger('CEO.Tools');
 
 export interface ToolResult {
   content: string;
@@ -107,7 +110,7 @@ const INTEGRATION_REGISTRY = [
   { name: 'meta_ads', status: 'active', description: 'Meta Marketing API — ad campaigns, creatives, audiences' },
   { name: 'outreach', status: 'active', description: 'Hunter.io — email finding, verification, cold outreach' },
   { name: 'data', status: 'active', description: 'Company database — SQL queries, schema inspection, analytics' },
-  { name: 'storage', status: 'active', description: 'Cloudflare R2 — asset storage for generated content' },
+  { name: 'storage', status: 'active', description: 'R2 object storage — asset storage for generated content' },
 ];
 
 function handleListMcpServers(): ToolResult {
@@ -131,7 +134,7 @@ function handleGetModuleCapabilities(input: Record<string, unknown>): ToolResult
 
   const details: Record<number, { can: string[]; cant: string[]; tools: string[] }> = {
     30: { can: ['Build landing pages/dashboards', 'Fix bugs', 'Create APIs/webhooks', 'Set up payments', 'Deploy to Render', 'Database provisioning/migrations', 'Health checks post-deploy', 'Rollback failed deploys', 'Git commits and PRs', 'Stripe integration'], cant: ['Automated testing', 'Browser QA', 'Web search', 'Load testing'], tools: ['github_create_repo','github_push_file','github_read_file','github_list_files','github_delete_file','github_create_branch','github_create_pr','github_search_code','github_create_commit','render_create_service','render_deploy','render_get_service','render_get_deploy_status','render_get_logs','render_delete_service','render_list_services','render_get_metrics','render_list_databases','render_rollback','check_url_health','get_company_tech','attach_custom_domain','verify_custom_domain','provision_database','get_database_info','run_migration','query_company_db','stripe_create_product','stripe_create_price','stripe_create_payment_link','stripe_get_products'] },
-    42: { can: ['Navigate websites', 'Fill forms', 'Take screenshots', 'Extract data', 'Account signup', 'Password generation', 'Credential management', 'Verification email polling', 'Browser context reuse'], cant: ['2FA automation', 'Desktop apps', 'PDF workflows', 'Multi-tab research'], tools: ['browser_navigate','browser_screenshot','browser_click','browser_fill','browser_extract','browser_get_content','browser_evaluate','get_site_tier','save_credentials','get_credentials','generate_password','get_company_email','check_verification_inbox','verify_credentials','list_stored_credentials','list_browser_contexts','delete_browser_context'] },
+    42: { can: ['Navigate websites', 'Fill forms', 'Take screenshots', 'Extract data', 'Account signup', 'Password generation', 'Credential management', 'Verification email polling', 'Browser context reuse', 'Site memory across tasks'], cant: ['2FA automation', 'Desktop apps', 'PDF workflows', 'Multi-tab research'], tools: ['browser_navigate','browser_screenshot','browser_click','browser_fill','browser_extract','browser_get_content','browser_evaluate','get_site_tier','save_credentials','get_credentials','generate_password','get_company_email','check_verification_inbox','verify_credentials','list_stored_credentials','list_browser_contexts','delete_browser_context','record_domain_skill','read_domain_skills'] },
     29: { can: ['Web search (Tavily)', 'Competitor analysis', 'Industry trends', 'Market research'], cant: ['Interactive browsing', 'Account creation', 'Real-time data'], tools: ['web_search', 'web_extract', 'competitor_analysis', 'industry_trends'] },
     33: { can: ['SQL queries', 'Schema inspection', 'Metrics collection', 'Trend analysis'], cant: ['Write/modify data', 'Infrastructure changes'], tools: ['query_database', 'inspect_schema', 'get_metrics', 'analyze_trends'] },
     32: { can: ['Read/reply emails', 'Escalate to owner', 'Create engineering tickets', 'Search contacts'], cant: ['Refund processing', 'Account modifications', 'Customer history search'], tools: ['get_inbox', 'send_email', 'get_email_thread', 'escalate_to_owner', 'escalate_to_engineering', 'get_contacts'] },
@@ -351,10 +354,24 @@ async function handleApproveTask(input: Record<string, unknown>, companyId: stri
 
     // Launch in background — don't block the CEO conversation
     const { launchTask } = await import('@/lib/agents/worker-launcher');
-    launchTask(taskId).catch(() => { /* logged inside launchTask */ });
+    void launchTask(taskId).catch((err) => {
+      const error = err instanceof Error ? err.message : String(err);
+      log.error('launchTask after CEO approve failed', { taskId, companyId, error });
+      void eventService.emit(companyId, 'task_launch_failed', {
+        task_id: taskId,
+        title: task.title,
+        error,
+      }).catch((emitError) => {
+        log.error('Failed to emit task_launch_failed', {
+          taskId,
+          companyId,
+          error: emitError instanceof Error ? emitError.message : String(emitError),
+        });
+      });
+    });
 
     return {
-      content: `Task "${task.title}" approved and launching now. I'll keep you posted on progress.`,
+      content: `Task "${task.title}" approved and queued for execution. I'll check the worker status next.`,
       action: { type: 'task_approved', data: { task_id: taskId, title: task.title } },
     };
   } catch { return { content: 'Could not approve task.' }; }
@@ -517,7 +534,7 @@ async function handleDeleteRecurringTask(input: Record<string, unknown>, company
 async function handleGetContext(companyId: string): Promise<ToolResult> {
   const [company] = await db.select({
     name: companies.name, slug: companies.slug, one_liner: companies.one_liner,
-    company_stage: companies.company_stage, lifecycle: companies.lifecycle,
+    lifecycle: companies.lifecycle,
     plan_tier: companies.plan_tier, custom_domain: companies.custom_domain,
     owner_id: companies.owner_id,
   }).from(companies).where(eq(companies.id, companyId)).limit(1);
@@ -540,7 +557,7 @@ async function handleGetContext(companyId: string): Promise<ToolResult> {
     }).from(subscriptions).where(eq(subscriptions.company_id, companyId)).limit(1);
     if (sub) {
       subLine = `${sub.plan_type} (${sub.status})`;
-      if (sub.night_shifts_remaining !== null) subLine += ` — ${sub.night_shifts_remaining} night shifts remaining`;
+      if (sub.night_shifts_remaining !== null) subLine += ` — ${sub.night_shifts_remaining} autopilot runs remaining`;
       if (sub.trial_ends_at) subLine += ` — trial ends ${new Date(sub.trial_ends_at).toLocaleDateString()}`;
     }
   } catch { /* continue without subscription data */ }
@@ -558,7 +575,7 @@ async function handleGetContext(companyId: string): Promise<ToolResult> {
   } catch { /* continue without referral data */ }
 
   return {
-    content: `## ${company.name}\n- **Slug:** ${company.slug}\n- **One-liner:** ${company.one_liner ?? 'Not set'}\n- **Stage:** ${company.company_stage}\n- **Lifecycle:** ${(company.lifecycle ?? 'trial_active').replace(/_/g, ' ')}\n- **Plan:** ${company.plan_tier}\n- **Subscription:** ${subLine}\n- **Credits:** ${balance}\n- **Domain:** ${company.custom_domain ?? `${company.slug}.baljia.app`}${referralLine}\n\n**Documents filled:** ${nonEmpty || 'none'}\n**Documents empty:** ${empty || 'none'}`,
+    content: `## ${company.name}\n- **Slug:** ${company.slug}\n- **One-liner:** ${company.one_liner ?? 'Not set'}\n- **Lifecycle:** ${(company.lifecycle ?? 'trial_active').replace(/_/g, ' ')}\n- **Plan:** ${company.plan_tier}\n- **Subscription:** ${subLine}\n- **Credits:** ${balance}\n- **Domain:** ${company.custom_domain ?? `${company.slug}.baljia.app`}${referralLine}\n\n**Documents filled:** ${nonEmpty || 'none'}\n**Documents empty:** ${empty || 'none'}`,
   };
 }
 
@@ -692,6 +709,8 @@ async function handleSuggestFeature(input: Record<string, unknown>, companyId: s
   await db.insert(platformFeedback).values({
     company_id: companyId, type: 'feature',
     title: input.title as string, description: input.description as string,
+    source: 'user',
+    area: 'platform',
   });
   return { content: `Feature request submitted: "${input.title}". The Baljia team will review it.` };
 }
@@ -756,6 +775,8 @@ async function handleReportBug(input: Record<string, unknown>, companyId: string
     company_id: companyId, type: 'bug',
     title: input.title as string, description: input.description as string,
     severity: (input.severity as string) ?? 'medium',
+    source: 'user',
+    area: 'platform',
   });
   return { content: `?? Bug report submitted: "${input.title}" (${(input.severity as string) ?? 'medium'} severity). The team will investigate.` };
 }

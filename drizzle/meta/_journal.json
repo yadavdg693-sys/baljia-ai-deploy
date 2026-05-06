@@ -8,6 +8,20 @@
       "when": 1776164214775,
       "tag": "0000_tiresome_turbo",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1777730087560,
+      "tag": "0001_workable_prism",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1778059935169,
+      "tag": "0002_sticky_fallen_one",
+      "breakpoints": true
     }
   ]
 }

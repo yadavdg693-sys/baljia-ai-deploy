@@ -6,8 +6,8 @@
 // Env: BROWSERBASE_API_KEY, BROWSERBASE_PROJECT_ID
 
 import type { Task } from '@/types';
-import { db, browserCredentials } from '@/lib/db';
-import { eq, and } from 'drizzle-orm';
+import { db, browserCredentials, domainSkills } from '@/lib/db';
+import { eq, and, desc, sql } from 'drizzle-orm';
 import { createLogger } from '@/lib/logger';
 import { createCipheriv, createDecipheriv, randomBytes } from 'crypto';
 
@@ -362,6 +362,32 @@ export function getBrowserTools() {
         required: ['domain'],
       },
     },
+    {
+      name: 'record_domain_skill',
+      description: 'Save a learned skill about a site so future tasks on the same domain can reuse it. Use after a successful interaction (e.g. you found the working login button selector, or learned the correct order of a multi-step flow). Does NOT store secrets — use save_credentials for those.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          domain: { type: 'string' as const, description: 'Site domain, e.g. "hunter.io"' },
+          kind: { type: 'string' as const, description: 'One of: selector | url_pattern | wait | trap | note' },
+          key: { type: 'string' as const, description: 'Short label, e.g. "login_button" or "home_url" or "captcha_appears_at"' },
+          value: { type: 'string' as const, description: 'The actual content (CSS selector, URL pattern, wait instruction, or free-form note)' },
+        },
+        required: ['domain', 'kind', 'key', 'value'],
+      },
+    },
+    {
+      name: 'read_domain_skills',
+      description: 'Look up everything Baljia has previously learned about a site. Call this BEFORE navigating to a site you have not visited recently in this task. Returns selectors, URL patterns, traps and notes recorded by past tasks for this company.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          domain: { type: 'string' as const, description: 'Site domain, e.g. "hunter.io"' },
+          kind: { type: 'string' as const, description: 'Optional filter: selector | url_pattern | wait | trap | note. If omitted, returns all kinds.' },
+        },
+        required: ['domain'],
+      },
+    },
   ];
 }
 
@@ -688,6 +714,73 @@ export async function handleBrowserTool(
 
       log.info('Browser context deleted', { domain, taskId: task.id });
       return `Browser context for ${domain} deleted. Next task will create a fresh session.`;
+    }
+
+    // ── Domain skills memory ──
+    case 'record_domain_skill': {
+      const domain = (input.domain as string).toLowerCase().replace(/^www\./, '');
+      const kind = input.kind as string;
+      const key = input.key as string;
+      const value = input.value as string;
+      const validKinds = ['selector', 'url_pattern', 'wait', 'trap', 'note'];
+      if (!validKinds.includes(kind)) {
+        return `Invalid kind "${kind}". Must be one of: ${validKinds.join(', ')}.`;
+      }
+      try {
+        await db.insert(domainSkills).values({
+          company_id: task.company_id,
+          site_domain: domain,
+          skill_kind: kind,
+          key,
+          value,
+          last_used_at: new Date(),
+        }).onConflictDoUpdate({
+          target: [domainSkills.company_id, domainSkills.site_domain, domainSkills.skill_kind, domainSkills.key],
+          set: {
+            value,
+            last_used_at: new Date(),
+            updated_at: new Date(),
+            confidence: sql`LEAST(${domainSkills.confidence} + 10, 100)`,
+          },
+        });
+        log.info('Domain skill recorded', { domain, kind, key, taskId: task.id });
+        return `Recorded skill for ${domain}: ${kind}/${key}`;
+      } catch (err) {
+        return `Failed to record skill: ${err instanceof Error ? err.message : 'Unknown'}`;
+      }
+    }
+
+    case 'read_domain_skills': {
+      const domain = (input.domain as string).toLowerCase().replace(/^www\./, '');
+      const kindFilter = input.kind as string | undefined;
+      const where = kindFilter
+        ? and(
+            eq(domainSkills.company_id, task.company_id),
+            eq(domainSkills.site_domain, domain),
+            eq(domainSkills.skill_kind, kindFilter),
+          )
+        : and(
+            eq(domainSkills.company_id, task.company_id),
+            eq(domainSkills.site_domain, domain),
+          );
+      const rows = await db.select({
+        kind: domainSkills.skill_kind,
+        key: domainSkills.key,
+        value: domainSkills.value,
+        confidence: domainSkills.confidence,
+        last_used_at: domainSkills.last_used_at,
+      })
+        .from(domainSkills)
+        .where(where)
+        .orderBy(desc(domainSkills.confidence), desc(domainSkills.last_used_at))
+        .limit(50);
+      if (rows.length === 0) {
+        return `No prior skills recorded for ${domain}. This is a new site for this company — proceed carefully and record findings as you discover them.`;
+      }
+      const formatted = rows.map((r) =>
+        `[${r.kind}] ${r.key} (confidence ${r.confidence}): ${r.value}`,
+      ).join('\n');
+      return `Skills for ${domain} (${rows.length} entries):\n${formatted}`;
     }
 
     default:

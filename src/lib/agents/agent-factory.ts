@@ -22,8 +22,8 @@ import { getMetaAdsTools, handleMetaAdsTool } from './tools/meta-ads.tools';
 import { getOutreachTools, handleOutreachTool } from './tools/outreach.tools';
 import { getEngineeringTools, handleEngineeringTool } from './tools/engineering.tools';
 import { callAnthropicWithTimeout, callOpenRouterWithTimeout, callGeminiWithTimeout } from '@/lib/llm-safety';
-import { isAnthropicAvailable, isBedrockAvailable, isDirectAnthropicAvailable, isAnthropicOAuthAvailable, isOpenAIAvailable, getOpenAIApiKey, isOpenRouterAvailable, OPENROUTER_MODELS, OPENAI_MODELS, getPreferredProvider } from '@/lib/llm-provider';
-import { createAnthropicWithOAuth, withClaudeCodeIdentity } from '@/lib/anthropic-oauth';
+import { isAnthropicAvailable, isBedrockAvailable, isDirectAnthropicAvailable, isAnthropicOAuthAvailable, isOpenAIAvailable, getOpenAIApiKey, isOpenRouterAvailable, isGeminiAvailable, OPENROUTER_MODELS, OPENAI_MODELS, getPreferredProvider } from '@/lib/llm-provider';
+import { createAnthropicWithOAuthAsync, withClaudeCodeIdentity } from '@/lib/anthropic-oauth';
 import { sanitizeForPrompt, moderateOutput } from '@/lib/content-safety';
 import { db, agents as agentsTable, reports, companies, tasks as tasksTable, taskExecutions } from '@/lib/db';
 import { eq, and, desc } from 'drizzle-orm';
@@ -40,13 +40,25 @@ const log = createLogger('AgentFactory');
 const CLAUDE_MODEL_SONNET = process.env.WORKER_CLAUDE_MODEL || 'claude-sonnet-4-6';
 const CLAUDE_MODEL_HAIKU = process.env.WORKER_HAIKU_MODEL || 'claude-haiku-4-5-20251001';
 const GEMINI_MODEL = 'gemini-2.5-flash';
+const DEFAULT_AGENT_MAX_TOKENS = 4096;
+const ENGINEERING_AGENT_MAX_TOKENS = 12000;
+const DEFAULT_AGENT_CALL_TIMEOUT_MS = parseInt(process.env.LLM_TIMEOUT_MS ?? '60000', 10);
+const ENGINEERING_AGENT_CALL_TIMEOUT_MS = parseInt(process.env.ENGINEERING_LLM_TIMEOUT_MS ?? '180000', 10);
+
+function getAgentMaxTokens(agentId: number): number {
+  return agentId === 30 ? ENGINEERING_AGENT_MAX_TOKENS : DEFAULT_AGENT_MAX_TOKENS;
+}
+
+function getAgentCallTimeoutMs(agentId: number): number {
+  return agentId === 30 ? ENGINEERING_AGENT_CALL_TIMEOUT_MS : DEFAULT_AGENT_CALL_TIMEOUT_MS;
+}
 
 // ══════════════════════════════════════════════
 // AGENT PROMPTS — per-agent system prompt assembly
 // ══════════════════════════════════════════════
 
 const AGENT_PROMPTS: Record<number, string> = {
-  30: `You are the Engineering Agent for Baljia AI. You build, fix, and deploy software for founder apps that run on Cloudflare Workers + R2 + Neon Postgres.
+  30: `You are the Engineering Agent for Baljia AI. You build, fix, and deploy software for founder apps as Git-backed Render web services with Neon Postgres.
 
 ## Skills — READ BEFORE CODING (this is mandatory, not optional)
 
@@ -62,31 +74,32 @@ Skill matrix — read the listed skill BEFORE writing code in that domain:
 
 | Touching... | Read skill |
 |---|---|
-| Anything that deploys to Workers (every task) | cloudflare-workers |
-| **Building a full-stack founder app (API + DB + frontend) — read this BEFORE writing the script_content for cf_deploy_app** | **build-fullstack-cf-app** |
+| Building a full-stack founder app for Render | frontend-design + neon-postgres |
 | Database / SQL / migrations / schema | neon-postgres |
 | HTML / pages / dashboards / Tailwind / UI | frontend-design |
 | Payments / Stripe / pricing / subscriptions | stripe-payments |
-| File uploads / static assets / image hosting | r2-storage |
+| Static assets / images included in the app | frontend-design |
+| Generated media / ad creative files / public asset URLs | r2-storage |
 | Email send / notifications / inbound mail | email-postmark |
 | AI features (LLM calls, agent loops, prompt-template logic) | agent-sdk |
 
 If you write code in a domain WITHOUT reading its skill first, you will likely
-ship a pattern that doesn't work on Workers. The skills exist because the LLM's
-general training data points to Express/pg/SMTP — none of which work here.
+ship a pattern that doesn't work in Baljia's deployment path. The skills exist
+because the LLM's general training data often suggests patterns that do not
+match the current hosting/runtime.
 
 ## Rules
 
 1. **Skills first.** Call list_skills + read the relevant ones BEFORE coding. This is the single most important rule.
 2. **Know the company state.** Call get_company_tech to know slug + DB status before infra work.
-3. **First-deploy vs modification — this changes the flow:**
-   - **First deploy** (no app exists yet): generate fresh script_content, call cf_deploy_app. Standard path.
-   - **Modification** (app already deployed): MUST call cf_read_app_source FIRST to get the current Worker source, edit only what the task requires, then cf_deploy_app with the edited source. **Never regenerate from scratch on a modification — you will lose prior customization, break customer-facing endpoints, and corrupt working code the founder is depending on.** If cf_read_app_source returns null, you can treat as first-deploy.
-4. **Provision before deploy.** If the app needs a DB, call provision_database FIRST (returns Neon URL), then cf_deploy_app with with_neon_db: true.
-5. **Always verify.** Call cf_verify_founder_app after every deploy. Don't assume it worked.
-6. **"Completed" = feature actually works.** cf_verify_founder_app returning HTTP 200 is necessary but not sufficient. Did the thing the founder asked for actually do its job?
-7. **Source-of-truth = the deployed Worker.** Don't push to GitHub by default for CF deploys — script_content is what's running. EXCEPTIONS where you SHOULD push to GitHub: (a) the founder explicitly asks for code in a repo, (b) the task says "save code to GitHub" (trial expiry archival), (c) we're migrating a paid converter from CF → Render and need the repo as source. Otherwise skip the push.
-8. **Report honestly.** Tool calls you made, endpoints you exposed, env vars needed, AND any verification gaps you couldn't close.`,
+3. **Default deploy path for engineering tasks is Render.**
+   - **First deploy** (no Render service yet): create a company GitHub repo if missing, push a complete minimal app, call render_create_service with plan "free", then check deploy status and health.
+   - **Update** (render_service_id exists): read/list the GitHub repo, edit only what the task requires, push/commit, call render_deploy, then check deploy status and health.
+   - Do not create duplicate Render services. One company gets one trial Render service.
+4. **Provision before deploy.** If the app needs a DB, call provision_database FIRST, then pass DATABASE_URL/NEON_CONNECTION_STRING as a Render env var. The tool will replace masked DB URLs with the real company DB URL.
+5. **Always verify.** After Render deploy, call render_get_deploy_status and check_url_health for the company live URL. If a route was requested, health-check that route too.
+6. **"Completed" = feature actually works.** A successful deploy alone is not enough. Verify the feature behavior the founder asked for.
+7. **Report honestly.** Tool calls you made, URLs/endpoints you exposed, env vars needed, AND any verification gaps you couldn't close.`,
 
   29: `You are the Research Agent for Baljia AI. You analyze markets, competitors, and opportunities.
 
@@ -178,6 +191,19 @@ general training data points to Express/pg/SMTP — none of which work here.
 - Extract data from web pages
 - Account setup and verification
 - Web scraping and content extraction
+- Persistent site memory across tasks
+
+## Site Memory — read BEFORE you navigate
+Baljia accumulates per-site knowledge over time: working selectors, URL patterns, gotchas (CAPTCHAs, redirects, slow loads), notes on multi-step flows. Use this memory to avoid re-discovering the same site every task.
+
+1. Before \`browser_navigate\` to any site you have not interacted with in this task, call \`read_domain_skills(domain=...)\`. Treat returned skills as hints, not gospel — sites change.
+2. After a successful interaction, record what you learned with \`record_domain_skill\`. Examples:
+   - kind="selector", key="login_button", value="button[data-test=login-submit]"
+   - kind="url_pattern", key="dashboard_url", value="https://app.example.com/d/{user_id}"
+   - kind="trap", key="captcha_on_signup", value="hCaptcha appears AFTER email submit, not before"
+   - kind="wait", key="after_login", value="page reloads twice; wait for [data-loaded=true]"
+   - kind="note", key="signup_blocked_for_gmail", value="hunter.io rejects @gmail.com — use @baljia.app instead"
+3. Never record secrets in domain skills. Use \`save_credentials\` for usernames/passwords.
 
 ## Rules
 1. Check site tier before any action (Tier 1 = browse-only for social media)
@@ -911,6 +937,9 @@ async function handleToolCall(
           description: `[Agent #${agentId} task:${task.id}] ${toolInput.description as string}`,
           severity: (toolInput.severity as string) ?? 'medium',
           status: 'open',
+          source: 'agent',
+          area: 'task_execution',
+          metadata: { agent_id: agentId, task_id: task.id },
         });
         return `Bug reported: "${toolInput.title}". Platform team will investigate.`;
       } catch (err) {
@@ -928,6 +957,9 @@ async function handleToolCall(
           description: `[Agent #${agentId} task:${task.id}] ${toolInput.description as string}`,
           severity: 'low',
           status: 'open',
+          source: 'agent',
+          area: 'task_execution',
+          metadata: { agent_id: agentId, task_id: task.id },
         });
         return `Feature suggestion submitted: "${toolInput.title}".`;
       } catch (err) {
@@ -1205,11 +1237,11 @@ const ENGINEERING_TOOLS = new Set([
   'github_list_files', 'github_delete_file',
   'github_create_branch', 'github_create_pr',
   'github_search_code', 'github_create_commit',
-  // Cloudflare — Tier 1 static landing pages (R2)
-  'cf_deploy_landing', 'cf_verify_founder_app', 'cf_delete_founder_app',
-  // Cloudflare — Tier 2/3 full-stack apps (Workers + R2 + Neon bindings)
-  'cf_deploy_app', 'cf_get_app_info', 'cf_read_app_source', 'cf_delete_app',
-  'cf_get_logs',
+  // Render — primary founder app deploy target
+  'render_create_service', 'render_deploy', 'render_get_service',
+  'render_get_deploy_status', 'render_get_logs', 'render_rollback',
+  'render_delete_service', 'render_list_services', 'render_get_metrics',
+  'render_list_databases',
   // Company + domain
   'get_company_tech',
   'attach_custom_domain', 'verify_custom_domain',
@@ -1229,6 +1261,8 @@ const BROWSER_TOOLS = new Set([
   'generate_password', 'get_company_email', 'check_verification_inbox',
   'verify_credentials', 'list_stored_credentials',
   'get_or_create_browser_context', 'list_browser_contexts', 'delete_browser_context',
+  // Domain skills memory
+  'record_domain_skill', 'read_domain_skills',
 ]);
 
 const RESEARCH_TOOLS = new Set([
@@ -1352,27 +1386,43 @@ export async function runAgentLoop(input: AgentInput, config: AgentLoopConfig): 
     { name: 'openai',     available: isOpenAIAvailable,     run: () => runWithOpenAI(systemPrompt, tools, task, agentId, watchdog, logEntries, oaiModel) },
     { name: 'anthropic',  available: isAnthropicAvailable,  run: () => runWithClaude(systemPrompt, tools, task, agentId, watchdog, logEntries, claudeModel) },
     { name: 'openrouter', available: isOpenRouterAvailable, run: () => runWithOpenRouter(systemPrompt, tools, task, agentId, watchdog, logEntries, orModel) },
-    { name: 'gemini',     available: () => true,            run: () => runWithGemini(systemPrompt, tools, task, agentId, watchdog, logEntries, gemModel) },
+    { name: 'gemini',     available: isGeminiAvailable,     run: () => runWithGemini(systemPrompt, tools, task, agentId, watchdog, logEntries, gemModel) },
   ];
 
   // Sort by preferred provider order
   const preferred = getPreferredProvider();
-  const sorted = [
-    providers.find(p => p.name === preferred)!,
-    ...providers.filter(p => p.name !== preferred),
-  ];
+  const preferredProvider = providers.find(p => p.name === preferred);
+  const sorted = preferredProvider
+    ? [preferredProvider, ...providers.filter(p => p.name !== preferred)]
+    : providers;
 
   let lastError: unknown;
+  const providerFailures: string[] = [];
   for (const p of sorted) {
     if (!p.available()) continue;
+    const logCountBeforeProvider = logEntries.length;
     try {
       return await p.run();
     } catch (err) {
-      log.warn(`${p.name} failed, trying next provider`, { taskId: task.id });
+      const message = err instanceof Error ? err.message : String(err);
+      providerFailures.push(`${p.name}: ${message}`);
+      if (logEntries.length > logCountBeforeProvider) {
+        pushLog(logEntries, {
+          event: 'provider_failed_after_progress',
+          provider: p.name,
+          error: message,
+        });
+        throw err;
+      }
+      log.warn(`${p.name} failed, trying next provider`, { taskId: task.id, error: message.slice(0, 300) });
       lastError = err;
     }
   }
-  throw lastError ?? new Error('All LLM providers failed');
+
+  if (providerFailures.length > 0) {
+    throw new Error(`All available LLM providers failed: ${providerFailures.join(' | ')}`);
+  }
+  throw lastError ?? new Error('No LLM provider available');
 }
 
 /**
@@ -1410,18 +1460,21 @@ async function runWithClaude(
   log_entries: Record<string, unknown>[],
   modelId: string = CLAUDE_MODEL_SONNET,
 ): Promise<AgentResult> {
-  let anthropic: Anthropic;
+  let anthropic: Anthropic | null = null;
   let isOAuth = false;
   // Order: Claude Code OAuth → direct API key → Bedrock API key → Bedrock IAM.
   // OAuth piggybacks on the operator's Pro/Max subscription; preferred in
   // dev (no extra creds) and in prod (no per-call billing surprise).
   if (isAnthropicOAuthAvailable()) {
-    const oauthClient = createAnthropicWithOAuth();
-    anthropic = oauthClient.client;
-    isOAuth = oauthClient.isOAuth;
-  } else if (isDirectAnthropicAvailable()) {
+    const oauthClient = await createAnthropicWithOAuthAsync();
+    if (oauthClient.isOAuth) {
+      anthropic = oauthClient.client;
+      isOAuth = true;
+    }
+  }
+  if (!anthropic && isDirectAnthropicAvailable()) {
     anthropic = new Anthropic();
-  } else if (isBedrockAvailable()) {
+  } else if (!anthropic && isBedrockAvailable()) {
     const AnthropicBedrock = require('@anthropic-ai/bedrock-sdk').default;
     const region = process.env.AWS_BEDROCK_REGION || process.env.AWS_REGION || 'us-east-1';
     const apiKey = process.env.AWS_BEDROCK_API_KEY;
@@ -1438,9 +1491,11 @@ async function runWithClaude(
     }
     if (modelId === CLAUDE_MODEL_SONNET) modelId = process.env.AWS_BEDROCK_MODEL_ID || 'us.anthropic.claude-sonnet-4-20250514-v1:0';
     if (modelId === CLAUDE_MODEL_HAIKU) modelId = process.env.AWS_BEDROCK_HAIKU_MODEL_ID || 'us.anthropic.claude-haiku-4-5-20251001-v1:0';
-  } else {
+  } else if (!anthropic) {
     anthropic = new Anthropic();
   }
+  if (!anthropic) throw new Error('Anthropic client unavailable');
+
   const messages: Anthropic.MessageParam[] = [
     { role: 'user', content: `Execute the task described in your briefing. Begin.` },
   ];
@@ -1460,14 +1515,14 @@ async function runWithClaude(
       anthropic,
       {
         model: modelId,
-        max_tokens: 4096,
+        max_tokens: getAgentMaxTokens(agentId),
         // OAuth path requires the Claude Code identity prefix as the first
         // system text block; non-OAuth path passes the prompt as-is.
         system: withClaudeCodeIdentity(systemPrompt, isOAuth) as Anthropic.MessageCreateParams['system'],
         tools: tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.input_schema })),
         messages,
       },
-      { label: `agent_turn_${turnCount + 1}` }
+      { label: `agent_turn_${turnCount + 1}`, timeoutMs: getAgentCallTimeoutMs(agentId) }
     ) as Anthropic.Message;
 
     turnCount++;
@@ -1593,12 +1648,15 @@ async function runWithOpenAI(
       break;
     }
 
-    const response = await client.chat.completions.create({
-      model: modelId,
-      messages: messages as Parameters<typeof client.chat.completions.create>[0]['messages'],
-      tools: openaiTools,
-      max_tokens: 4096,
-    });
+    const response = await client.chat.completions.create(
+      {
+        model: modelId,
+        messages: messages as Parameters<typeof client.chat.completions.create>[0]['messages'],
+        tools: openaiTools,
+        max_tokens: getAgentMaxTokens(agentId),
+      },
+      { timeout: getAgentCallTimeoutMs(agentId) }
+    );
 
     turnCount++;
 
@@ -1688,8 +1746,9 @@ async function runWithCodex(
       systemPrompt,
       messages,
       tools: codexTools,
-      maxTokens: 4096,
+      maxTokens: getAgentMaxTokens(agentId),
       reasoning: 'medium',
+      signal: AbortSignal.timeout(getAgentCallTimeoutMs(agentId)),
     });
 
     turnCount++;
@@ -1796,7 +1855,7 @@ async function runWithGemini(
     // G-LLM-001: Timeout + retry on Gemini API calls
     const result = await callGeminiWithTimeout(
       () => chat.sendMessage(currentMessage),
-      { label: `gemini_turn_${turnCount + 1}` }
+      { label: `gemini_turn_${turnCount + 1}`, timeoutMs: getAgentCallTimeoutMs(agentId) }
     ) as { response: { candidates?: Array<{ content?: { parts?: Array<Record<string, unknown>> } }>; text: () => string } };
     turnCount++;
 
@@ -1918,12 +1977,12 @@ async function runWithOpenRouter(
             model: modelId,
             messages: messages as Parameters<typeof client.chat.completions.create>[0]['messages'],
             tools: openaiTools,
-            max_tokens: 4096,
+            max_tokens: getAgentMaxTokens(agentId),
           },
           { signal }
         );
       },
-      { label: `openrouter_${modelId}_turn_${turnCount + 1}` }
+      { label: `openrouter_${modelId}_turn_${turnCount + 1}`, timeoutMs: getAgentCallTimeoutMs(agentId) }
     ) as { choices: Array<{ message: { role: string; content?: string | null; tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }> } }> };
 
     turnCount++;
