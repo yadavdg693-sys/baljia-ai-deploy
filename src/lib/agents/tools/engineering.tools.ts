@@ -1,14 +1,9 @@
-// Engineering Agent Tools — GitHub + Cloudflare deployment (Agent #30)
+// Engineering Agent Tools Ã¢â‚¬â€ GitHub + Render deployment (Agent #30)
 // Enables the Engineering agent to push code and deploy founder apps.
 //
-// Deploy target (per ADR-002 split-hosting strategy):
-//   • Cloudflare Workers + R2   — founder apps at *.baljia.app
-//                                  Tier 1 (static landing)   → cf_deploy_landing
-//                                  Tier 2/3 (full-stack app) → cf_deploy_app
-//   • GitHub                    — platform-owned org, one repo per company
-//
-// Render deploy tools were removed from this agent in the CF-full migration.
-// Render is now ONLY used by the platform itself (baljia.ai), not by founder apps.
+// Deploy target:
+//   Ã¢â‚¬Â¢ GitHub                    Ã¢â‚¬â€ platform-owned org, one repo per company
+//   Ã¢â‚¬Â¢ Render                    Ã¢â‚¬â€ founder app web services, default free plan for trials
 
 import type { Task } from '@/types';
 import { db, companies } from '@/lib/db';
@@ -17,21 +12,6 @@ import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { provisionSubdomain, attachCustomDomain, verifyCustomDomain } from '@/lib/services/domain.service';
 import { provisionCompanyDatabase, getCompanyDatabase, createBranch, deleteBranch } from '@/lib/services/neon.service';
-import {
-  uploadLandingHtml,
-  landingHtmlExists,
-  deleteLandingHtml,
-  verifyFounderAppLive,
-  isCloudflareDeployConfigured,
-  deployWorkerScript,
-  deleteWorkerScript,
-  addWorkerRoute,
-  putWorkerSecret,
-  getWorkerScriptInfo,
-  getWorkerScriptSource,
-  getWorkerLogs,
-  type WorkerBinding,
-} from '@/lib/services/cf-deploy.service';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('EngineeringTools');
@@ -39,15 +19,21 @@ const log = createLogger('EngineeringTools');
 const GITHUB_API = 'https://api.github.com';
 const RENDER_API = 'https://api.render.com/v1';
 
-// ══════════════════════════════════════════════
-// TOOL DEFINITIONS
-// ══════════════════════════════════════════════
+type EngineeringToolDefinition = {
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+};
 
-export function getEngineeringTools() {
-  return [
+// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+// TOOL DEFINITIONS
+// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+
+export function getEngineeringTools(): EngineeringToolDefinition[] {
+  const tools: EngineeringToolDefinition[] = [
     {
       name: 'list_skills',
-      description: 'List the skill files available in .claude/skills/. Returns one line per skill with a 1-sentence summary. Read the relevant skill via read_skill BEFORE writing code in that domain — the skills capture stack-specific patterns and anti-patterns the LLM\'s training data is missing or wrong about.',
+      description: 'List the skill files available in .claude/skills/. Returns one line per skill with a 1-sentence summary. Read the relevant skill via read_skill BEFORE writing code in that domain Ã¢â‚¬â€ the skills capture stack-specific patterns and anti-patterns the LLM\'s training data is missing or wrong about.',
       input_schema: {
         type: 'object' as const,
         properties: {},
@@ -55,13 +41,13 @@ export function getEngineeringTools() {
     },
     {
       name: 'read_skill',
-      description: 'Read the full SKILL.md for a named skill. MANDATORY before writing code that touches the skill\'s domain. Skill files describe what works on Cloudflare Workers, what frameworks DON\'T work, code shapes you should match, and anti-patterns the LLM\'s training data tends to suggest but break in production.',
+      description: 'Read the full SKILL.md for a named skill. MANDATORY before writing code that touches the skill\'s domain. Skill files describe deployment/runtime patterns, code shapes you should match, and anti-patterns the LLM\'s training data tends to suggest but break in production.',
       input_schema: {
         type: 'object' as const,
         properties: {
           skill: {
             type: 'string' as const,
-            description: 'Skill name (kebab-case directory under .claude/skills/). E.g. "cloudflare-workers", "neon-postgres", "frontend-design", "stripe-payments", "r2-storage", "email-postmark"',
+            description: 'Skill name (kebab-case directory under .claude/skills/). E.g. "neon-postgres", "frontend-design", "stripe-payments", "r2-storage", "email-postmark", "agent-sdk"',
           },
         },
         required: ['skill'],
@@ -135,110 +121,135 @@ export function getEngineeringTools() {
         required: ['repo', 'path', 'message'],
       },
     },
-    // ──────────────────────────────────────────────
-    // CLOUDFLARE WORKERS + R2 — Primary deploy target for founder apps (ADR-002)
-    // Subdomain is ALWAYS resolved from the calling task's company.subdomain.
-    // There is NO override parameter — this is intentional tenant isolation.
-    // ──────────────────────────────────────────────
+    // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+    // RENDER WEB SERVICES Ã¢â‚¬â€ Primary deploy target for founder engineering tasks.
+    // First deploy: push code to GitHub, then create a free Render web service.
+    // Updates: push to the existing repo/service and trigger a deploy.
+    // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
     {
-      name: 'cf_deploy_landing',
-      description: 'PRIMARY: Deploy a founder landing page to Cloudflare at {subdomain}.baljia.app. Uploads HTML to R2; the wildcard Worker serves it. Fast (≤3s), idempotent, no GitHub needed. Subdomain is derived from your company record — you cannot deploy to another company. Use this instead of render_create_service for any new founder-app landing deploy.',
+      name: 'render_create_service',
+      description: 'PRIMARY FIRST-DEPLOY TOOL for founder engineering tasks. Creates a Git-backed Render web service for this company, defaults to the free plan, saves render_service_id, attaches the company baljia.app subdomain, and starts the initial deploy. Use after pushing working app code to the company GitHub repo. Do not create duplicates: call get_company_tech first and use render_deploy if a service already exists.',
       input_schema: {
         type: 'object' as const,
         properties: {
-          html: { type: 'string' as const, description: 'Full HTML content of the landing page (UTF-8). Include <html>, <head>, <body>. Max 5 MB.' },
-        },
-        required: ['html'],
-      },
-    },
-    {
-      name: 'cf_verify_founder_app',
-      description: 'Verify this company\'s founder app is live by HTTP GET against its configured subdomain. Returns status, elapsed ms, body snippet. Use after cf_deploy_landing to confirm live, or during diagnostics.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {},
-      },
-    },
-    {
-      name: 'cf_delete_founder_app',
-      description: 'Remove THIS company\'s founder app from Cloudflare (deletes R2 asset). Use for teardown. Idempotent — succeeds even if asset is already gone.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {},
-      },
-    },
-    {
-      name: 'cf_deploy_app',
-      description: 'TIER 2/3 APPS: Deploy or redeploy a full-stack founder app (Express-style API, SSR pages, etc.) as a Cloudflare Worker at {subdomain}.baljia.app. Idempotent — the same call works for first deploy and for shipping updates/bug fixes (the script is replaced atomically). Takes a complete ES-module JS source that exports default { fetch(request, env, ctx) }. Automatically: uploads the script, registers a per-subdomain route (overrides wildcard for this founder), injects the company Neon DB URL as NEON_URL secret if with_neon_db=true, binds the R2 ASSETS bucket if with_r2_assets=true. Use THIS instead of cf_deploy_landing when the app has dynamic logic, DB reads/writes, or API endpoints. Max script size 10 MB gzipped.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          script_content: {
-            type: 'string' as const,
-            description: 'Complete ES-module JavaScript source. Must export default an object with a fetch(request, env, ctx) handler. Can use fetch(), URL, Response, Request, and Node APIs (nodejs_compat enabled: Buffer, crypto, etc.). Access bindings via env.NEON_URL (if with_neon_db), env.ASSETS (if with_r2_assets), env.<custom> for additional_secrets.',
-          },
-          with_neon_db: {
-            type: 'boolean' as const,
-            description: 'Inject the company\'s Neon connection string as env.NEON_URL secret. Set true for apps with a database. Requires provision_database to have run first.',
-          },
-          with_r2_assets: {
-            type: 'boolean' as const,
-            description: 'Bind the R2 assets bucket so the Worker can read static files via env.ASSETS.get(key). Set true if the app serves images, CSS, etc. from R2.',
-          },
-          additional_secrets: {
-            type: 'object' as const,
-            description: 'Extra per-founder secrets to inject (e.g. { "STRIPE_KEY": "sk_...", "OPENAI_KEY": "sk-..." }). Each becomes env.<NAME> inside the Worker. Values are masked in CF logs.',
-            additionalProperties: { type: 'string' as const },
-          },
-        },
-        required: ['script_content'],
-      },
-    },
-    {
-      name: 'cf_get_app_info',
-      description: 'Get deployment info for this company\'s Tier 2/3 app (deploy status, etag, last modified). Does NOT return the source code. Returns null if no app is deployed.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {},
-      },
-    },
-    {
-      name: 'cf_read_app_source',
-      description: 'CRITICAL FOR MODIFICATIONS: Fetch the CURRENT deployed Worker source code (the JS) from Cloudflare. ALWAYS call this BEFORE editing an existing app — otherwise you have to regenerate from scratch and risk losing prior customization. Returns the full ES-module source, etag, and byte count. Returns null if no app is deployed for this company. After reading, edit in your context, then call cf_deploy_app with the modified script_content. Idempotent and safe — read-only operation.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {},
-      },
-    },
-    {
-      name: 'cf_delete_app',
-      description: 'TIER 2/3: Fully remove this company\'s Worker script + route from Cloudflare. Use for teardown. The Tier 1 landing HTML in R2 is NOT deleted by this tool (use cf_delete_founder_app for that). Idempotent.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {},
-      },
-    },
-    {
-      name: 'cf_get_logs',
-      description: 'Get Cloudflare Worker invocation logs for THIS company\'s Tier 2/3 founder app. Returns minute-bucketed counts of requests grouped by HTTP status (200, 404, 500, etc.) and outcome (ok, exception, exceededCpu, scriptThrew, canceled). Use when an app is failing health probes or returning errors — this shows WHEN errors started and WHAT outcome (e.g. exception vs status 500 vs CPU exceeded). Only works for apps deployed via cf_deploy_app — Tier 1 landing pages (cf_deploy_landing) ride the wildcard Worker and do not have per-founder logs. Returns null with a helpful message in those cases.',
-      input_schema: {
-        type: 'object' as const,
-        properties: {
-          since_minutes: {
-            type: 'number' as const,
-            description: 'Lookback window in minutes (default 60, max 1440 = 24h).',
-          },
-          limit: {
-            type: 'number' as const,
-            description: 'Max rows returned (default 100, hard max 500). Each row is one (minute, status, outcome) bucket.',
-          },
-          errors_only: {
-            type: 'boolean' as const,
-            description: 'When true, filter the response to only buckets where outcome != "ok" or status >= 400. Useful when debugging.',
+          repo: { type: 'string' as const, description: 'Company GitHub repo name or owner/repo. Defaults to the company repo if already set.' },
+          name: { type: 'string' as const, description: 'Optional Render service name. Defaults to the company slug so the trial subdomain stays predictable.' },
+          type: { type: 'string' as const, enum: ['web_service', 'static_site'], description: 'Render service type. Use web_service for founder apps.' },
+          plan: { type: 'string' as const, description: 'Render instance plan. Defaults to free for trial founder apps.' },
+          build_command: { type: 'string' as const, description: 'Build command, e.g. npm install && npm run build.' },
+          start_command: { type: 'string' as const, description: 'Start command, e.g. npm start.' },
+          env_vars: {
+            type: 'array' as const,
+            description: 'Environment variables for Render.',
+            items: {
+              type: 'object' as const,
+              properties: {
+                key: { type: 'string' as const },
+                value: { type: 'string' as const },
+              },
+              required: ['key', 'value'],
+            },
           },
         },
       },
     },
+    {
+      name: 'render_deploy',
+      description: 'Trigger a deploy on this company Render service after pushing code to GitHub. Use for updates when render_service_id already exists.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          service_id: { type: 'string' as const, description: 'Render service ID from get_company_tech or render_create_service.' },
+          clear_cache: { type: 'boolean' as const, description: 'Set true only when dependency/cache issues are suspected.' },
+        },
+      },
+    },
+    {
+      name: 'render_get_service',
+      description: 'Inspect this company Render service and its public URL/status.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          service_id: { type: 'string' as const, description: 'Render service ID.' },
+        },
+      },
+    },
+    {
+      name: 'render_get_deploy_status',
+      description: 'Get the latest deploy status for this company Render service.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          service_id: { type: 'string' as const, description: 'Render service ID.' },
+        },
+      },
+    },
+    {
+      name: 'render_get_logs',
+      description: 'Fetch Render deploy/runtime logs for this company service when a deploy or app is failing.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          service_id: { type: 'string' as const, description: 'Render service ID.' },
+          log_type: { type: 'string' as const, enum: ['service', 'deploy'], description: 'service for runtime logs, deploy for latest deploy logs.' },
+          num_lines: { type: 'number' as const, description: 'Number of log lines, 10-500.' },
+        },
+      },
+    },
+    {
+      name: 'render_rollback',
+      description: 'Trigger a new deploy from the last known-good Render deploy when the current deploy breaks.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          service_id: { type: 'string' as const, description: 'Render service ID.' },
+        },
+      },
+    },
+    {
+      name: 'render_delete_service',
+      description: 'Dangerous teardown tool: delete this company Render service. Requires confirm=true.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          service_id: { type: 'string' as const, description: 'Render service ID.' },
+          confirm: { type: 'boolean' as const, description: 'Must be true to delete.' },
+        },
+        required: ['confirm'],
+      },
+    },
+    {
+      name: 'render_list_services',
+      description: 'List recent Render services in the platform workspace. Use only for diagnostics.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          limit: { type: 'number' as const, description: 'Max services to return.' },
+        },
+      },
+    },
+    {
+      name: 'render_get_metrics',
+      description: 'Get Render service metrics if available on the plan. Useful for debugging paid services.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          service_id: { type: 'string' as const, description: 'Render service ID.' },
+          resolution: { type: 'string' as const, description: 'Metric resolution, e.g. 1h.' },
+        },
+      },
+    },
+    {
+      name: 'render_list_databases',
+      description: 'List Render Postgres databases. Founder product data should normally use Neon; this is diagnostics only.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          limit: { type: 'number' as const, description: 'Max databases to return.' },
+        },
+      },
+    },
+    // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
     {
       name: 'get_company_tech',
       description: 'Get the current tech setup for this company: GitHub repo, Render service, Neon DB.',
@@ -266,7 +277,7 @@ export function getEngineeringTools() {
         properties: {},
       },
     },
-    // ── Health & safety ──
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Health & safety Ã¢â€â‚¬Ã¢â€â‚¬
     {
       name: 'check_url_health',
       description: 'Check if a deployed URL is live and returning successful responses. Call this after every deploy to verify the app is actually running.',
@@ -278,7 +289,7 @@ export function getEngineeringTools() {
         required: ['url'],
       },
     },
-    // ── Database Infrastructure (Neon Postgres) ──
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Database Infrastructure (Neon Postgres) Ã¢â€â‚¬Ã¢â€â‚¬
     {
       name: 'provision_database',
       description: 'Create a new Neon Postgres database for the founder\'s product. Call this when building a SaaS that needs user data, auth, or any persistent storage. Returns connection details. One database per company.',
@@ -318,7 +329,7 @@ export function getEngineeringTools() {
         required: ['sql'],
       },
     },
-    // ── Stripe Payments (Founder's Product) ──
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Stripe Payments (Founder's Product) Ã¢â€â‚¬Ã¢â€â‚¬
     {
       name: 'stripe_create_product',
       description: 'Create a Stripe product for the founder\'s SaaS. This is a product in THEIR payment system, not Baljia\'s. Returns a product ID to use with stripe_create_price.',
@@ -365,7 +376,7 @@ export function getEngineeringTools() {
         properties: {},
       },
     },
-    // ── GitHub: branching + PR (KG spec: create_branch, create_commit, create_pr) ──
+    // Ã¢â€â‚¬Ã¢â€â‚¬ GitHub: branching + PR (KG spec: create_branch, create_commit, create_pr) Ã¢â€â‚¬Ã¢â€â‚¬
     {
       name: 'github_create_branch',
       description: 'Create a new branch in a GitHub repository from a base branch. Use this to isolate changes before merging.',
@@ -394,7 +405,7 @@ export function getEngineeringTools() {
         required: ['repo', 'title', 'head_branch'],
       },
     },
-    // ── GitHub: search + commit (completing KG github spec) ──
+    // Ã¢â€â‚¬Ã¢â€â‚¬ GitHub: search + commit (completing KG github spec) Ã¢â€â‚¬Ã¢â€â‚¬
     {
       name: 'github_search_code',
       description: 'Search for code in a GitHub repository. Useful to find existing implementations before writing new code.',
@@ -403,7 +414,7 @@ export function getEngineeringTools() {
         properties: {
           repo: { type: 'string' as const, description: 'Repository name' },
           query: { type: 'string' as const, description: 'Search query (e.g. "function handleAuth" or "TODO:" or "stripe webhook")' },
-          language: { type: 'string' as const, description: 'Filter by language (e.g. "TypeScript", "JavaScript") — optional' },
+          language: { type: 'string' as const, description: 'Filter by language (e.g. "TypeScript", "JavaScript") Ã¢â‚¬â€ optional' },
         },
         required: ['repo', 'query'],
       },
@@ -433,21 +444,96 @@ export function getEngineeringTools() {
         required: ['repo', 'message', 'files'],
       },
     },
-    // ── Render: list_databases (completing KG render spec) ──
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Render: list_databases (completing KG render spec) Ã¢â€â‚¬Ã¢â€â‚¬
+
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Skeleton / Next.js SaaS build tools Ã¢â€â‚¬Ã¢â€â‚¬
+    {
+      name: 'github_fork_skeleton',
+      description: 'Fork the Baljia Next.js SaaS skeleton into the company GitHub repo. This copies the full production-ready skeleton (Better Auth, Drizzle, Neon, AI gateway, Stripe, Shadcn/ui, Tailwind 4) into the founder\'s repo. Call this FIRST when building any full-stack SaaS Ã¢â‚¬â€ do not write Express or plain HTML from scratch. After forking, use github_push_file or github_create_commit to patch in feature-specific code.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          repo: { type: 'string' as const, description: 'Company repo slug (e.g. "genesis-advertising-hen6"). The skeleton will be forked into this repo.' },
+          description: { type: 'string' as const, description: 'Short description of the app being built (used as repo description).' },
+        },
+        required: ['repo'],
+      },
+    },
+    {
+      name: 'run_drizzle_push',
+      description: 'Run `pnpm db:push` to sync the Drizzle schema in db/schema.ts to the company Neon Postgres database. Use this INSTEAD of run_migration for skeleton-based Next.js apps Ã¢â‚¬â€ Drizzle introspects the schema file and creates/alters tables automatically. Returns the list of tables created or updated.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          repo: { type: 'string' as const, description: 'Company repo slug (must have db/schema.ts with Drizzle schema).' },
+        },
+        required: ['repo'],
+      },
+    },
+    // -- Atomic instance provisioning --
+    {
+      name: 'create_instance',
+      description: 'Atomic tool that does everything needed to launch a new full-stack SaaS in one call: forks the Next.js skeleton, provisions a Neon database, creates a Render web service, and saves the company tech record. Call this FIRST for any full-stack SaaS build instead of calling github_fork_skeleton + provision_database + render_create_service separately. Returns repo URL, database connection string, service URL, and next steps.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          app_name: { type: 'string' as const, description: 'Short app name used for repo slug and Render service name (e.g. "acme-crm").' },
+          description: { type: 'string' as const, description: 'One-line description of what the app does.' },
+          env_vars: {
+            type: 'object' as const,
+            description: 'Additional environment variables to set on Render (beyond DATABASE_URL, BETTER_AUTH_SECRET, AI_GATEWAY_URL which are set automatically).',
+            additionalProperties: { type: 'string' as const },
+          },
+        },
+        required: ['app_name', 'description'],
+      },
+    },
+    {
+      name: 'get_preview',
+      description: 'Get the live preview URL for the company Render service. Returns the public URL where the app is accessible. Use this after a deploy to confirm where the app lives.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {},
+      },
+    },
   ];
+
+  return tools;
 }
 
-// ══════════════════════════════════════════════
+// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
 // HANDLERS
-// ══════════════════════════════════════════════
+// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
 
-// C7-FIX: Tenant isolation helpers — verify infrastructure belongs to the requesting company
+// C7-FIX: Tenant isolation helpers Ã¢â‚¬â€ verify infrastructure belongs to the requesting company
 async function assertServiceOwnership(serviceId: string, companyId: string): Promise<void> {
   const [company] = await db.select({ render_service_id: companies.render_service_id })
     .from(companies).where(eq(companies.id, companyId)).limit(1);
   if (!company || company.render_service_id !== serviceId) {
-    throw new Error(`Service ${serviceId} does not belong to this company. Cross-tenant access denied.`);
+    const actual = company?.render_service_id ?? 'none stored';
+    throw new Error(
+      `render_deploy/render_* called with service_id "${serviceId}" but this company's service is "${actual}". ` +
+      `Either pass the correct service_id or omit it entirely (it auto-resolves from the company).`
+    );
   }
+}
+
+// Auto-resolve render service_id from the task's company. Eliminates the
+// LLM-hallucinates-an-opaque-token failure mode (e.g. mistyping "d7tjghr"
+// for "d7tjgrr"). If the agent passed a service_id, validate it; if not,
+// look up the company's stored ID and mutate input.service_id so downstream
+// handlers see the resolved value.
+async function resolveServiceId(input: Record<string, unknown>, companyId: string): Promise<void> {
+  if (typeof input.service_id === 'string' && input.service_id.length > 0) {
+    await assertServiceOwnership(input.service_id, companyId);
+    return;
+  }
+  const [company] = await db.select({ render_service_id: companies.render_service_id })
+    .from(companies).where(eq(companies.id, companyId)).limit(1);
+  if (!company?.render_service_id) {
+    throw new Error('No render_service_id stored for this company. Call render_create_service first.');
+  }
+  input.service_id = company.render_service_id;
 }
 
 async function assertRepoOwnership(repo: string, companyId: string): Promise<void> {
@@ -466,7 +552,7 @@ export async function handleEngineeringTool(
   task: Task,
 ): Promise<string> {
   switch (toolName) {
-    // ── Skills (Polsia-style knowledge layer) ──
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Skills (Polsia-style knowledge layer) Ã¢â€â‚¬Ã¢â€â‚¬
     case 'list_skills':
       return handleListSkills();
 
@@ -491,30 +577,50 @@ export async function handleEngineeringTool(
     case 'github_delete_file':
       return githubDeleteFile(input, task.company_id);
 
-    // ── Cloudflare deploys (sole deploy target for founder apps — ADR-002) ──
-    case 'cf_deploy_landing':
-      return cfDeployLanding(input, task.company_id);
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Render deploys (primary founder app target) Ã¢â€â‚¬Ã¢â€â‚¬
+    case 'render_create_service':
+      return renderCreateService(input, task.company_id);
 
-    case 'cf_verify_founder_app':
-      return cfVerifyFounderApp(input, task.company_id);
+    case 'render_deploy': {
+      await resolveServiceId(input, task.company_id);
+      return renderDeploy(input, task.company_id);
+    }
 
-    case 'cf_delete_founder_app':
-      return cfDeleteFounderApp(input, task.company_id);
+    case 'render_get_service': {
+      await resolveServiceId(input, task.company_id);
+      return renderGetService(input);
+    }
 
-    case 'cf_deploy_app':
-      return cfDeployApp(input, task.company_id);
+    case 'render_get_deploy_status': {
+      await resolveServiceId(input, task.company_id);
+      return renderGetDeployStatus(input);
+    }
 
-    case 'cf_get_app_info':
-      return cfGetAppInfo(input, task.company_id);
+    case 'render_get_logs': {
+      await resolveServiceId(input, task.company_id);
+      return renderGetLogs(input);
+    }
 
-    case 'cf_read_app_source':
-      return cfReadAppSource(input, task.company_id);
+    case 'render_rollback': {
+      await resolveServiceId(input, task.company_id);
+      return handleRenderRollback(input);
+    }
 
-    case 'cf_delete_app':
-      return cfDeleteApp(input, task.company_id);
+    case 'render_delete_service': {
+      await resolveServiceId(input, task.company_id);
+      return renderDeleteService(input, task.company_id);
+    }
 
-    case 'cf_get_logs':
-      return cfGetLogs(input, task.company_id);
+    case 'render_list_services':
+      return renderListServices(input);
+
+    case 'render_get_metrics': {
+      await resolveServiceId(input, task.company_id);
+      return renderGetMetrics(input);
+    }
+
+    case 'render_list_databases':
+      return renderListDatabases(input);
 
     case 'attach_custom_domain':
       return handleAttachCustomDomain(input, task.company_id);
@@ -522,11 +628,11 @@ export async function handleEngineeringTool(
     case 'verify_custom_domain':
       return handleVerifyCustomDomain(task.company_id);
 
-    // ── Health & safety ──
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Health & safety Ã¢â€â‚¬Ã¢â€â‚¬
     case 'check_url_health':
       return handleCheckUrlHealth(input);
 
-    // ── Database Infrastructure ──
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Database Infrastructure Ã¢â€â‚¬Ã¢â€â‚¬
     case 'provision_database':
       return handleProvisionDatabase(task.company_id);
 
@@ -539,7 +645,7 @@ export async function handleEngineeringTool(
     case 'query_company_db':
       return handleQueryCompanyDb(input, task.company_id);
 
-    // ── Stripe Payments ──
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Stripe Payments Ã¢â€â‚¬Ã¢â€â‚¬
     case 'stripe_create_product':
       return handleStripeCreateProduct(input, task.company_id);
 
@@ -552,7 +658,7 @@ export async function handleEngineeringTool(
     case 'stripe_get_products':
       return handleStripeGetProducts(task.company_id);
 
-    // ── GitHub branching + PR ──
+    // Ã¢â€â‚¬Ã¢â€â‚¬ GitHub branching + PR Ã¢â€â‚¬Ã¢â€â‚¬
     case 'github_create_branch':
       return githubCreateBranch(input, task.company_id);
 
@@ -565,12 +671,26 @@ export async function handleEngineeringTool(
     case 'github_create_commit':
       return githubCreateCommit(input, task.company_id);
 
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Skeleton / Next.js SaaS build tools Ã¢â€â‚¬Ã¢â€â‚¬
+    case 'github_fork_skeleton':
+      return githubForkSkeleton(input, task.company_id);
+
+    case 'run_drizzle_push':
+      return handleRunDrizzlePush(input, task.company_id);
+
+    // -- Atomic instance creation --
+    case 'create_instance':
+      return handleCreateInstance(input, task.company_id);
+
+    case 'get_preview':
+      return handleGetPreview(task.company_id);
+
     default:
       return `Unknown engineering tool: ${toolName}`;
   }
 }
 
-// ── GitHub helpers ──
+// Ã¢â€â‚¬Ã¢â€â‚¬ GitHub helpers Ã¢â€â‚¬Ã¢â€â‚¬
 
 function githubHeaders() {
   const token = process.env.GITHUB_TOKEN;
@@ -584,7 +704,7 @@ function githubHeaders() {
 }
 
 function githubOrg() {
-  return process.env.GITHUB_ORG ?? 'baljia-ai';
+  return process.env.GITHUB_ORG ?? 'BALAJIapps';
 }
 
 function resolveRepo(repoInput: string): string {
@@ -728,7 +848,7 @@ async function githubListFiles(input: Record<string, unknown>, _companyId: strin
       return `GitHub list failed: ${err}`;
     }
 
-    const files = data.map((f) => `${f.type === 'dir' ? '📁' : '📄'} ${f.path}`).join('\n');
+    const files = data.map((f) => `${f.type === 'dir' ? 'Ã°Å¸â€œÂ' : 'Ã°Å¸â€œâ€ž'} ${f.path}`).join('\n');
     return files.length ? files : 'Directory is empty';
   } catch (err) {
     return `GitHub list error: ${err instanceof Error ? err.message : 'Unknown error'}`;
@@ -765,7 +885,7 @@ async function githubDeleteFile(input: Record<string, unknown>, _companyId: stri
   }
 }
 
-// ── Render helpers ──
+// Ã¢â€â‚¬Ã¢â€â‚¬ Render helpers Ã¢â€â‚¬Ã¢â€â‚¬
 
 function renderHeaders() {
   const token = process.env.RENDER_API_KEY;
@@ -777,12 +897,37 @@ function renderHeaders() {
   };
 }
 
+function normalizeRenderServiceName(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 63) || `baljia-app-${Date.now()}`;
+}
+
 async function renderCreateService(input: Record<string, unknown>, companyId: string): Promise<string> {
   try {
     const headers = renderHeaders();
-    const org = githubOrg();
-    const repo = input.repo as string;
+    if (!process.env.RENDER_OWNER_ID) {
+      return 'Render service creation failed: RENDER_OWNER_ID not configured.';
+    }
+
+    const [company] = await db.select({
+      slug: companies.slug,
+      name: companies.name,
+      github_repo: companies.github_repo,
+    }).from(companies).where(eq(companies.id, companyId)).limit(1);
+
+    if (!company) return 'Company not found';
+
+    const repoInput = (input.repo as string | undefined) ?? company.github_repo ?? '';
+    if (!repoInput) return 'Render service creation failed: no company GitHub repo. Create/push the repo first.';
+    const repo = resolveRepo(repoInput);
+    await assertRepoOwnership(repo, companyId);
+
+      const serviceName = normalizeRenderServiceName(company.slug ?? (input.name as string | undefined) ?? company.name);
     const type = (input.type as string) === 'static_site' ? 'static_site' : 'web_service';
+    const plan = (input.plan as string | undefined) ?? 'free';
 
     const envVars = (input.env_vars as Array<{ key: string; value: string }> | undefined) ?? [];
 
@@ -796,31 +941,67 @@ async function renderCreateService(input: Record<string, unknown>, companyId: st
       }
     }
 
-    const body: Record<string, unknown> = {
+    const baseBody: Record<string, unknown> = {
       type,
-      name: input.name as string,
+      name: serviceName,
       ownerId: process.env.RENDER_OWNER_ID,
-      repo: `https://github.com/${org}/${repo}`,
+      repo: `https://github.com/${repo}`,
       branch: 'main',
       autoDeploy: 'yes',
-      envVars,
     };
 
+    const buildCommand = (input.build_command as string | undefined) ?? 'npm install && npm run build';
+    const startCommand = (input.start_command as string | undefined) ?? 'npm start';
+    const body: Record<string, unknown> = {
+      ...baseBody,
+      serviceDetails: type === 'web_service'
+        ? {
+            env: 'node',
+            plan,
+            buildCommand,
+            startCommand,
+            envVars,
+          }
+        : {
+            plan,
+            buildCommand,
+            publishPath: (input.publish_path as string | undefined) ?? './dist',
+            envVars,
+          },
+    };
+
+    const legacyBody: Record<string, unknown> = {
+      ...baseBody,
+      plan,
+      envVars,
+    };
     if (type === 'web_service') {
-      body.buildCommand = (input.build_command as string) ?? 'npm install && npm run build';
-      body.startCommand = (input.start_command as string) ?? 'node dist/index.js';
+      legacyBody.buildCommand = buildCommand;
+      legacyBody.startCommand = startCommand;
     } else {
-      body.buildCommand = (input.build_command as string) ?? 'npm install && npm run build';
-      body.staticPublishPath = './dist';
+      legacyBody.buildCommand = buildCommand;
+      legacyBody.staticPublishPath = (input.publish_path as string | undefined) ?? './dist';
     }
 
-    const response = await fetch(`${RENDER_API}/services`, {
+    let response = await fetch(`${RENDER_API}/services`, {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
     });
 
-    const data = await response.json() as { service?: { id?: string; dashboardUrl?: string }; id?: string; message?: string };
+    let data = await response.json().catch(() => ({})) as { service?: { id?: string; dashboardUrl?: string }; id?: string; message?: string };
+
+    // The Render API has had both nested serviceDetails and top-level service
+    // fields in circulation. Retry once with the legacy body so the worker does
+    // not fail just because the configured API surface is older.
+    if (!response.ok && response.status === 400) {
+      response = await fetch(`${RENDER_API}/services`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(legacyBody),
+      });
+      data = await response.json().catch(() => ({})) as { service?: { id?: string; dashboardUrl?: string }; id?: string; message?: string };
+    }
 
     if (!response.ok) {
       return `Render service creation failed: ${data.message ?? response.statusText}`;
@@ -830,11 +1011,7 @@ async function renderCreateService(input: Record<string, unknown>, companyId: st
 
     if (serviceId) {
       // Save service ID to company record
-      await db.update(companies).set({ render_service_id: serviceId }).where(eq(companies.id, companyId));
-
-      // Auto-attach {slug}.baljia.app custom domain
-      const [company] = await db.select({ slug: companies.slug })
-        .from(companies).where(eq(companies.id, companyId)).limit(1);
+      await db.update(companies).set({ render_service_id: serviceId, hosting_state: 'live' }).where(eq(companies.id, companyId));
 
       let customDomain = '';
       if (company?.slug) {
@@ -938,7 +1115,7 @@ async function renderDeploy(input: Record<string, unknown>, companyId?: string):
       }
     }
 
-    return result + (companyId ? '\n\n📋 Browser QA task created — agent will verify the live URL shortly.' : '');
+    return result + (companyId ? '\n\nÃ°Å¸â€œâ€¹ Browser QA task created Ã¢â‚¬â€ agent will verify the live URL shortly.' : '');
   } catch (err) {
     return `Render deploy error: ${err instanceof Error ? err.message : 'Unknown error'}`;
   }
@@ -1069,13 +1246,13 @@ async function renderDeleteService(input: Record<string, unknown>, companyId: st
 
     log.warn('Render service deleted', { companyId, serviceId });
 
-    return `⚠️ Service ${serviceId} permanently deleted. The company record has been updated. Use render_create_service to redeploy.`;
+    return `Ã¢Å¡Â Ã¯Â¸Â Service ${serviceId} permanently deleted. The company record has been updated. Use render_create_service to redeploy.`;
   } catch (err) {
     return `Delete error: ${err instanceof Error ? err.message : 'Unknown error'}`;
   }
 }
 
-// ── Health check ──
+// Ã¢â€â‚¬Ã¢â€â‚¬ Health check Ã¢â€â‚¬Ã¢â€â‚¬
 
 async function handleCheckUrlHealth(input: Record<string, unknown>): Promise<string> {
   const url = input.url as string;
@@ -1091,17 +1268,17 @@ async function handleCheckUrlHealth(input: Record<string, unknown>): Promise<str
     const elapsed = Date.now() - start;
 
     if (response.ok) {
-      return `✅ ${url} is UP — HTTP ${response.status} in ${elapsed}ms`;
+      return `Ã¢Å“â€¦ ${url} is UP Ã¢â‚¬â€ HTTP ${response.status} in ${elapsed}ms`;
     }
 
-    return `⚠️ ${url} returned HTTP ${response.status} in ${elapsed}ms — app may have an error. Check logs with render_get_logs.`;
+    return `Ã¢Å¡Â Ã¯Â¸Â ${url} returned HTTP ${response.status} in ${elapsed}ms Ã¢â‚¬â€ app may have an error. Check logs with render_get_logs.`;
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
-    return `❌ ${url} is DOWN — ${msg}. The deploy may have failed. Check logs or run render_rollback.`;
+    return `Ã¢ÂÅ’ ${url} is DOWN Ã¢â‚¬â€ ${msg}. The deploy may have failed. Check logs or run render_rollback.`;
   }
 }
 
-// ── Rollback ──
+// Ã¢â€â‚¬Ã¢â€â‚¬ Rollback Ã¢â€â‚¬Ã¢â€â‚¬
 
 async function handleRenderRollback(input: Record<string, unknown>): Promise<string> {
   const serviceId = input.service_id as string;
@@ -1143,13 +1320,13 @@ async function handleRenderRollback(input: Record<string, unknown>): Promise<str
     const data = await deployRes.json() as { id?: string; status?: string; message?: string };
     if (!deployRes.ok) return `Rollback deploy failed: ${data.message ?? deployRes.statusText}`;
 
-    return `🔄 Rollback triggered! New deploy ID: ${data.id} (based on last successful deploy).\nMonitor with render_get_deploy_status.`;
+    return `Ã°Å¸â€â€ž Rollback triggered! New deploy ID: ${data.id} (based on last successful deploy).\nMonitor with render_get_deploy_status.`;
   } catch (err) {
     return `Rollback error: ${err instanceof Error ? err.message : 'Unknown error'}`;
   }
 }
 
-// ── Custom Domain handlers ──
+// Ã¢â€â‚¬Ã¢â€â‚¬ Custom Domain handlers Ã¢â€â‚¬Ã¢â€â‚¬
 
 
 async function handleAttachCustomDomain(input: Record<string, unknown>, companyId: string): Promise<string> {
@@ -1163,7 +1340,7 @@ async function handleAttachCustomDomain(input: Record<string, unknown>, companyI
     }
 
     return [
-      `✅ Custom domain "${result.domain}" attached!`,
+      `Ã¢Å“â€¦ Custom domain "${result.domain}" attached!`,
       `Status: ${result.status}`,
       '',
       result.dnsInstructions,
@@ -1183,13 +1360,13 @@ async function handleVerifyCustomDomain(companyId: string): Promise<string> {
     }
 
     if (result.verified && result.sslReady) {
-      return `✅ Domain "${result.domain}" is fully verified and SSL is active! The site is live at https://${result.domain}`;
+      return `Ã¢Å“â€¦ Domain "${result.domain}" is fully verified and SSL is active! The site is live at https://${result.domain}`;
     }
 
     return [
-      `⏳ Domain "${result.domain}" is not yet verified.`,
-      `Verified: ${result.verified ? '✅' : '❌'}`,
-      `SSL Ready: ${result.sslReady ? '✅' : '❌'}`,
+      `Ã¢ÂÂ³ Domain "${result.domain}" is not yet verified.`,
+      `Verified: ${result.verified ? 'Ã¢Å“â€¦' : 'Ã¢ÂÅ’'}`,
+      `SSL Ready: ${result.sslReady ? 'Ã¢Å“â€¦' : 'Ã¢ÂÅ’'}`,
       '',
       'The founder needs to set the DNS CNAME records. It can take 5-30 minutes to propagate.',
     ].join('\n');
@@ -1198,17 +1375,17 @@ async function handleVerifyCustomDomain(companyId: string): Promise<string> {
   }
 }
 
-// ── Database Infrastructure handlers ──
+// Ã¢â€â‚¬Ã¢â€â‚¬ Database Infrastructure handlers Ã¢â€â‚¬Ã¢â€â‚¬
 
 async function handleProvisionDatabase(companyId: string): Promise<string> {
   // Check if already provisioned
   const existing = await getCompanyDatabase(companyId);
   if (existing) {
     return [
-      '✅ Database already provisioned!',
+      'Ã¢Å“â€¦ Database already provisioned!',
       `Project: ${existing.name}`,
       `Host: ${existing.host}`,
-      `Connection: ${existing.connectionUri ? '(available — use get_database_info for code snippets)' : 'pending'}`,
+      `Connection: ${existing.connectionUri ? '(available Ã¢â‚¬â€ use get_database_info for code snippets)' : 'pending'}`,
       '',
       'Use run_migration to create tables, then push code that connects to this database.',
     ].join('\n');
@@ -1223,7 +1400,7 @@ async function handleProvisionDatabase(companyId: string): Promise<string> {
   try {
     const result = await provisionCompanyDatabase(companyId, company.slug);
     return [
-      `✅ Database provisioned for ${company.name}!`,
+      `Ã¢Å“â€¦ Database provisioned for ${company.name}!`,
       `Project: ${result.name}`,
       `Host: ${result.host}`,
       `Database: neondb (default)`,
@@ -1313,7 +1490,7 @@ async function handleRunMigration(input: Record<string, unknown>, companyId: str
     log.info('Migration completed', { companyId, description, rowCount });
 
     return [
-      `✅ Migration successful: "${description}"`,
+      `Ã¢Å“â€¦ Migration successful: "${description}"`,
       `Rows affected: ${rowCount}`,
       `SQL executed: ${sql.substring(0, 200)}${sql.length > 200 ? '...' : ''}`,
       '',
@@ -1359,7 +1536,7 @@ async function handleQueryCompanyDb(input: Record<string, unknown>, companyId: s
   }
 }
 
-// ── Stripe Payment handlers ──
+// Ã¢â€â‚¬Ã¢â€â‚¬ Stripe Payment handlers Ã¢â€â‚¬Ã¢â€â‚¬
 // Uses platform Stripe account with company_id metadata tagging.
 // Each founder's products are logically isolated via metadata.
 // Upgradeable to Stripe Connect when needed.
@@ -1379,7 +1556,7 @@ async function handleStripeCreateProduct(input: Record<string, unknown>, company
     });
 
     return [
-      `✅ Stripe product created!`,
+      `Ã¢Å“â€¦ Stripe product created!`,
       `Product ID: ${product.id}`,
       `Name: ${product.name}`,
       '',
@@ -1420,7 +1597,7 @@ async function handleStripeCreatePrice(input: Record<string, unknown>, companyId
     const billing = isRecurring ? `/${interval}` : ' one-time';
 
     return [
-      `✅ Price created: ${formattedPrice}${billing}`,
+      `Ã¢Å“â€¦ Price created: ${formattedPrice}${billing}`,
       `Price ID: ${price.id}`,
       `Product: ${input.product_id}`,
       '',
@@ -1445,7 +1622,7 @@ async function handleStripeCreatePaymentLink(input: Record<string, unknown>, com
     });
 
     return [
-      `✅ Payment link created!`,
+      `Ã¢Å“â€¦ Payment link created!`,
       `URL: ${paymentLink.url}`,
       '',
       'This is a shareable checkout link. The founder can:',
@@ -1507,7 +1684,7 @@ async function handleStripeGetProducts(companyId: string): Promise<string> {
   }
 }
 
-// ── GitHub: branch + PR ──
+// Ã¢â€â‚¬Ã¢â€â‚¬ GitHub: branch + PR Ã¢â€â‚¬Ã¢â€â‚¬
 
 async function githubCreateBranch(input: Record<string, unknown>, _companyId: string): Promise<string> {
   try {
@@ -1537,7 +1714,7 @@ async function githubCreateBranch(input: Record<string, unknown>, _companyId: st
       return `Branch creation failed: ${d.message ?? createRes.statusText}`;
     }
 
-    return `✅ Branch \"${branchName}\" created in ${repo} (from ${baseBranch}).\nUse github_push_file with branch="${branchName}" to push changes.`;
+    return `Ã¢Å“â€¦ Branch \"${branchName}\" created in ${repo} (from ${baseBranch}).\nUse github_push_file with branch="${branchName}" to push changes.`;
   } catch (err) {
     return `GitHub branch error: ${err instanceof Error ? err.message : 'Unknown error'}`;
   }
@@ -1564,13 +1741,13 @@ async function githubCreatePR(input: Record<string, unknown>, _companyId: string
     const data = await prRes.json() as { html_url?: string; number?: number; message?: string };
     if (!prRes.ok) return `PR creation failed: ${data.message ?? prRes.statusText}`;
 
-    return `✅ Pull request #${data.number} created!\nURL: ${data.html_url}\nMerge "${input.head_branch}" → "${body.base}"`;
+    return `Ã¢Å“â€¦ Pull request #${data.number} created!\nURL: ${data.html_url}\nMerge "${input.head_branch}" Ã¢â€ â€™ "${body.base}"`;
   } catch (err) {
     return `GitHub PR error: ${err instanceof Error ? err.message : 'Unknown error'}`;
   }
 }
 
-// ── Render: list + metrics ──
+// Ã¢â€â‚¬Ã¢â€â‚¬ Render: list + metrics Ã¢â€â‚¬Ã¢â€â‚¬
 
 async function renderListServices(input: Record<string, unknown>): Promise<string> {
   try {
@@ -1584,7 +1761,7 @@ async function renderListServices(input: Record<string, unknown>): Promise<strin
 
     const lines = data.map((item) => {
       const s = item.service ?? (item as { id?: string; name?: string; type?: string; serviceDetails?: { url?: string } });
-      return `- [${s.id ?? '?'}] ${s.name ?? 'unnamed'} (${s.type ?? '?'}) — ${s.serviceDetails?.url ?? 'no URL'}`;
+      return `- [${s.id ?? '?'}] ${s.name ?? 'unnamed'} (${s.type ?? '?'}) Ã¢â‚¬â€ ${s.serviceDetails?.url ?? 'no URL'}`;
     });
     return `## Render Services (${data.length})\n${lines.join('\n')}`;
   } catch (err) {
@@ -1615,7 +1792,7 @@ async function renderGetMetrics(input: Record<string, unknown>): Promise<string>
   }
 }
 
-// ── GitHub: search code ──
+// Ã¢â€â‚¬Ã¢â€â‚¬ GitHub: search code Ã¢â€â‚¬Ã¢â€â‚¬
 
 async function githubSearchCode(input: Record<string, unknown>, _companyId: string): Promise<string> {
   try {
@@ -1643,7 +1820,7 @@ async function githubSearchCode(input: Record<string, unknown>, _companyId: stri
 
     const lines = data.items.map((item) => {
       const fragment = item.text_matches?.[0]?.fragment?.substring(0, 120) ?? '';
-      return `📄 ${item.path}\n   ${fragment ? `\`${fragment.replace(/\n/g, ' ')}\`` : '(no preview)'}`;
+      return `Ã°Å¸â€œâ€ž ${item.path}\n   ${fragment ? `\`${fragment.replace(/\n/g, ' ')}\`` : '(no preview)'}`;
     });
 
     return `## Code Search: "${query}" (${data.total_count} results, showing ${data.items.length})\n\n${lines.join('\n\n')}`;
@@ -1652,7 +1829,7 @@ async function githubSearchCode(input: Record<string, unknown>, _companyId: stri
   }
 }
 
-// ── GitHub: multi-file atomic commit via Git Trees API ──
+// Ã¢â€â‚¬Ã¢â€â‚¬ GitHub: multi-file atomic commit via Git Trees API Ã¢â€â‚¬Ã¢â€â‚¬
 
 async function githubCreateCommit(input: Record<string, unknown>, _companyId: string): Promise<string> {
   try {
@@ -1705,13 +1882,13 @@ async function githubCreateCommit(input: Record<string, unknown>, _companyId: st
     });
     if (!updateRes.ok) return `Commit created (${newCommit.sha.substring(0, 7)}) but branch update failed: ${updateRes.statusText}`;
 
-    return `✅ Committed ${files.length} file(s) to ${repo}/${branch}\nCommit: ${newCommit.sha.substring(0, 7)} — "${message}"\nFiles: ${files.map((f) => f.path).join(', ')}`;
+    return `Ã¢Å“â€¦ Committed ${files.length} file(s) to ${repo}/${branch}\nCommit: ${newCommit.sha.substring(0, 7)} Ã¢â‚¬â€ "${message}"\nFiles: ${files.map((f) => f.path).join(', ')}`;
   } catch (err) {
     return `GitHub commit error: ${err instanceof Error ? err.message : 'Unknown error'}`;
   }
 }
 
-// ── Render: list databases ──
+// Ã¢â€â‚¬Ã¢â€â‚¬ Render: list databases Ã¢â€â‚¬Ã¢â€â‚¬
 
 async function renderListDatabases(input: Record<string, unknown>): Promise<string> {
   try {
@@ -1738,379 +1915,52 @@ async function renderListDatabases(input: Record<string, unknown>): Promise<stri
   }
 }
 
-// ══════════════════════════════════════════════
-// CLOUDFLARE DEPLOY HANDLERS (ADR-002 primary path)
-// ══════════════════════════════════════════════
 
-/**
- * Resolve the subdomain for a company from the DB. There is deliberately NO
- * override parameter — agents must only deploy to their own company's
- * subdomain. This is the tenant-isolation boundary for the CF deploy path,
- * mirroring how `assertServiceOwnership` works for Render tools.
- */
-async function resolveCompanySubdomain(companyId: string): Promise<string> {
-  const [company] = await db
-    .select({ subdomain: companies.subdomain })
-    .from(companies)
-    .where(eq(companies.id, companyId))
-    .limit(1);
-  if (!company?.subdomain) {
-    throw new Error(`Company ${companyId} has no subdomain configured. Onboarding must set company.subdomain before deploy (via provisionWildcardSubdomain).`);
-  }
-  const clean = company.subdomain.trim().toLowerCase();
-  if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(clean)) {
-    throw new Error(`Company ${companyId} has an invalid stored subdomain "${company.subdomain}" — refusing to deploy.`);
-  }
-  return clean;
-}
-
-async function cfDeployLanding(input: Record<string, unknown>, companyId: string): Promise<string> {
-  if (!isCloudflareDeployConfigured()) {
-    return 'Cloudflare deploy not configured. Set CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_ZONE_ID_APP, and R2_* env vars.';
-  }
-  const html = input.html as string;
-  if (typeof html !== 'string' || html.length === 0) {
-    return 'Missing required input: html (full HTML content).';
-  }
-  if (html.length > 5 * 1024 * 1024) {
-    return `HTML too large (${html.length} bytes). Max 5 MB per landing page.`;
-  }
-
-  try {
-    const subdomain = await resolveCompanySubdomain(companyId);
-    const alreadyLive = await landingHtmlExists(subdomain);
-
-    const result = await uploadLandingHtml({ subdomain, html });
-    if (!result) return `Cloudflare landing deploy failed for ${subdomain} — check logs.`;
-
-    const note = alreadyLive ? ' (overwrote existing landing)' : '';
-    log.info('cf_deploy_landing succeeded', { companyId, subdomain, bytes: html.length, alreadyLive });
-    return `Landing deployed to Cloudflare!${note}\nURL: ${result.url}\nR2 key: ${result.key}\nBytes: ${html.length}\n\nVerify with cf_verify_founder_app.`;
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Unknown error';
-    log.error('cf_deploy_landing failed', { companyId }, err);
-    return `Cloudflare landing deploy error: ${msg}`;
-  }
-}
-
-async function cfVerifyFounderApp(_input: Record<string, unknown>, companyId: string): Promise<string> {
-  if (!isCloudflareDeployConfigured()) {
-    return 'Cloudflare deploy not configured — cannot verify.';
-  }
-  try {
-    const subdomain = await resolveCompanySubdomain(companyId);
-    const result = await verifyFounderAppLive(subdomain);
-    if (!result) return `Verify failed: no response for ${subdomain}.baljia.app`;
-
-    const emoji = result.status === 200 ? '✅' : result.status === 0 ? '❌' : '⚠️';
-    const snippet = result.bodySnippet.replace(/\n/g, ' ').slice(0, 200);
-    return `${emoji} https://${subdomain}.baljia.app returned HTTP ${result.status} in ${result.elapsedMs}ms\nBody snippet: ${snippet}`;
-  } catch (err) {
-    return `Cloudflare verify error: ${err instanceof Error ? err.message : 'Unknown error'}`;
-  }
-}
-
-async function cfDeleteFounderApp(_input: Record<string, unknown>, companyId: string): Promise<string> {
-  if (!isCloudflareDeployConfigured()) {
-    return 'Cloudflare deploy not configured — nothing to delete.';
-  }
-  try {
-    const subdomain = await resolveCompanySubdomain(companyId);
-    const existed = await landingHtmlExists(subdomain);
-    if (!existed) return `No founder app found at ${subdomain} — nothing to delete.`;
-
-    const ok = await deleteLandingHtml(subdomain);
-    if (!ok) return `Delete failed for ${subdomain} — check logs.`;
-
-    // Clear DB state so the next onboarding run / dashboard read is consistent
-    await db
-      .update(companies)
-      .set({ custom_domain: null })
-      .where(eq(companies.id, companyId));
-
-    log.info('cf_delete_founder_app succeeded', { companyId, subdomain });
-    return `Deleted founder app at ${subdomain}.baljia.app (R2 landing asset removed; company.custom_domain cleared).`;
-  } catch (err) {
-    return `Cloudflare delete error: ${err instanceof Error ? err.message : 'Unknown error'}`;
-  }
-}
-
-// ══════════════════════════════════════════════
-// TIER 2/3 — CF WORKER APP DEPLOY HANDLERS
-// Full-stack apps: API endpoints, SSR, DB-backed features. Each founder gets a
-// dedicated Worker script at {slug}.baljia.app/* whose route overrides the
-// wildcard *.baljia.app/* (route specificity wins in CF).
-// ══════════════════════════════════════════════
-
-function workerScriptNameFor(subdomain: string): string {
-  // Dedicated script name per founder — stays under CF's 100-script limit on
-  // Workers Paid. Names must match [a-z0-9_-]+ and start with a letter.
-  return `baljia-app-${subdomain}`;
-}
-
-async function cfDeployApp(input: Record<string, unknown>, companyId: string): Promise<string> {
-  if (!isCloudflareDeployConfigured()) {
-    return 'Cloudflare deploy not configured. Set CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_ZONE_ID_APP, R2_* env vars.';
-  }
-  const scriptContent = input.script_content as string;
-  if (typeof scriptContent !== 'string' || scriptContent.length === 0) {
-    return 'Missing required input: script_content (full ES-module Worker source).';
-  }
-  if (scriptContent.length > 5 * 1024 * 1024) {
-    return `Script too large (${scriptContent.length} bytes raw). CF hard limit is 10 MB gzipped; keep source under 5 MB.`;
-  }
-  if (!/export\s+default\s*\{/.test(scriptContent) && !/export\s+default\s+\{/.test(scriptContent)) {
-    return 'Invalid script: must include `export default { fetch(request, env, ctx) { ... } }` as the module\'s default export. Check the Cloudflare Workers ES-module syntax.';
-  }
-
-  const withNeonDb = input.with_neon_db === true;
-  const withR2Assets = input.with_r2_assets === true;
-  const additionalSecrets = (input.additional_secrets as Record<string, string> | undefined) ?? {};
-
-  try {
-    const subdomain = await resolveCompanySubdomain(companyId);
-    const scriptName = workerScriptNameFor(subdomain);
-
-    // Assemble bindings
-    const bindings: WorkerBinding[] = [
-      { type: 'plain_text', name: 'PLATFORM_API_BASE', text: 'https://baljia.ai' },
-      { type: 'plain_text', name: 'COMPANY_ID', text: companyId },
-      { type: 'plain_text', name: 'COMPANY_SUBDOMAIN', text: subdomain },
-    ];
-    if (withR2Assets) {
-      bindings.push({ type: 'r2_bucket', name: 'ASSETS', bucket_name: process.env.R2_BUCKET_NAME ?? 'baljia-assets' });
-    }
-
-    // 1. Upload the Worker script (overwrites if exists)
-    const deployResult = await deployWorkerScript({
-      scriptName,
-      scriptContent,
-      bindings,
-    });
-    if (!deployResult) {
-      return `CF Worker deploy FAILED for ${scriptName} — check logs.`;
-    }
-
-    // 2. Inject Neon DB URL as secret (if requested)
-    if (withNeonDb) {
-      const [company] = await db
-        .select({ neon_connection_string: companies.neon_connection_string })
-        .from(companies)
-        .where(eq(companies.id, companyId))
-        .limit(1);
-      if (!company?.neon_connection_string) {
-        return `Worker deployed but NEON_URL secret NOT injected — company ${companyId} has no provisioned Neon DB. Call provision_database first, then cf_deploy_app again with with_neon_db=true.`;
-      }
-      const ok = await putWorkerSecret({
-        scriptName,
-        key: 'NEON_URL',
-        value: company.neon_connection_string,
-      });
-      if (!ok) {
-        return `Worker deployed but NEON_URL secret injection FAILED. Worker script exists but will crash on env.NEON_URL access — check CF logs.`;
-      }
-    }
-
-    // 3. Inject any additional per-founder secrets
-    const secretResults: string[] = [];
-    for (const [key, value] of Object.entries(additionalSecrets)) {
-      if (typeof value !== 'string' || value.length === 0) continue;
-      const ok = await putWorkerSecret({ scriptName, key, value });
-      secretResults.push(`${key}: ${ok ? 'ok' : 'FAIL'}`);
-    }
-
-    // 4. Register per-subdomain route that overrides the wildcard Worker
-    const routePattern = `${subdomain}.baljia.app/*`;
-    const routeResult = await addWorkerRoute({ pattern: routePattern, scriptName });
-    if (!routeResult) {
-      return `Worker deployed but route ${routePattern} NOT registered — the wildcard Worker will still serve Tier 1 at this subdomain. Manual fix: add route via CF dashboard.`;
-    }
-
-    log.info('cf_deploy_app succeeded', {
-      companyId,
-      subdomain,
-      scriptName,
-      bytes: scriptContent.length,
-      withNeonDb,
-      withR2Assets,
-      extraSecrets: Object.keys(additionalSecrets).length,
-      etag: deployResult.etag,
-    });
-
-    return [
-      `✅ App deployed to Cloudflare Workers!`,
-      `URL: https://${subdomain}.baljia.app`,
-      `Script: ${scriptName}`,
-      `Route: ${routePattern} (overrides wildcard)`,
-      `Bytes: ${scriptContent.length}`,
-      `Neon DB bound: ${withNeonDb ? 'yes (env.NEON_URL)' : 'no'}`,
-      `R2 assets bound: ${withR2Assets ? 'yes (env.ASSETS)' : 'no'}`,
-      secretResults.length > 0 ? `Extra secrets: ${secretResults.join(', ')}` : '',
-      ``,
-      `Verify with cf_verify_founder_app. To redeploy, call cf_deploy_app again — it's idempotent.`,
-    ].filter(Boolean).join('\n');
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Unknown error';
-    log.error('cf_deploy_app failed', { companyId }, err);
-    return `Cloudflare app deploy error: ${msg}`;
-  }
-}
-
-async function cfGetAppInfo(_input: Record<string, unknown>, companyId: string): Promise<string> {
-  if (!isCloudflareDeployConfigured()) return 'Cloudflare deploy not configured.';
-  try {
-    const subdomain = await resolveCompanySubdomain(companyId);
-    const scriptName = workerScriptNameFor(subdomain);
-    const info = await getWorkerScriptInfo(scriptName);
-    if (!info) return `No Tier 2/3 app deployed for ${subdomain} (script "${scriptName}" not found). Use cf_deploy_app to create one, or cf_deploy_landing for a static Tier 1 landing page.`;
-    return [
-      `Tier 2/3 app info for ${subdomain}.baljia.app:`,
-      `  Script name: ${info.scriptName}`,
-      `  ETag:        ${info.etag}`,
-      `  URL:         https://${subdomain}.baljia.app`,
-    ].join('\n');
-  } catch (err) {
-    return `Get app info error: ${err instanceof Error ? err.message : 'Unknown error'}`;
-  }
-}
-
-async function cfReadAppSource(_input: Record<string, unknown>, companyId: string): Promise<string> {
-  if (!isCloudflareDeployConfigured()) return 'Cloudflare deploy not configured.';
-  try {
-    const subdomain = await resolveCompanySubdomain(companyId);
-    const scriptName = workerScriptNameFor(subdomain);
-    const result = await getWorkerScriptSource(scriptName);
-    if (!result) {
-      return `No Tier 2/3 app deployed for ${subdomain} (script "${scriptName}" not found). Use cf_deploy_app to create one. If this is a Tier 1 landing page, source is the HTML file in R2 — read that via cf_deploy_landing's storage path instead.`;
-    }
-    log.info('cf_read_app_source returned source', { companyId, subdomain, bytes: result.bytes, etag: result.etag });
-    return [
-      `Current Worker source for ${subdomain}.baljia.app:`,
-      `Script: ${result.scriptName}`,
-      `ETag:   ${result.etag}`,
-      `Bytes:  ${result.bytes}`,
-      ``,
-      `─── BEGIN SOURCE ───`,
-      result.source,
-      `─── END SOURCE ───`,
-      ``,
-      `To modify: edit the source above, then call cf_deploy_app({ script_content: <edited source>, with_neon_db: true (if needed) }). Don't regenerate from scratch — preserve existing handlers and only add/edit what the task requires.`,
-    ].join('\n');
-  } catch (err) {
-    return `Read app source error: ${err instanceof Error ? err.message : 'Unknown error'}`;
-  }
-}
-
-async function cfDeleteApp(_input: Record<string, unknown>, companyId: string): Promise<string> {
-  if (!isCloudflareDeployConfigured()) return 'Cloudflare deploy not configured.';
-  try {
-    const subdomain = await resolveCompanySubdomain(companyId);
-    const scriptName = workerScriptNameFor(subdomain);
-
-    const ok = await deleteWorkerScript(scriptName);
-    if (!ok) return `Delete FAILED for script "${scriptName}" — check CF logs. (Route may still exist; remove manually if needed.)`;
-
-    log.info('cf_delete_app succeeded', { companyId, subdomain, scriptName });
-    return `✅ Tier 2/3 app removed from Cloudflare (script "${scriptName}"). The wildcard Worker will resume serving this subdomain (Tier 1 R2 landing, or branded 404 if no landing is deployed).`;
-  } catch (err) {
-    return `Cloudflare app delete error: ${err instanceof Error ? err.message : 'Unknown error'}`;
-  }
-}
-
-async function cfGetLogs(input: Record<string, unknown>, companyId: string): Promise<string> {
-  if (!isCloudflareDeployConfigured()) return 'Cloudflare deploy not configured.';
-
-  const sinceMinutes = typeof input.since_minutes === 'number' ? input.since_minutes : 60;
-  const limit = typeof input.limit === 'number' ? input.limit : 100;
-  const errorsOnly = input.errors_only === true;
-
-  try {
-    const subdomain = await resolveCompanySubdomain(companyId);
-    const scriptName = workerScriptNameFor(subdomain);
-
-    // Confirm a per-founder Worker actually exists. Tier 1 landing-only
-    // apps have no dedicated script — their traffic rides the wildcard.
-    const info = await getWorkerScriptInfo(scriptName);
-    if (!info) {
-      return `No Tier 2/3 Worker found for ${subdomain}.baljia.app (script "${scriptName}" not deployed). If this is a Tier 1 landing page, per-founder logs are not available — verify the page directly with cf_verify_founder_app instead. If the app should exist, deploy it first with cf_deploy_app.`;
-    }
-
-    const rows = await getWorkerLogs({ scriptName, sinceMinutes, limit });
-    if (rows === null) {
-      return `Could not fetch CF logs for "${scriptName}" — the GraphQL Analytics API returned an error (token scope or transient). Try again or check Cloudflare dashboard directly.`;
-    }
-
-    const filtered = errorsOnly
-      ? rows.filter((r) => r.outcome !== 'ok' || r.status >= 400)
-      : rows;
-
-    if (filtered.length === 0) {
-      return errorsOnly
-        ? `No errors logged for "${scriptName}" in the last ${sinceMinutes} minutes. The Worker is responding cleanly.`
-        : `No invocations logged for "${scriptName}" in the last ${sinceMinutes} minutes. Either no traffic, or the script name is wrong.`;
-    }
-
-    // Aggregate quick rollup so the agent can summarize without reading every row.
-    const totals = filtered.reduce(
-      (acc, r) => {
-        acc.requests += r.requests;
-        acc.errors += r.errors;
-        acc.subrequests += r.subrequests;
-        return acc;
-      },
-      { requests: 0, errors: 0, subrequests: 0 },
-    );
-
-    const tableLines = filtered.slice(0, 50).map(
-      (r) => `${r.minute}  status=${r.status}  outcome=${r.outcome}  reqs=${r.requests}  errs=${r.errors}`,
-    );
-
-    return [
-      `Cloudflare Worker logs for "${scriptName}" (last ${sinceMinutes} min, ${filtered.length} buckets${errorsOnly ? ', errors_only' : ''}):`,
-      `Totals: ${totals.requests} requests, ${totals.errors} errors, ${totals.subrequests} subrequests`,
-      '',
-      ...tableLines,
-      filtered.length > 50 ? `... (${filtered.length - 50} more rows truncated; raise limit or narrow window)` : '',
-    ].filter(Boolean).join('\n');
-  } catch (err) {
-    return `cf_get_logs error: ${err instanceof Error ? err.message : 'Unknown error'}`;
-  }
-}
-
-// ══════════════════════════════════════════════
-// SKILLS — read .claude/skills/<name>/SKILL.md
+// SKILLS Ã¢â‚¬â€ read .claude/skills/<name>/SKILL.md
 // Polsia-style knowledge layer the agent loads BEFORE writing domain code.
 // Skills capture stack-specific patterns + anti-patterns the LLM's training
-// data is missing or wrong about (e.g. "you can't use pg on Cloudflare Workers").
-// ══════════════════════════════════════════════
+// data is missing or wrong about for Baljia's current deploy path.
+// Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
 
 const SKILLS_ROOT = join(process.cwd(), '.claude', 'skills');
 
-/** Hard-coded one-line summaries — keeps `list_skills` fast (no file reads)
+/** Hard-coded one-line summaries Ã¢â‚¬â€ keeps `list_skills` fast (no file reads)
  *  and gives the agent a stable index it can scan. Update if a SKILL.md file
  *  is renamed; the SKILL.md content itself doesn't need to be touched. */
 const SKILL_SUMMARIES: Record<string, string> = {
-  'cloudflare-workers':
-    'Founder-app deploy target. Runtime constraints (30s CPU, 128 MB, 10 MB bundle), code shape (ES module + default fetch handler), and frameworks that work (Hono) vs ones that don\'t (Express, pg, ioredis).',
-  'build-fullstack-cf-app':
-    'MANDATORY before generating script_content for cf_deploy_app on a Tier 2/3 task (API + DB + frontend). Verified pattern: single-file Worker + raw fetch to Neon HTTP /sql (no @neondatabase/serverless import — the agent has no bundler). Includes canonical template, ordered deploy steps (provision_database → CREATE TABLE → cf_deploy_app → cf_verify), 6 pitfalls, long-running-ops gap.',
+  'skeleton-nextjs':
+    'READ THIS FIRST for any full-stack SaaS. Clones the Baljia Next.js 15 skeleton (Better Auth, Drizzle, Neon, AI gateway, Stripe, Shadcn/ui). Users never provide their own API key Ã¢â‚¬â€ AI calls route through the Baljia gateway. Use github_fork_skeleton + run_drizzle_push instead of building from scratch.',
+  'render-infra':
+    'MANDATORY before any Render deploy. Documents the /health endpoint, PORT binding, ephemeral filesystem rules, build/start commands, env var patterns, free plan limits, and deploy verification checklist.',
+  'openai-proxy':
+    'AI utility features: embeddings (text-embedding-3-small), image gen (dall-e-3), OCR (gpt-4o vision), text generation. Import from @/lib/ai only. Covers pgvector storage, R2 persistence for images, and error handling.',
   'neon-postgres':
-    'Database access from Workers. Use @neondatabase/serverless HTTP driver — pg/postgres packages don\'t work. Drizzle ORM patterns, migration approaches, query best practices.',
+    'Database access for Render founder apps. Provision company Neon first, pass DATABASE_URL to Render, use pg or Drizzle node-postgres, and verify migrations with insert/readback.',
   'frontend-design':
-    'UI patterns for founder apps. Tailwind via CDN, color system (gold #F5A623 on dark warm bg), component primitives, mobile-first layouts, accessibility minimums.',
+    'UI patterns for Render founder apps. Product-first screens, Baljia visual language, mobile-first layout, accessible forms, and verification through deployed Render routes.',
   'stripe-payments':
-    'Payment integration. When to use Payment Links vs Checkout Sessions vs full SDK. Critical Workers gotchas: Stripe.createFetchHttpClient() and createSubtleCryptoProvider() are required.',
+    'Payment integration for Render apps. Default to Payment Links, use Checkout Sessions only when needed, store Stripe keys in Render env vars, and verify checkout/webhooks.',
   'r2-storage':
-    'File uploads + asset serving via env.ASSETS binding. Upload patterns, Worker proxy serving, naming conventions, security (don\'t trust content-type from client).',
+    'Asset storage for generated media, ad creatives, screenshots, exports, and public URLs. Use for Meta Ads media assets, not app deployment.',
   'email-postmark':
-    'Transactional email send + inbound. Domain-verified at baljia.app, any @baljia.app sender works. Inbound architecture has two paths (Cloudflare Email Routing vs Postmark Inbound) — Support agent needs Postmark Inbound.',
+    'Transactional email for Render apps. Send through Postmark over HTTPS or platform send path, store tokens in Render env vars, and report sender/recipient verification.',
   'agent-sdk':
-    'AI features inside founder apps — Anthropic / OpenAI / Codex / Gemini integration. SCAFFOLD only (full content TBD); read it as a SIGNAL that AI integration is being attempted and pause for human guidance, or default to the safest path documented inside.',
+    'AI features inside Render founder apps. Keep actions narrow, store provider keys in Render env vars, add timeouts/fallbacks, and verify success plus missing-key behavior.',
+  'auth-sessions':
+    'Session-based auth for SaaS founder apps. Uses express-session + bcryptjs + connect-pg-simple (Postgres sessions). Covers register, login, logout, protected routes, plan gating, and Stripe checkout linked to user accounts.',
+  'craft-frontend':
+    'Frontend quality rules: anti-AI-slop patterns, palette + typography craft, state coverage (hover/focus/disabled/loading on every interactive element), form validation UX, WCAG accessibility baseline, and animation discipline. Read BEFORE any landing page, dashboard, or in-app UI.',
+  'webhooks':
+    'Secure webhook handling for Stripe and GitHub. Signature verification (stripe.webhooks.constructEvent, GitHub X-Hub-Signature-256), idempotency via Neon upsert, event routing, error response rules, and local testing checklist.',
+  'background-jobs':
+    'Cron jobs on Render: use node-cron inside a separate Worker service. Never use setInterval, worker_threads, or in-process timers. Covers job registration, Render cron service config, Redis-free queue via Neon, retry logic, and dead-letter logging.',
+  'verify-deploy':
+    'MANDATORY after every deployment. 8-step QA sequence: Render health check, frontend load, auth route, DB schema presence, AI gateway, Stripe webhook signature, email config, and log scan. Includes failure diagnosis table and a verification report template to show the user.',
 };
 
 function handleListSkills(): string {
   if (!existsSync(SKILLS_ROOT)) {
-    return 'Skills directory does not exist (.claude/skills). The agent has no curated knowledge layer — proceed with general LLM knowledge but expect more iterations.';
+    return 'Skills directory does not exist (.claude/skills). The agent has no curated knowledge layer Ã¢â‚¬â€ proceed with general LLM knowledge but expect more iterations.';
   }
   const dirs = readdirSync(SKILLS_ROOT)
     .filter((name) => {
@@ -2127,8 +1977,8 @@ function handleListSkills(): string {
 
   const lines = ['## Available skills', '', 'Read the relevant one BEFORE writing code in that domain. Use `read_skill` with the name.', ''];
   for (const dir of dirs) {
-    const summary = SKILL_SUMMARIES[dir] ?? '(no summary — read the file)';
-    lines.push(`- **${dir}** — ${summary}`);
+    const summary = SKILL_SUMMARIES[dir] ?? '(no summary Ã¢â‚¬â€ read the file)';
+    lines.push(`- **${dir}** Ã¢â‚¬â€ ${summary}`);
   }
   return lines.join('\n');
 }
@@ -2138,7 +1988,7 @@ function handleReadSkill(input: Record<string, unknown>): string {
   if (!name) return 'Error: missing required argument "skill". Call list_skills to see available names.';
 
   // Defense: only allow kebab-case alphanumeric. Blocks ../../etc/passwd shenanigans
-  // even though SKILLS_ROOT is a fixed prefix — belt + suspenders.
+  // even though SKILLS_ROOT is a fixed prefix Ã¢â‚¬â€ belt + suspenders.
   if (!/^[a-z0-9-]+$/.test(name)) {
     return `Error: skill name "${name}" must be kebab-case alphanumeric. Call list_skills.`;
   }
@@ -2153,5 +2003,370 @@ function handleReadSkill(input: Record<string, unknown>): string {
     return content;
   } catch (err) {
     return `Error reading skill "${name}": ${err instanceof Error ? err.message : 'Unknown error'}`;
+  }
+}
+
+// Ã¢â€â‚¬Ã¢â€â‚¬ Skeleton: fork the Baljia Next.js SaaS skeleton into a company repo Ã¢â€â‚¬Ã¢â€â‚¬
+
+const SKELETON_REPO = 'BALAJIapps/Balaji'; // master template repo
+
+async function githubForkSkeleton(input: Record<string, unknown>, companyId: string): Promise<string> {
+  const repoSlug = (input.repo as string)?.trim();
+  if (!repoSlug) return 'Error: repo is required (e.g. "genesis-advertising-hen6").';
+
+  const description = (input.description as string) ?? 'SaaS app built on Baljia skeleton';
+  const org = githubOrg();
+  const targetRepo = `${org}/${repoSlug}`;
+  const headers = githubHeaders();
+
+  try {
+    // Step 1: Check if target repo already exists
+    const existRes = await fetch(`${GITHUB_API}/repos/${targetRepo}`, { headers });
+    if (existRes.ok) {
+      return [
+        `Ã¢Å“â€¦ Repo ${targetRepo} already exists Ã¢â‚¬â€ skeleton was previously forked.`,
+        `Next: use github_push_file to patch in feature-specific files (db/schema.ts, app/actions/, etc.)`,
+        `Then: call run_drizzle_push to sync the schema to the database.`,
+        `Finally: call render_create_service with buildCommand="pnpm install && pnpm build" and startCommand="pnpm start".`,
+      ].join('\n');
+    }
+
+    // Step 2: Fork skeleton repo into the org
+    const forkRes = await fetch(`${GITHUB_API}/repos/${SKELETON_REPO}/forks`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        organization: org,
+        name: repoSlug,
+        default_branch_only: true,
+      }),
+    });
+
+    const forkData = await forkRes.json() as { full_name?: string; html_url?: string; message?: string };
+
+    if (!forkRes.ok) {
+      if (forkRes.status === 404 || forkRes.status === 403) {
+        return [
+          `Ã¢Å¡Â Ã¯Â¸Â Could not fork skeleton (${forkData.message ?? forkRes.statusText}).`,
+          `The skeleton repo "${SKELETON_REPO}" may be private or the token lacks fork permissions.`,
+          `Workaround: ask the platform admin to make ${SKELETON_REPO} a GitHub template repo.`,
+          `For now, use github_create_repo to create an empty repo and push the skeleton files manually via github_create_commit.`,
+        ].join('\n');
+      }
+      return `Fork failed: ${forkData.message ?? forkRes.statusText}`;
+    }
+
+    const fullName = forkData.full_name ?? targetRepo;
+
+    // Step 3: Update the fork description
+    await fetch(`${GITHUB_API}/repos/${fullName}`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({ description }),
+    });
+
+    // Step 4: Save repo to company record
+    await db.update(companies)
+      .set({ github_repo: fullName })
+      .where(eq(companies.id, companyId));
+
+    log.info('Skeleton forked', { companyId, repo: fullName });
+
+    return [
+      `Ã¢Å“â€¦ Skeleton forked to ${fullName}!`,
+      `URL: ${forkData.html_url ?? `https://github.com/${fullName}`}`,
+      ``,
+      `What you get for free:`,
+      `  Ã¢â‚¬Â¢ Better Auth (email+password, sessions, DB-backed)`,
+      `  Ã¢â‚¬Â¢ Drizzle ORM + Neon Postgres (db/schema.ts)`,
+      `  Ã¢â‚¬Â¢ AI calls via Baljia gateway (lib/ai.ts) Ã¢â‚¬â€ NO user API key needed`,
+      `  Ã¢â‚¬Â¢ Stripe checkout + webhook handler`,
+      `  Ã¢â‚¬Â¢ Shadcn/ui + Tailwind 4`,
+      `  Ã¢â‚¬Â¢ Next.js 15 App Router with middleware-protected /app/* routes`,
+      ``,
+      `Next steps:`,
+      `1. Read the current db/schema.ts via github_read_file`,
+      `2. Push your feature tables (books, projects, etc.) via github_push_file`,
+      `3. Call run_drizzle_push to create tables in the database`,
+      `4. Push your feature Server Actions (app/actions/<feature>.ts)`,
+      `5. Push your feature pages (app/app/<feature>/page.tsx)`,
+      `6. Call render_create_service with pnpm build + pnpm start`,
+    ].join('\n');
+  } catch (err) {
+    return `Skeleton fork error: ${err instanceof Error ? err.message : 'Unknown error'}`;
+  }
+}
+
+// Ã¢â€â‚¬Ã¢â€â‚¬ Skeleton: run Drizzle schema push against the company's Neon DB Ã¢â€â‚¬Ã¢â€â‚¬
+
+async function handleRunDrizzlePush(input: Record<string, unknown>, companyId: string): Promise<string> {
+  const repo = (input.repo as string)?.trim();
+  if (!repo) return 'Error: repo is required.';
+
+  // Get the company's database connection
+  const dbInfo = await getCompanyDatabase(companyId);
+  if (!dbInfo) {
+    return 'No database provisioned yet. Use provision_database first, then run_drizzle_push.';
+  }
+  if (!dbInfo.connectionUri) {
+    return 'Database exists but connection URI not available. Check NEON_API_KEY configuration.';
+  }
+
+  // Read current db/schema.ts from the repo
+  let schemaContent: string;
+  try {
+    const result = await githubReadFile({ repo, path: 'db/schema.ts' }, companyId);
+    if (result.startsWith('GitHub read failed') || result.startsWith('GitHub read error')) {
+      return `Could not read db/schema.ts from ${repo}: ${result}\n\nMake sure you pushed the schema file first via github_push_file.`;
+    }
+    schemaContent = result;
+  } catch (err) {
+    return `Failed to read db/schema.ts: ${err instanceof Error ? err.message : 'Unknown error'}`;
+  }
+
+  // Extract table names from the schema content for the report
+  const tableMatches = schemaContent.match(/pgTable\(['"]([^'"]+)['"]/g) ?? [];
+  const tableNames = tableMatches.map(m => m.match(/pgTable\(['"]([^'"]+)['"]/)?.[1] ?? '').filter(Boolean);
+
+  // Drizzle push requires running the CLI locally. Since we can't exec CLI in CF workers,
+  // we trigger a platform migration endpoint that runs drizzle-kit push in a serverless runner.
+  const migrationEndpoint = process.env.DRIZZLE_PUSH_ENDPOINT;
+
+  if (migrationEndpoint) {
+    try {
+      const response = await fetch(migrationEndpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.DRIZZLE_PUSH_SECRET ?? ''}`,
+        },
+        body: JSON.stringify({
+          connectionUri: dbInfo.connectionUri,
+          schema: schemaContent,
+          companyId,
+        }),
+        signal: AbortSignal.timeout(60_000),
+      });
+
+      if (!response.ok) {
+        const err = await response.text();
+        return `Drizzle push failed (remote runner): ${err}`;
+      }
+
+      const result = await response.json() as { tables?: string[]; warnings?: string[] };
+      const tables = result.tables ?? tableNames;
+
+      return [
+        `Ã¢Å“â€¦ Drizzle schema pushed successfully!`,
+        `Tables synced (${tables.length}): ${tables.join(', ')}`,
+        result.warnings?.length ? `\nWarnings:\n${result.warnings.map(w => `  - ${w}`).join('\n')}` : '',
+        ``,
+        `Next: push your feature code (Server Actions, pages) and deploy to Render.`,
+      ].filter(Boolean).join('\n');
+    } catch (err) {
+      log.warn('Remote drizzle push failed, falling back to advisory', { companyId, error: err });
+    }
+  }
+
+  // Fallback: report what WOULD be synced and instruct the agent to add db:push to the build command
+  return [
+    `Ã¢Å¡Â Ã¯Â¸Â Remote Drizzle push runner not configured (DRIZZLE_PUSH_ENDPOINT missing).`,
+    ``,
+    `Schema detected in db/schema.ts:`,
+    `  Tables: ${tableNames.length > 0 ? tableNames.join(', ') : '(none detected Ã¢â‚¬â€ check schema format)'}`,
+    ``,
+    `Workaround Ã¢â‚¬â€ add schema sync to the Render build command:`,
+    `  buildCommand: "pnpm install && pnpm db:push && pnpm build"`,
+    ``,
+    `This runs Drizzle push during the Render build so tables are created before the app starts.`,
+    `Use this build command in render_create_service.`,
+    ``,
+    `The skeleton already has the db:push script wired in package.json.`,
+  ].join('\n');
+}
+
+// â”€â”€ create_instance: atomic fork + provision + deploy â”€â”€
+
+async function handleCreateInstance(input: Record<string, unknown>, companyId: string): Promise<string> {
+  const appName = (input.app_name as string)?.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-');
+  if (!appName) return 'Error: app_name is required (e.g. "acme-crm").';
+
+  const description = (input.description as string) ?? 'SaaS app built on Baljia skeleton';
+  const extraEnvVars = (input.env_vars as Record<string, string>) ?? {};
+  const org = githubOrg();
+  const repoSlug = `${appName}-${companyId.slice(0, 6)}`;
+
+  const steps: string[] = [];
+  let repoUrl = '';
+  let databaseUrl = '';
+  let serviceUrl = '';
+
+  // Step 1: Fork skeleton
+  steps.push('Step 1/4: Forking Next.js skeleton...');
+  const forkResult = await githubForkSkeleton({ repo: repoSlug, description }, companyId);
+  if (forkResult.startsWith('Fork failed') || forkResult.startsWith('Error:')) {
+    return `create_instance failed at skeleton fork:\n${forkResult}`;
+  }
+  repoUrl = `https://github.com/${org}/${repoSlug}`;
+  steps.push(`  âœ… Repo: ${repoUrl}`);
+
+  // Step 2: Provision database
+  steps.push('Step 2/4: Provisioning Neon Postgres...');
+  const dbInfo = await provisionCompanyDatabase(companyId, repoSlug);
+  if (!dbInfo) {
+    return `create_instance: database provisioning failed. Check NEON_API_KEY.`;
+  }
+  databaseUrl = dbInfo.connectionUri ?? '';
+  steps.push(`  âœ… Database: ${dbInfo.host ?? 'provisioned'}`);
+
+  // Step 3: Create Render service
+  steps.push('Step 3/4: Creating Render web service...');
+  const authSecret = Array.from(crypto.getRandomValues(new Uint8Array(32)))
+    .map(b => b.toString(16).padStart(2, '0')).join('');
+
+  const envVars: Record<string, string> = {
+    DATABASE_URL: databaseUrl,
+    BETTER_AUTH_SECRET: authSecret,
+    BETTER_AUTH_URL: `https://${repoSlug}.onrender.com`,
+    NEXT_PUBLIC_APP_URL: `https://${repoSlug}.onrender.com`,
+    AI_GATEWAY_URL: process.env.AI_GATEWAY_URL ?? 'https://ai.baljia.app',
+    AI_GATEWAY_TOKEN: process.env.AI_GATEWAY_TOKEN ?? '',
+    NODE_ENV: 'production',
+    ...extraEnvVars,
+  };
+
+  const renderApiKey = process.env.RENDER_API_KEY;
+  if (!renderApiKey) {
+    return [
+      ...steps,
+      `âš ï¸  RENDER_API_KEY not configured â€” cannot create Render service automatically.`,
+      ``,
+      `Manual step: Create a Render web service with:`,
+      `  repo: ${repoUrl}`,
+      `  buildCommand: pnpm install && pnpm db:push && pnpm build`,
+      `  startCommand: pnpm start`,
+      `  env vars: See below`,
+      ...Object.entries(envVars).map(([k, v]) => `  ${k}=${k.includes('SECRET') || k.includes('TOKEN') || k.includes('URL') && v.includes('neon') ? '***' : v}`),
+    ].join('\n');
+  }
+
+  // Create Render service via API
+  const renderRes = await fetch(`${RENDER_API}/services`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${renderApiKey}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify({
+      type: 'web_service',
+      name: repoSlug,
+      repo: repoUrl,
+      branch: 'main',
+      buildCommand: 'pnpm install && pnpm db:push && pnpm build',
+      startCommand: 'pnpm start',
+      plan: 'free',
+      envVars: Object.entries(envVars).map(([key, value]) => ({ key, value })),
+    }),
+  });
+
+  const renderData = await renderRes.json() as { service?: { id: string; url?: string }; id?: string; url?: string; message?: string };
+  const service = renderData.service ?? renderData;
+
+  if (!renderRes.ok) {
+    steps.push(`  âš ï¸  Render service creation failed: ${renderData.message ?? renderRes.statusText}`);
+    steps.push(`  Proceed manually with the repo: ${repoUrl}`);
+  } else {
+    const serviceId = service.id ?? '';
+    serviceUrl = service.url ?? `https://${repoSlug}.onrender.com`;
+
+    // Save service ID to company record
+    if (serviceId) {
+      await db.update(companies)
+        .set({ render_service_id: serviceId })
+        .where(eq(companies.id, companyId));
+    }
+    steps.push(`  âœ… Render service: ${serviceUrl}`);
+    steps.push(`  Service ID: ${serviceId}`);
+  }
+
+  // Step 4: Summary
+  steps.push('Step 4/4: Instance ready!');
+  steps.push('');
+  steps.push('â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”');
+  steps.push(`ðŸš€ App: ${description}`);
+  steps.push(`ðŸ“¦ Repo: ${repoUrl}`);
+  steps.push(`ðŸŒ URL: ${serviceUrl || '(will be assigned by Render on first deploy)'}`);
+  steps.push(`ðŸ—„ï¸  DB: ${databaseUrl ? 'Provisioned (connection saved)' : 'Not provisioned'}`);
+  steps.push('â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”');
+  steps.push('');
+  steps.push('What is pre-wired (no setup needed):');
+  steps.push('  â€¢ Better Auth (email+password, DB sessions)');
+  steps.push('  â€¢ Drizzle ORM + Neon Postgres');
+  steps.push('  â€¢ AI gateway (no user API key needed)');
+  steps.push('  â€¢ Stripe checkout + webhooks');
+  steps.push('  â€¢ Shadcn/ui + Tailwind 4');
+  steps.push('');
+  steps.push('Next: push feature-specific files via github_push_file, then Render will auto-deploy from main.');
+  steps.push('');
+  steps.push('⚠️  MANDATORY NEXT STEP: After the deploy completes (allow 3-5 min), run the verify-deploy');
+  steps.push('   skill checklist to confirm frontend, backend, auth, DB, and integrations all work.');
+  steps.push('   Use: read_skill({ skill: "verify-deploy" }) then execute each check_url_health step.');
+
+  log.info('Instance created', { companyId, repoSlug, serviceUrl });
+  return steps.join('\n');
+}
+
+// â”€â”€ get_preview: return the company's live Render URL â”€â”€
+
+async function handleGetPreview(companyId: string): Promise<string> {
+  // First check saved company record
+  const company = await db.query.companies.findFirst({
+    where: eq(companies.id, companyId),
+  });
+
+  const serviceId = company?.render_service_id;
+  const renderApiKey = process.env.RENDER_API_KEY;
+
+  if (!serviceId) {
+    return [
+      'No Render service ID found for this company.',
+      'If you just created a service, save the service ID first.',
+      'Or call create_instance to provision a full instance.',
+    ].join('\n');
+  }
+
+  if (!renderApiKey) {
+    return `Service ID: ${serviceId}\nURL: https://${company?.github_repo?.split('/')[1] ?? serviceId}.onrender.com\n(RENDER_API_KEY not set â€” URL is estimated from service name)`;
+  }
+
+  try {
+    const res = await fetch(`${RENDER_API}/services/${serviceId}`, {
+      headers: {
+        Authorization: `Bearer ${renderApiKey}`,
+        Accept: 'application/json',
+      },
+    });
+
+    if (!res.ok) {
+      return `Failed to get service details: ${res.statusText}`;
+    }
+
+    const data = await res.json() as {
+      service?: { url?: string; name?: string; status?: string };
+      url?: string; name?: string; status?: string;
+    };
+    const svc = data.service ?? data;
+    const url = svc.url ?? `https://${svc.name}.onrender.com`;
+
+    return [
+      `âœ… Preview URL: ${url}`,
+      `Status: ${svc.status ?? 'unknown'}`,
+      `Service ID: ${serviceId}`,
+      '',
+      `Health check: ${url}/health`,
+    ].join('\n');
+  } catch (err) {
+    return `Error fetching preview: ${err instanceof Error ? err.message : 'Unknown error'}`;
   }
 }
