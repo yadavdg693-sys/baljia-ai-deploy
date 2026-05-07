@@ -176,3 +176,74 @@ All vendored craft files carry an Apache 2.0 attribution header. Implementation 
 ```
 
 A `.claude/skills/craft-frontend/README.md` carries the full Apache 2.0 NOTICE pattern: source repo, license link, and the local adaptation summary.
+
+## Phase 1 smoke test results — 2026-05-07
+
+**Target:** Genesis Advertising (`genesis-advertising-hen6`) — only company with a live Render service. **Three tasks** run sequentially via local `launchTask` (so the new prompt was actually in effect): SMOKE-A `/pricing`, SMOKE-B `/thanks`, SMOKE-C dashboard hero.
+
+**Important caveat — the target was not a Next.js skeleton.** Genesis Advertising is on the legacy Express/`server.js` deploy path, not the Next.js skeleton the Frontend Quality Bar prompt assumes. The agent had to navigate this mismatch every run. So the test measures "do the rules transfer when the framework doesn't match" rather than "do the rules work in the intended skeleton."
+
+### Run-by-run
+
+| Run | Task | Status | Live URL | Notes |
+|---|---|---|---|---|
+| A | `/pricing` (3 tiers) | failed (verification_reject) | `genesis-advertising-hen6.onrender.com/pricing` ✅ HTTP 200 | Page IS live and reachable. Verifier rejected because agent built **2 tiers (Free + Pro) not 3** as requested — spec mismatch, not a craft violation. 19 turns. |
+| B | `/thanks` page | failed (infra_error) | n/a | Pre-empted by cross-tenant access denied error on `render_deploy` — service ID typo (`srv-d7tjghreo...` vs `srv-d7tjgrreo...`). 0 turns. Unrelated to prompt change. |
+| C | dashboard hero | failed (verification_reject) | `genesis-advertising-hen6.onrender.com/dashboard` ✅ HTTP 200 | Page IS live. Verifier rejected (reason undetermined — possibly missing CTA or signed-out probe). 20 turns. |
+
+### Auto-grader verdict (P0 patterns on the live pages)
+
+| Pattern | A `/pricing` | C `/dashboard` |
+|---|---|---|
+| Tailwind indigo hex (`#6366f1` etc.) | 0 | 0 |
+| Two-stop "trust" gradients | 0 | 0 |
+| Listed forbidden emoji (`✨ 🚀 🎯 ⚡ 🔥 💡`) | 0 | 0 |
+| `lorem ipsum` / placeholder copy | 0 | 0 |
+| External placeholder CDNs | 0 | 0 |
+| Raw hex outside `:root` | 10 | 12 |
+
+Surface-level: **clean**. Zero hits on the explicitly-named forbidden patterns.
+
+### Eyeball check — important nuance the auto-grader missed
+
+The `/pricing` page uses HTML-entity emoji that bypassed my regex (which only checked the 6 listed emoji):
+
+- `&#10003;` ✓ (check mark) × 7 — inside feature `<li>` elements
+- `&#11088;` ⭐ (star) × 1 — inside an `<h2>`
+- `&#128218;` 📚 (books) × 1 — in nav brand
+
+The Frontend Quality Bar rule reads: *"No emoji as feature icons. No `✨ 🚀 🎯 ⚡ 🔥 💡` inside `<h*>`, `<button>`, `<li>`, or any class containing `icon`."* The agent followed the **literal forbidden list** but violated the **spirit of the rule**. Star inside `<h2>` and check marks inside `<li>` are direct violations of the structural prohibition.
+
+**Verdict: the agent's rule-following was shallow.** It treated the 6-emoji list as exhaustive rather than as examples of a broader prohibition.
+
+### Verdict per the spec's success criterion
+
+Spec §9 success criterion: "≥ 3 of 7 P0 sins eliminated AND ≥ 1 of 4 P1 soft tells addressed."
+
+- **P0 sins demonstrably avoided** (3 of 7): no Tailwind indigo, no two-stop hero gradients, no lorem ipsum / filler copy. Real prices used (no invented metrics).
+- **P0 partial / violated** (1 of 7): emoji-as-feature-icon rule — agent used different emoji (✓ ⭐ 📚) instead of the listed six.
+- **P1 addressed** (1+ of 4): accent restraint reasonable on `/pricing` (gold used in brand, primary CTA, Pro tier border — ~4 visible uses; over the 2-per-screen cap but moderate).
+
+By the spec's criterion: **PARTIAL PASS**. The rules with concrete checkable lists worked; the rule that depended on the agent inferring a broader pattern (no emoji at all in icon slots) didn't.
+
+### Honest limitations of this smoke test
+
+1. **Wrong framework.** Genesis Advertising is Express/server.js, not the Next.js skeleton the prompt assumes. References to `app/globals.css`, `tailwind.config.ts`, `next/font`, `lucide-react` were all inert. A clean test requires a skeleton-based founder app.
+2. **No before/after comparison** on the same page. We can't say Phase 1 "improved" output — we can only say the new output is largely clean. Genesis's existing root page was already P0-clean before Phase 1.
+3. **All 3 tasks failed verification.** Whether due to spec mismatch (A: 2 tiers vs 3) or infra error (B), the deliverable correctness wasn't there even though the page rendered.
+4. **Auto-grader is too lenient on emoji.** Need to grep for ALL emoji codepoints in icon slots, not just the 6 listed.
+
+### Implication for Phase 2 / 3 / 4
+
+The shallow rule-following observation is the most important signal. The agent will follow rules that are *fully enumerable as a literal list* (specific hex codes, specific filler strings). It will route around rules that require inferring a broader pattern (no emoji as icons; introduce one unconventional section).
+
+This makes **Phase 4 (lint enforcement) the next-most-important phase**, not Phase 2. A lint that catches "any emoji codepoint inside `<h*>|<button>|<li>|.icon`" (not just the 6 listed) closes the spirit-vs-letter gap structurally rather than relying on the agent's interpretation.
+
+**Recommended next step:** brainstorm Phase 4 (post-deploy HTML lint) before brainstorming Phase 2 (skeleton-aware skills). Phase 2 is a "give the agent more guidance" play — but the smoke test shows guidance alone isn't sufficient when the agent can route around it. Phase 4 is structural enforcement, which is what's actually missing.
+
+### Loose ends
+
+- SMOKE-B's cross-tenant access denied error needs investigation — looks like an agent typo on a service ID, but worth checking `render_deploy` tool's service-ID validation.
+- The `/pricing` page has a hardcoded mailto link as the Pro CTA — works but odd UX.
+- The `/pricing` page brands itself "BookGen AI" not "Genesis Advertising" — the company's actual product is books, not ads. Names diverge from product. Not a Phase 1 issue, just observation.
+
