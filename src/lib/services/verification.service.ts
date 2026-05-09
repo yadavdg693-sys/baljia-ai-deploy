@@ -8,22 +8,12 @@ import * as taskService from '@/lib/services/task.service';
 import * as eventService from '@/lib/services/event.service';
 import { db, reports, companies, taskExecutions } from '@/lib/db';
 import { eq, desc } from 'drizzle-orm';
+import { githubFetch } from '@/lib/services/github-throttle';
 
-// Tools that CONSTITUTE shipping CODE somewhere a customer can hit. If a
-// task tag implies it should produce a running app, at least one of these
-// must appear in the execution_log — otherwise the agent's running but
-// nothing is live. queryforge campaign-generator failure (2026-04-25,
-// task 9a36e013-…) had ZERO of these calls in 20 turns; agent created DB
-// tables via run_migration and stopped.
-//
-// run_migration is INTENTIONALLY EXCLUDED — schema migrations alone don't
-// constitute "the feature shipped". For pure-DB tasks (tag='database',
-// 'migration', 'sql'), use a different evidence path.
+// Tools that constitute shipping code to the founder app runtime.
+// Engineering apps now deploy to Render. GitHub writes are necessary, but are
+// not enough: code in a repo is not a live app.
 const DEPLOY_TOOL_NAMES = new Set([
-  'cf_deploy_app',
-  'cf_deploy_landing',
-  'github_push_file',          // Render deploy-from-repo path
-  'github_create_commit',
   'render_create_service',
   'render_deploy',
   'deploy_to_render',
@@ -31,7 +21,36 @@ const DEPLOY_TOOL_NAMES = new Set([
 
 // Schema-only tools — sufficient evidence for DB-shaped tasks but NOT for
 // feature/engineering tasks (which need both schema AND code).
+const ADVISORY_CHECK_NAMES = new Set<string>([
+  'has_report',
+  'has_recommendations',
+  'db_state_evidence',     // not all deploys need DB checks (static sites, marketing pages)
+  'tests_folder_present',  // Backend Quality Bar — surface in reports, soft until adoption
+  'readme_present',        // Backend Quality Bar — surface in reports, soft until adoption
+  'static_code_scan',      // Quality Bar — surface in reports, soft until adoption
+  'llm_code_review',       // Quality Bar — LLM diff review, surface in reports
+]);
+
+const FAILED_TOOL_RESULT_RE = /\b(missing required input|invalid script|failed|error|not configured|not registered|not injected|no .* deployed|check logs)\b/i;
+const DEPLOY_SUCCESS_RE = /\b(render service created|render deploy|deployment triggered|service deployed|deployed to render)\b/i;
+const HEALTH_TOOL_NAMES = new Set(['check_url_health']);
+const HEALTH_SUCCESS_RE = /\b(is healthy|returned HTTP 2\d\d|HTTP 2\d\d|200|responded in)\b/i;
+
+// Higher-fidelity verifiers added 2026-05-08 to close the
+// "deterministic-passes-but-app-is-broken" gap. check_url_health alone says
+// "URL responds 2xx"; these prove the app actually works for users (auth flow,
+// CRUD writes, third-party links).
+const JOURNEY_TOOL_NAMES = new Set(['verify_user_journey']);
+const JOURNEY_SUCCESS_RE = /^JOURNEY PASS\b/m;
+const DB_STATE_TOOL_NAMES = new Set(['verify_db_state']);
+const DB_STATE_SUCCESS_RE = /^DB STATE PASS\b/m;
+const STATIC_SCAN_TOOL_NAMES = new Set(['static_code_scan']);
+const STATIC_SCAN_SUCCESS_RE = /^STATIC SCAN PASS\b|high=0\b/m;
+const CODE_REVIEW_TOOL_NAMES = new Set(['review_pushed_code']);
+const CODE_REVIEW_SUCCESS_RE = /^CODE REVIEW PASS\b|high=0\b|^CODE REVIEW SKIPPED\b/m;
+
 const SCHEMA_DEPLOY_TOOLS = new Set(['run_migration']);
+const REQUESTED_ROUTE_LIMIT = 5;
 
 // Tags where a deploy is REQUIRED for "completed" — i.e. without at least
 // one DEPLOY_TOOL call, the task is not actually done.
@@ -46,13 +65,25 @@ const DEPLOY_REQUIRED_TAGS = new Set([
   'landing-page',
   'dashboard',
   'pricing-page',
+  'bug',
   'bug-fix',
   'fix',
+  'api',
+  'crud',
+  'webhook',
+  'cron',
+  'form',
+  'css',
+  'settings',
 ]);
 
 /** Read execution_log from the latest execution for this task and return
- *  the names of every tool the agent called. Empty array on error. */
-async function getExecutionToolCalls(taskId: string): Promise<string[]> {
+ *  every tool call the agent made. Empty array on error. */
+async function getExecutionToolCalls(taskId: string): Promise<Array<{
+  tool: string;
+  result: string;
+  event?: string;
+}>> {
   try {
     const [exec] = await db
       .select({ execution_log: taskExecutions.execution_log })
@@ -63,16 +94,250 @@ async function getExecutionToolCalls(taskId: string): Promise<string[]> {
 
     if (!exec?.execution_log) return [];
 
-    let log: Array<{ tool?: string }> = [];
+    let log: Array<{ tool?: string; result?: unknown; event?: unknown }> = [];
     if (typeof exec.execution_log === 'string') {
       try { log = JSON.parse(exec.execution_log); } catch { return []; }
     } else if (Array.isArray(exec.execution_log)) {
-      log = exec.execution_log as Array<{ tool?: string }>;
+      log = exec.execution_log as Array<{ tool?: string; result?: unknown; event?: unknown }>;
     }
 
-    return log.map((e) => e.tool ?? '').filter(Boolean);
+    return log
+      .map((e) => ({
+        tool: e.tool ?? '',
+        result: typeof e.result === 'string' ? e.result : '',
+        event: typeof e.event === 'string' ? e.event : undefined,
+      }))
+      .filter((e) => e.tool || e.event);
   } catch {
     return [];
+  }
+}
+
+function isSuccessfulDeployCall(call: { tool: string; result: string }): boolean {
+  if (!DEPLOY_TOOL_NAMES.has(call.tool)) return false;
+  if (!call.result) return false;
+  if (FAILED_TOOL_RESULT_RE.test(call.result)) return false;
+  return DEPLOY_SUCCESS_RE.test(call.result) || !/\b(missing|required|invalid|failed|error)\b/i.test(call.result);
+}
+
+function isSuccessfulHealthCall(call: { tool: string; result: string }): boolean {
+  if (!HEALTH_TOOL_NAMES.has(call.tool)) return false;
+  if (!call.result) return false;
+  if (FAILED_TOOL_RESULT_RE.test(call.result)) return false;
+  return HEALTH_SUCCESS_RE.test(call.result) || !/\b(down|failed|error|timeout|HTTP [45]\d\d)\b/i.test(call.result);
+}
+
+function isSuccessfulJourneyCall(call: { tool: string; result: string }): boolean {
+  if (!JOURNEY_TOOL_NAMES.has(call.tool)) return false;
+  if (!call.result) return false;
+  return JOURNEY_SUCCESS_RE.test(call.result);
+}
+
+function isSuccessfulDbStateCall(call: { tool: string; result: string }): boolean {
+  if (!DB_STATE_TOOL_NAMES.has(call.tool)) return false;
+  if (!call.result) return false;
+  return DB_STATE_SUCCESS_RE.test(call.result);
+}
+
+function isCleanStaticScanCall(call: { tool: string; result: string }): boolean {
+  if (!STATIC_SCAN_TOOL_NAMES.has(call.tool)) return false;
+  if (!call.result) return false;
+  // "PASS" OR "STATIC SCAN: ... high=0" both count as clean.
+  return STATIC_SCAN_SUCCESS_RE.test(call.result);
+}
+
+function isCleanCodeReviewCall(call: { tool: string; result: string }): boolean {
+  if (!CODE_REVIEW_TOOL_NAMES.has(call.tool)) return false;
+  if (!call.result) return false;
+  // PASS / high=0 / SKIPPED (no provider available) all count as clean —
+  // SKIPPED isn't a failure of the agent, it's a missing-config issue.
+  return CODE_REVIEW_SUCCESS_RE.test(call.result);
+}
+
+// Backend Quality Bar enforcement (advisory). Fetches the company's GitHub
+// repo via the Contents API and checks for cross-cutting hygiene that's
+// independent of the specific feature: tests folder exists, README exists.
+// Heavier checks (trust-proxy, env validation) are caught by verify_user_journey
+// at runtime, so we keep the static check minimal.
+interface RepoHygiene {
+  reachable: boolean;
+  hasTestsFolder: boolean;
+  hasReadme: boolean;
+  testFileCount: number;
+  readmeBytes: number;
+  detail: string;
+}
+
+const GITHUB_API = 'https://api.github.com';
+const RENDER_API = 'https://api.render.com/v1';
+
+/**
+ * Resolve the URL where the company's deployed app is reachable.
+ * Prefers custom_domain (e.g. threadpulse.baljia.app) over the Render-assigned
+ * hostname. Returns null when neither is available — the verifier should skip
+ * the journey-fallback in that case.
+ */
+export async function getCompanyAppUrl(companyId: string): Promise<string | null> {
+  const [c] = await db.select({
+    custom_domain:     companies.custom_domain,
+    render_service_id: companies.render_service_id,
+  }).from(companies).where(eq(companies.id, companyId)).limit(1);
+
+  if (!c) return null;
+  if (c.custom_domain) {
+    return `https://${c.custom_domain.replace(/^https?:\/\//, '').replace(/\/+$/, '')}`;
+  }
+  if (!c.render_service_id) return null;
+
+  const token = process.env.RENDER_API_KEY;
+  if (!token) return null;
+  try {
+    const r = await fetch(`${RENDER_API}/services/${c.render_service_id}`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!r.ok) return null;
+    const data = await r.json() as { service?: { serviceDetails?: { url?: string } }; serviceDetails?: { url?: string } };
+    const url = data.service?.serviceDetails?.url ?? data.serviceDetails?.url ?? '';
+    return url || null;
+  } catch {
+    return null;
+  }
+}
+
+async function getRepoHygiene(repo: string | null): Promise<RepoHygiene> {
+  if (!repo) return { reachable: false, hasTestsFolder: false, hasReadme: false, testFileCount: 0, readmeBytes: 0, detail: 'no github_repo on company' };
+  const token = process.env.GITHUB_TOKEN;
+  if (!token) return { reachable: false, hasTestsFolder: false, hasReadme: false, testFileCount: 0, readmeBytes: 0, detail: 'GITHUB_TOKEN not configured' };
+
+  const headers = { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
+
+  // Single recursive Trees API call returns the entire repo's file index in one
+  // request — half the rate-limit cost of the previous root + tests-dir pair.
+  // Default branch resolution: try main first, fall back to master.
+  type TreeEntry = { path: string; type: 'blob' | 'tree'; size?: number };
+  let entries: TreeEntry[] = [];
+  for (const branch of ['main', 'master']) {
+    try {
+      const res = await githubFetch(`${GITHUB_API}/repos/${repo}/git/trees/${branch}?recursive=1`, { headers, signal: AbortSignal.timeout(8_000) });
+      if (res.ok) {
+        const data = await res.json() as { tree?: TreeEntry[]; truncated?: boolean };
+        entries = data.tree ?? [];
+        break;
+      }
+      if (res.status !== 404) {
+        return { reachable: false, hasTestsFolder: false, hasReadme: false, testFileCount: 0, readmeBytes: 0, detail: `repo tree HTTP ${res.status} on ${branch}` };
+      }
+      // 404 on main: try master next
+    } catch (err) {
+      return { reachable: false, hasTestsFolder: false, hasReadme: false, testFileCount: 0, readmeBytes: 0, detail: `repo tree threw on ${branch}: ${err instanceof Error ? err.message : String(err)}` };
+    }
+  }
+  if (entries.length === 0) {
+    return { reachable: false, hasTestsFolder: false, hasReadme: false, testFileCount: 0, readmeBytes: 0, detail: 'repo tree empty or default branch not found (main/master)' };
+  }
+
+  // README — root-level only (no nested README.md in a subdir counts here)
+  const readmeEntry = entries.find((e) => e.type === 'blob' && !e.path.includes('/') && /^readme(\.\w+)?$/i.test(e.path));
+  const readmeBytes = readmeEntry?.size ?? 0;
+
+  // Tests — accept any of tests/, test/, __tests__/, specs/, or scoped under any of those.
+  // testFileCount counts test-shaped files anywhere in the tree.
+  const testFileCount = entries.filter((e) => {
+    if (e.type !== 'blob') return false;
+    const segments = e.path.split('/');
+    const inTestsDir = segments.some((s, i) => i < segments.length - 1 && /^(tests?|__tests__|specs?)$/i.test(s));
+    if (!inTestsDir) return false;
+    return /\.(test|spec)\.(t|j)sx?$|\.py$/i.test(e.path);
+  }).length;
+
+  return {
+    reachable: true,
+    hasTestsFolder: testFileCount > 0,
+    hasReadme: !!readmeEntry && readmeBytes >= 200,
+    testFileCount,
+    readmeBytes,
+    detail: `repo=${repo}, tests=${testFileCount} file(s), readme=${readmeBytes}b`,
+  };
+}
+
+function hasAgentLoop(logEntries: Array<{ event?: string }>): boolean {
+  return logEntries.some((entry) =>
+    ['loop_kill', 'watchdog_kill', 'watchdog_health_kill'].includes(entry.event ?? '')
+  );
+}
+
+function hardFailures(checks: VerificationCheck[]): VerificationCheck[] {
+  return checks.filter((c) => !c.passed && !ADVISORY_CHECK_NAMES.has(c.name));
+}
+
+function normalizeRequestedPath(path: string): string | null {
+  const cleaned = path.trim().replace(/[),.;!?]+$/g, '');
+  if (!cleaned.startsWith('/') || cleaned.startsWith('//') || cleaned === '/') return null;
+  if (cleaned.length > 180) return null;
+  return cleaned;
+}
+
+export function extractRequestedBrowserPaths(
+  task: Pick<Task, 'title' | 'description'>,
+  domain?: string,
+): string[] {
+  const text = `${task.title}\n${task.description ?? ''}`;
+  const paths = new Set<string>();
+
+  for (const match of text.matchAll(/https?:\/\/[^\s"'<>`]+/gi)) {
+    try {
+      const url = new URL(match[0]);
+      if (domain && url.hostname !== domain) continue;
+      const normalized = normalizeRequestedPath(`${url.pathname}${url.search}`);
+      if (normalized) paths.add(normalized);
+    } catch {
+      // Ignore malformed URLs in founder-written task text.
+    }
+  }
+
+  const standalonePathRe = /(^|[\s"'`(>])((?:\/(?!\/)[A-Za-z0-9._~%!$&'()*+,;=:@-]+)+\/?(?:\?[^\s"'`)<]+)?)/g;
+  for (const match of text.matchAll(standalonePathRe)) {
+    const normalized = normalizeRequestedPath(match[2]);
+    if (normalized) paths.add(normalized);
+    if (paths.size >= REQUESTED_ROUTE_LIMIT) break;
+  }
+
+  return [...paths].slice(0, REQUESTED_ROUTE_LIMIT);
+}
+
+function isLikelyErrorHtml(html: string): boolean {
+  const firstChunk = html.slice(0, 2000);
+  const titleText = firstChunk.match(/<title[^>]*>(.*?)<\/title>/i)?.[1] ?? '';
+  const errorHeading = /<h1[^>]*>\s*(404|500|502|503|not found|internal server error|bad gateway|service unavailable)\s*<\/h1>/i.test(firstChunk);
+  const errorTitle = /\b(404|500|502|503|not found|internal server error|bad gateway|service unavailable|default page)\b/i.test(titleText);
+  return errorTitle || errorHeading;
+}
+
+async function verifyRequestedRoute(domain: string, path: string): Promise<VerificationCheck> {
+  try {
+    const response = await fetch(`https://${domain}${path}`, {
+      method: 'GET',
+      signal: AbortSignal.timeout(15000),
+    });
+    const contentType = response.headers.get('content-type') ?? '';
+    const body = await response.text();
+    const htmlErrorPage = contentType.includes('text/html') && isLikelyErrorHtml(body);
+    const passed = response.ok && body.length > 0 && !htmlErrorPage;
+
+    return {
+      name: `requested_route:${path}`,
+      passed,
+      detail: passed
+        ? `${domain}${path} returned ${response.status} with ${body.length} bytes.`
+        : `${domain}${path} returned ${response.status}; bytes=${body.length}; errorPage=${htmlErrorPage}.`,
+    };
+  } catch (error) {
+    return {
+      name: `requested_route:${path}`,
+      passed: false,
+      detail: `Could not reach ${domain}${path}: ${error instanceof Error ? error.message : 'timeout'}`,
+    };
   }
 }
 
@@ -135,7 +400,7 @@ function determineLevel(task: Task): VerificationLevel {
   }
 
   // Browser flow — UI/frontend tasks (validates by hitting the deployed URL)
-  if (['landing-page', 'dashboard', 'form', 'css', 'onboarding', 'settings', 'pricing-page'].includes(tag)) {
+  if (['landing-page', 'dashboard', 'form', 'css', 'onboarding', 'settings', 'pricing-page', 'bug'].includes(tag)) {
     return 'browser_flow';
   }
 
@@ -176,7 +441,7 @@ async function verifyDeterministic(task: Task): Promise<VerificationResult> {
   // for audit/observability. has_report is here because the deployed artifact
   // (a live Worker URL) is more meaningful than a written-out report; agents
   // that ship working code without a separate report row should still pass.
-  const advisoryNames = new Set<string>(['has_report']);
+  const toolCalls = await getExecutionToolCalls(task.id);
 
   // Check 1 (HARD REQUIREMENT for deploy-shaped tags): The agent must have
   // called a DEPLOY tool. queryforge campaign-generator (task 9a36e013-…)
@@ -185,16 +450,137 @@ async function verifyDeterministic(task: Task): Promise<VerificationResult> {
   const tagNormalized = task.tag.toLowerCase().trim();
   const requiresDeploy = DEPLOY_REQUIRED_TAGS.has(tagNormalized);
   if (requiresDeploy) {
-    const toolCalls = await getExecutionToolCalls(task.id);
-    const deployCalls = toolCalls.filter((t) => DEPLOY_TOOL_NAMES.has(t));
+    const deployCalls = toolCalls.filter(isSuccessfulDeployCall);
+    const attemptedDeployTools = toolCalls
+      .filter((t) => DEPLOY_TOOL_NAMES.has(t.tool))
+      .map((t) => t.tool);
     checks.push({
       name: 'deploy_evidence',
       passed: deployCalls.length > 0,
       detail: deployCalls.length > 0
-        ? `${deployCalls.length} deploy tool call(s): ${[...new Set(deployCalls)].join(', ')}`
-        : `Tag "${task.tag}" requires a deploy but agent never called a deploy tool. Tools used: ${[...new Set(toolCalls)].slice(0, 8).join(', ') || 'none'}`,
+        ? `${deployCalls.length} successful deploy tool call(s): ${[...new Set(deployCalls.map((t) => t.tool))].join(', ')}`
+        : `Tag "${task.tag}" requires a successful deploy. Deploy attempts: ${attemptedDeployTools.length ? [...new Set(attemptedDeployTools)].join(', ') : 'none'}. Tools used: ${[...new Set(toolCalls.map((t) => t.tool).filter(Boolean))].slice(0, 8).join(', ') || 'none'}`,
     });
+
+    // Stricter than before: previously we passed if ANY check_url_health
+    // returned 2xx, so an agent that probed /, /register, /login (all 200)
+    // and /api/health (500) would still pass. Now ALL attempted health
+    // checks must succeed — a failed probe is a real signal the deploy is
+    // partially broken even if the landing happens to be up.
+    const healthAttempts = toolCalls.filter((t) => HEALTH_TOOL_NAMES.has(t.tool));
+    const healthSuccesses = healthAttempts.filter(isSuccessfulHealthCall);
+    const failedHealthCalls = healthAttempts.filter((t) => !isSuccessfulHealthCall(t));
+    const allHealthPassed = healthAttempts.length > 0 && failedHealthCalls.length === 0;
+    checks.push({
+      name: 'render_health_evidence',
+      passed: allHealthPassed,
+      detail: healthAttempts.length === 0
+        ? `Render deploy-shaped task must call check_url_health after deploy. Health attempts: none.`
+        : allHealthPassed
+          ? `${healthSuccesses.length} health check(s), all passed.`
+          : `${failedHealthCalls.length} of ${healthAttempts.length} check_url_health call(s) failed (e.g. ${failedHealthCalls[0].result.slice(0, 120)}). A partially-broken deploy is still broken — fix and redeploy before declaring complete.`,
+    });
+
+    // HARD: deploy-shaped tasks must walk a full user journey end-to-end.
+    // check_url_health only proves "/ returned 2xx"; verify_user_journey proves
+    // a real user could register, sign in, and use the core feature.
+    const journeyCalls = toolCalls.filter(isSuccessfulJourneyCall);
+    const attemptedJourneys = toolCalls
+      .filter((t) => JOURNEY_TOOL_NAMES.has(t.tool))
+      .map((t) => t.tool);
+    checks.push({
+      name: 'user_journey_evidence',
+      passed: journeyCalls.length > 0,
+      detail: journeyCalls.length > 0
+        ? `${journeyCalls.length} passing user journey verification(s).`
+        : `Engineering task must run verify_user_journey after deploy to prove the app actually works for real users (register → use feature → log in). Journey attempts: ${attemptedJourneys.length ? attemptedJourneys.join(', ') : 'none'}.`,
+    });
+
+    // ADVISORY (does NOT fail the task): if the agent ran any DB-write
+    // operations as part of the journey, it should have followed up with at
+    // least one verify_db_state call to confirm the rows actually landed.
+    // Not every deploy needs DB checks (static sites, marketing pages), so
+    // this is encouraged but not required.
+    const dbStateCalls = toolCalls.filter(isSuccessfulDbStateCall);
+    const attemptedDbStateCalls = toolCalls
+      .filter((t) => DB_STATE_TOOL_NAMES.has(t.tool))
+      .map((t) => t.tool);
+    checks.push({
+      name: 'db_state_evidence',
+      passed: dbStateCalls.length > 0,
+      detail: dbStateCalls.length > 0
+        ? `${dbStateCalls.length} passing DB-state assertion(s) — side-effects confirmed.`
+        : `Advisory: no verify_db_state calls. If your app writes to the DB, follow up the journey with a SELECT-based assertion to catch lying redirects. Attempts: ${attemptedDbStateCalls.length ? attemptedDbStateCalls.join(', ') : 'none'}.`,
+    });
+
+    // ADVISORY: static code scan — pattern-based check over pushed source.
+    // Cheap (regex over JS/TS files), catches AI-coding pitfalls runtime
+    // verification can't see (silent catch, secret-in-log, env-without-config,
+    // template-SQL injection). Encouraged but advisory.
+    const staticScanAttempts = toolCalls.filter((t) => STATIC_SCAN_TOOL_NAMES.has(t.tool));
+    const cleanStaticScans = staticScanAttempts.filter(isCleanStaticScanCall);
+    checks.push({
+      name: 'static_code_scan',
+      passed: staticScanAttempts.length > 0 && cleanStaticScans.length === staticScanAttempts.length,
+      detail: staticScanAttempts.length === 0
+        ? `Advisory: no static_code_scan calls. The scanner catches silent-catch blocks, secret-in-log, template-SQL, missing trust-proxy — issues runtime journey verification cannot see.`
+        : cleanStaticScans.length === staticScanAttempts.length
+          ? `${cleanStaticScans.length} static scan(s) clean.`
+          : `${staticScanAttempts.length - cleanStaticScans.length} of ${staticScanAttempts.length} static scan(s) found high-severity findings. Address them via github_create_commit before declaring complete.`,
+    });
+
+    // ADVISORY: LLM code review — semantic check over the diff. Catches
+    // bugs static patterns can't (auth bypass, race conditions, business
+    // logic mistakes). Costs one Haiku call per build; agent should
+    // address high-severity findings before deploy.
+    const reviewAttempts = toolCalls.filter((t) => CODE_REVIEW_TOOL_NAMES.has(t.tool));
+    const cleanReviews = reviewAttempts.filter(isCleanCodeReviewCall);
+    checks.push({
+      name: 'llm_code_review',
+      passed: reviewAttempts.length > 0 && cleanReviews.length === reviewAttempts.length,
+      detail: reviewAttempts.length === 0
+        ? `Advisory: no review_pushed_code calls. An LLM diff review catches semantic bugs runtime verification can't see — auth bypass, race conditions, missing input validation. One Haiku call per build (~$0.01-0.05).`
+        : cleanReviews.length === reviewAttempts.length
+          ? `${cleanReviews.length} code review(s) clean.`
+          : `${reviewAttempts.length - cleanReviews.length} of ${reviewAttempts.length} code review(s) flagged high-severity issues. Address before declaring complete.`,
+    });
+
+    // ADVISORY: Backend Quality Bar adherence — static checks against the
+    // pushed repo. Tests folder and README must exist; future builds can
+    // grow this set (trust-proxy, env validation, etc.). Skipped silently
+    // if the repo isn't reachable (no github_repo, missing token, GitHub
+    // outage) to avoid false negatives.
+    const [companyRow] = await db
+      .select({ github_repo: companies.github_repo })
+      .from(companies)
+      .where(eq(companies.id, task.company_id))
+      .limit(1);
+    const hygiene = await getRepoHygiene(companyRow?.github_repo ?? null);
+    if (hygiene.reachable) {
+      checks.push({
+        name: 'tests_folder_present',
+        passed: hygiene.hasTestsFolder,
+        detail: hygiene.hasTestsFolder
+          ? `tests/ folder has ${hygiene.testFileCount} test file(s).`
+          : `Advisory: no tests/ folder (or empty) in ${companyRow?.github_repo}. Backend Quality Bar P0 requires at minimum one happy-path journey test + one failure-mode test per critical handler.`,
+      });
+      checks.push({
+        name: 'readme_present',
+        passed: hygiene.hasReadme,
+        detail: hygiene.hasReadme
+          ? `README is ${hygiene.readmeBytes} bytes.`
+          : `Advisory: README missing or under 200 bytes in ${companyRow?.github_repo}. Quality Bar P1 requires a README with required env vars + how to run tests + how to redeploy.`,
+      });
+    }
   }
+
+  checks.push({
+    name: 'no_agent_loop',
+    passed: !hasAgentLoop(toolCalls),
+    detail: hasAgentLoop(toolCalls)
+      ? 'Agent was stopped by loop/watchdog detection before a clean finish.'
+      : 'No agent loop detected.',
+  });
 
   // Check 2 (advisory): Task has a report. Engineering tasks ship code as the
   // primary artifact — a separate report row is nice to have but not required.
@@ -233,9 +619,9 @@ async function verifyDeterministic(task: Task): Promise<VerificationResult> {
   });
 
   // Pass = no HARD check failed. Advisory checks can fail without blocking.
-  const hardFailures = checks.filter((c) => !c.passed && !advisoryNames.has(c.name));
-  const passed = hardFailures.length === 0;
-  const advisoryFailures = checks.filter((c) => !c.passed && advisoryNames.has(c.name));
+  const failedHardChecks = hardFailures(checks);
+  const passed = failedHardChecks.length === 0;
+  const advisoryFailures = checks.filter((c) => !c.passed && ADVISORY_CHECK_NAMES.has(c.name));
 
   return {
     level: 'deterministic',
@@ -250,7 +636,7 @@ async function verifyDeterministic(task: Task): Promise<VerificationResult> {
       ? (advisoryFailures.length > 0
         ? `${checks.length - advisoryFailures.length}/${checks.length} hard checks passed (${advisoryFailures.length} advisory failed: ${advisoryFailures.map((c) => c.name).join(', ')}).`
         : `All ${checks.length} deterministic checks passed.`)
-      : `${hardFailures.length} hard check(s) failed: ${hardFailures.map((c) => c.name).join(', ')}.`,
+      : `${failedHardChecks.length} hard check(s) failed: ${failedHardChecks.map((c) => c.name).join(', ')}.`,
   };
 }
 
@@ -298,7 +684,7 @@ async function verifyBrowserFlow(task: Task): Promise<VerificationResult> {
           const html = await getRes.text();
           const hasBody = html.includes('<body');
           const hasContent = html.length > 500;
-          const isErrorPage = /error|not found|500|502|503|default page/i.test(html.slice(0, 2000));
+          const isErrorPage = isLikelyErrorHtml(html);
 
           browserChecks.push({
             name: 'page_has_content',
@@ -315,6 +701,11 @@ async function verifyBrowserFlow(task: Task): Promise<VerificationResult> {
           });
         }
       }
+
+      const requestedPaths = extractRequestedBrowserPaths(task, domain);
+      for (const path of requestedPaths) {
+        browserChecks.push(await verifyRequestedRoute(domain, path));
+      }
     } catch (error) {
       browserChecks.push({
         name: 'site_accessible',
@@ -330,16 +721,22 @@ async function verifyBrowserFlow(task: Task): Promise<VerificationResult> {
     });
   }
 
-  const passed = browserChecks.every((c) => c.passed);
+  const failedHardChecks = hardFailures(browserChecks);
+  const passed = failedHardChecks.length === 0;
 
   return {
     level: 'browser_flow',
     passed,
     checks: browserChecks,
-    evidence: { ...deterministicResult.evidence },
+    evidence: {
+      ...deterministicResult.evidence,
+      requested_paths: company?.subdomain || company?.custom_domain
+        ? extractRequestedBrowserPaths(task, company.custom_domain ?? `${company.subdomain}.baljia.app`)
+        : [],
+    },
     summary: passed
       ? `Browser flow verification passed (${browserChecks.length} checks).`
-      : `Some browser checks failed.`,
+      : `${failedHardChecks.length} hard browser check(s) failed: ${failedHardChecks.map((c) => c.name).join(', ')}.`,
   };
 }
 
@@ -437,8 +834,8 @@ async function verifyHybrid(task: Task): Promise<VerificationResult> {
     }
   }
 
-  const passed = allChecks.every((c) => c.passed);
-  const failedCount = allChecks.filter((c) => !c.passed).length;
+  const failedHardChecks = hardFailures(allChecks);
+  const passed = failedHardChecks.length === 0;
 
   return {
     level: 'hybrid',
@@ -451,7 +848,7 @@ async function verifyHybrid(task: Task): Promise<VerificationResult> {
     },
     summary: passed
       ? `Hybrid verification passed (${allChecks.length} checks across 3 levels).`
-      : `${failedCount} check(s) failed across deterministic, browser, and quality levels.`,
+      : `${failedHardChecks.length} hard check(s) failed across deterministic, browser, and quality levels: ${failedHardChecks.map((c) => c.name).join(', ')}.`,
   };
 }
 
@@ -472,6 +869,9 @@ export async function verifyAndUpdate(taskId: string): Promise<VerificationResul
 
   // Verifier is the sole authority for final task status (SPEC-CTRL-106)
   await taskService.finalizeTask(taskId, result.passed);
+  if (!result.passed) {
+    await taskService.updateTask(taskId, { failure_class: 'verification_reject' });
+  }
 
   // Emit correct event based on verification outcome
   const eventType = result.passed ? 'task_completed' : 'task_failed';
