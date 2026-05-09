@@ -289,6 +289,78 @@ export function getEngineeringTools(): EngineeringToolDefinition[] {
         required: ['url'],
       },
     },
+    {
+      name: 'review_pushed_code',
+      description: 'Run an LLM-based code review over the diff between the agent\'s most recent commit and the previous one. Catches semantic bugs that runtime journey verification cannot see by definition: unhandled async errors, auth bypass, SQL injection, secrets in logs, silent catch blocks, race conditions. Returns structured findings with severity (high/medium/low). Costs one Haiku LLM call (~3-15s, $0.01-0.05) per build. Call AFTER github_create_commit and AFTER static_code_scan, BEFORE render_create_service. Address all HIGH-severity findings via github_create_commit before declaring complete; medium/low are advisory.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {},
+      },
+    },
+    {
+      name: 'static_code_scan',
+      description: 'Run a fast pattern-based static scan over the JS/TS files in the company\'s GitHub repo. Catches AI-coding pitfalls that runtime journey verification cannot see by definition: process.env reads outside CONFIG_SCHEMA, silent catch blocks, secret-shaped vars in log statements, app.use(session) without trust-proxy, hardcoded test emails leaked from journey runs, template-literal SQL (injection risk), TODO/FIXME in committed code. Returns a structured list of findings with severity (high/medium/low). Call this AFTER github_create_commit and BEFORE render_create_service. Address all HIGH-severity findings via github_create_commit before declaring complete; medium/low are advisory.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {},
+      },
+    },
+    {
+      name: 'verify_db_state',
+      description: 'Run a SELECT query against the founder DB and assert on the result. Use AFTER verify_user_journey to confirm side-effects actually landed in the database — not just that the HTTP redirect succeeded. Example: after a "submit register" journey step passes, call this with sql:"SELECT email FROM users WHERE email=$1" + expect_min_rows:1 to prove the user row was actually created. Without this, a server that returns 302 but silently fails the INSERT will go unnoticed.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          label:                     { type: 'string' as const,   description: 'Human-readable label for the assertion, e.g. "user row exists after register".' },
+          sql:                       { type: 'string' as const,   description: 'Single SELECT statement. Parameter placeholders ($1, $2, ...) are NOT supported here — inline literal values via single quotes.' },
+          expect_min_rows:           { type: 'integer' as const,  description: 'Minimum number of rows the query must return. Defaults to 1.' },
+          expect_max_rows:           { type: 'integer' as const,  description: 'Optional max number of rows. Defaults to no limit.' },
+          expect_first_row_contains: { type: 'object' as const,   description: 'Optional. Each {key:value} must match the first row. Compared with == after JSON-stringify so works for strings/numbers/booleans.' },
+        },
+        required: ['label', 'sql'],
+      },
+    },
+    {
+      name: 'list_journey_templates',
+      description: 'Return ready-to-use verify_user_journey input templates for the most common founder-app flows: auth (register→logout→login), crud (create→list→delete), payment (visit pricing page + Stripe link liveness), settings (update profile field, verify persists), and full_mvp (auth + CRUD + payment in one journey). Use this BEFORE writing your own journey from scratch — pick the closest template, plug in the specific URLs and field names, and pass to verify_user_journey. Returns a JSON object keyed by template name; each value is a partial input you can spread into verify_user_journey.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          template: { type: 'string' as const, enum: ['auth', 'crud', 'payment', 'settings', 'full_mvp', 'all'], description: 'Which template to return. "all" returns every template — useful for picking the closest match.' },
+        },
+      },
+    },
+    {
+      name: 'verify_user_journey',
+      description: 'Walk through a multi-step user journey on the deployed app, asserting expected responses at each step. Cookies persist across steps so authenticated flows (register → login → use-feature) work end-to-end. Use this AFTER deploy to prove the app actually works for users — not just that URLs return 200. The agent MUST run this for every critical journey before marking an engineering task complete.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          journey_name: { type: 'string' as const, description: 'Human-readable name, e.g. "register, sign in, view dashboard"' },
+          base_url:     { type: 'string' as const, description: 'Deployed app base URL, e.g. https://threadpulse.baljia.app' },
+          steps: {
+            type: 'array' as const,
+            description: 'Ordered steps. Cookies/sessions persist across steps. Stops on first failure.',
+            items: {
+              type: 'object' as const,
+              properties: {
+                step:                    { type: 'string' as const,  description: 'Human label for this step' },
+                method:                  { type: 'string' as const,  enum: ['GET','POST','PUT','DELETE','PATCH'], description: 'Default GET' },
+                path:                    { type: 'string' as const,  description: 'Path on the app, e.g. /auth/register' },
+                body:                    { type: 'object' as const,  description: 'Request body. For form_urlencoded, pass plain {key:value}. For json, same.' },
+                body_type:               { type: 'string' as const,  enum: ['form','json'], description: 'How to encode body. Default form.' },
+                expect_status:           { description: 'Required HTTP status. Either a single integer (e.g. 200) or an array of acceptable values (e.g. [302, 201]) — useful for routes that may redirect OR return Created depending on Accept header.' },
+                expect_redirect:         { type: 'string' as const,  description: 'Substring expected in Location header on 3xx (e.g. /dashboard).' },
+                expect_body_contains:    { type: 'string' as const,  description: 'Substring required to appear in response body.' },
+                expect_body_not_contains:{ type: 'string' as const,  description: 'Substring forbidden in response body (e.g. error toast text like "Registration failed").' },
+              },
+              required: ['step','path'],
+            },
+          },
+        },
+        required: ['journey_name','base_url','steps'],
+      },
+    },
     // Ã¢â€â‚¬Ã¢â€â‚¬ Database Infrastructure (Neon Postgres) Ã¢â€â‚¬Ã¢â€â‚¬
     {
       name: 'provision_database',
@@ -447,6 +519,17 @@ export function getEngineeringTools(): EngineeringToolDefinition[] {
     // Ã¢â€â‚¬Ã¢â€â‚¬ Render: list_databases (completing KG render spec) Ã¢â€â‚¬Ã¢â€â‚¬
 
     // Ã¢â€â‚¬Ã¢â€â‚¬ Skeleton / Next.js SaaS build tools Ã¢â€â‚¬Ã¢â€â‚¬
+    {
+      name: 'fork_express_skeleton',
+      description: 'PRIMARY tool for any Express-based founder app on Render. Pushes the Baljia hardened Express + Postgres skeleton into the company\'s GitHub repo as a single atomic commit. The skeleton ships with: Zod boot-time env validation, app.set("trust proxy",1), Postgres-backed sessions (connect-pg-simple), structured pino logger with secret redaction, /api/health that probes DB + session-store + Stripe, withTimeout helper, discriminated-union response shape, register/login/logout handlers, dashboard scaffold, and a tests/ folder (config + auth + health). All P0 rules from the Backend Quality Bar are pre-wired. After forking: customize landing copy in landingPage(), feature routes (rename /api/items to your domain), and add feature-specific tables to db/schema.sql. Do NOT modify the framework patterns. Call run_migration on db/schema.sql before deploy. Then render_create_service. Use this INSTEAD of writing server.js from scratch — every from-scratch attempt has shipped with at least one P0 violation.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          app_name:    { type: 'string' as const, description: 'Founder-facing display name (e.g. "Threadpulse"). Used in landing-page copy + README. Defaults to the company name.' },
+          description: { type: 'string' as const, description: 'One-sentence product description. Used in package.json description and as a comment in server.js.' },
+        },
+      },
+    },
     {
       name: 'github_fork_skeleton',
       description: 'Fork the Baljia Next.js SaaS skeleton into the company GitHub repo. This copies the full production-ready skeleton (Better Auth, Drizzle, Neon, AI gateway, Stripe, Shadcn/ui, Tailwind 4) into the founder\'s repo. Call this FIRST when building any full-stack SaaS Ã¢â‚¬â€ do not write Express or plain HTML from scratch. After forking, use github_push_file or github_create_commit to patch in feature-specific code.',
@@ -631,6 +714,16 @@ export async function handleEngineeringTool(
     // Ã¢â€â‚¬Ã¢â€â‚¬ Health & safety Ã¢â€â‚¬Ã¢â€â‚¬
     case 'check_url_health':
       return handleCheckUrlHealth(input);
+    case 'verify_user_journey':
+      return handleVerifyUserJourney(input);
+    case 'list_journey_templates':
+      return handleListJourneyTemplates(input);
+    case 'verify_db_state':
+      return handleVerifyDbState(input, task.company_id);
+    case 'static_code_scan':
+      return handleStaticCodeScan(task.company_id);
+    case 'review_pushed_code':
+      return handleReviewPushedCode(task.company_id);
 
     // Ã¢â€â‚¬Ã¢â€â‚¬ Database Infrastructure Ã¢â€â‚¬Ã¢â€â‚¬
     case 'provision_database':
@@ -672,6 +765,9 @@ export async function handleEngineeringTool(
       return githubCreateCommit(input, task.company_id);
 
     // Ã¢â€â‚¬Ã¢â€â‚¬ Skeleton / Next.js SaaS build tools Ã¢â€â‚¬Ã¢â€â‚¬
+    case 'fork_express_skeleton':
+      return handleForkExpressSkeleton(input, task.company_id);
+
     case 'github_fork_skeleton':
       return githubForkSkeleton(input, task.company_id);
 
@@ -952,21 +1048,33 @@ async function renderCreateService(input: Record<string, unknown>, companyId: st
 
     const buildCommand = (input.build_command as string | undefined) ?? 'npm install && npm run build';
     const startCommand = (input.start_command as string | undefined) ?? 'npm start';
+    // Render's modern API (post-2025 schema):
+    //   - envVars at the TOP LEVEL of the request body (NOT inside serviceDetails)
+    //     — Render silently drops envVars placed inside serviceDetails, leading
+    //     to services that boot with all env vars undefined.
+    //   - serviceDetails.runtime  (was: env)
+    //   - serviceDetails.envSpecificDetails.{buildCommand,startCommand}
+    //     (were: serviceDetails.{buildCommand,startCommand})
+    // The platform's original code used the pre-2025 shape; Render returns
+    // 400 "must include envSpecificDetails when creating non-static, non-docker
+    // services" against that body now. legacyBody is kept as a fallback for
+    // any legacy region/account that still accepts the older shape.
     const body: Record<string, unknown> = {
       ...baseBody,
+      envVars,
       serviceDetails: type === 'web_service'
         ? {
-            env: 'node',
+            runtime: 'node',
             plan,
-            buildCommand,
-            startCommand,
-            envVars,
+            envSpecificDetails: {
+              buildCommand,
+              startCommand,
+            },
           }
         : {
             plan,
             buildCommand,
             publishPath: (input.publish_path as string | undefined) ?? './dist',
-            envVars,
           },
     };
 
@@ -1253,6 +1361,275 @@ async function renderDeleteService(input: Record<string, unknown>, companyId: st
 }
 
 // Ã¢â€â‚¬Ã¢â€â‚¬ Health check Ã¢â€â‚¬Ã¢â€â‚¬
+
+// LLM code review — fetches the diff between the agent's most recent commit
+// and its parent, sends to Claude Haiku for structured review, returns
+// formatted findings the agent reads as a tool result.
+async function handleReviewPushedCode(companyId: string): Promise<string> {
+  const [company] = await db.select({ github_repo: companies.github_repo }).from(companies).where(eq(companies.id, companyId)).limit(1);
+  if (!company?.github_repo) return 'CODE REVIEW SKIPPED: no github_repo on company.';
+
+  const token = process.env.GITHUB_TOKEN;
+  if (!token) return 'CODE REVIEW SKIPPED: GITHUB_TOKEN not configured.';
+  const headers = { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' };
+
+  // Get the latest commit + its parent. Compare via GitHub's compare API,
+  // which returns a unified diff.
+  let latestSha: string | undefined;
+  for (const branch of ['main', 'master']) {
+    try {
+      const r = await githubFetch(`${GITHUB_API}/repos/${company.github_repo}/git/ref/heads/${branch}`, { headers, signal: AbortSignal.timeout(8_000) });
+      if (r.ok) {
+        const data = await r.json() as { object: { sha: string } };
+        latestSha = data.object.sha;
+        break;
+      }
+    } catch { /* try next branch */ }
+  }
+  if (!latestSha) return 'CODE REVIEW SKIPPED: could not resolve default branch.';
+
+  // Fetch the parent commit SHA.
+  const commitRes = await githubFetch(`${GITHUB_API}/repos/${company.github_repo}/git/commits/${latestSha}`, { headers, signal: AbortSignal.timeout(8_000) });
+  if (!commitRes.ok) return `CODE REVIEW SKIPPED: could not read latest commit: HTTP ${commitRes.status}`;
+  const commitData = await commitRes.json() as { parents?: Array<{ sha: string }> };
+  const parentSha = commitData.parents?.[0]?.sha;
+  if (!parentSha) return 'CODE REVIEW SKIPPED: latest commit has no parent (root commit) — nothing to diff against.';
+
+  // Fetch the unified diff via GitHub's compare API.
+  const diffHeaders = { ...headers, Accept: 'application/vnd.github.v3.diff' };
+  const diffRes = await githubFetch(`${GITHUB_API}/repos/${company.github_repo}/compare/${parentSha}...${latestSha}`, { headers: diffHeaders, signal: AbortSignal.timeout(15_000) });
+  if (!diffRes.ok) return `CODE REVIEW SKIPPED: could not fetch diff: HTTP ${diffRes.status}`;
+  const diff = await diffRes.text();
+
+  if (!diff || diff.length < 50) {
+    return 'CODE REVIEW SKIPPED: diff too small to review meaningfully.';
+  }
+
+  const { reviewDiff, summarizeReview } = await import('@/lib/services/code-review.service');
+  const result = await reviewDiff(diff, company.github_repo);
+  return summarizeReview(result);
+}
+
+// Static code scan — pattern-based AI-coding pitfall detection over the
+// company's GitHub repo. Pulls JS/TS source via Trees+blob API, runs the
+// shared static-code-scan rule set, returns formatted findings.
+async function handleStaticCodeScan(companyId: string): Promise<string> {
+  const [company] = await db.select({ github_repo: companies.github_repo }).from(companies).where(eq(companies.id, companyId)).limit(1);
+  if (!company?.github_repo) return 'STATIC SCAN: no github_repo on company.';
+
+  const token = process.env.GITHUB_TOKEN;
+  if (!token) return 'STATIC SCAN: GITHUB_TOKEN not configured.';
+  const headers = { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' };
+
+  // List the tree
+  let tree: Array<{ path: string; type: string; sha: string; size?: number }> = [];
+  for (const branch of ['main', 'master']) {
+    try {
+      const r = await githubFetch(`${GITHUB_API}/repos/${company.github_repo}/git/trees/${branch}?recursive=1`, { headers, signal: AbortSignal.timeout(8_000) });
+      if (r.ok) {
+        const data = await r.json() as { tree?: typeof tree };
+        tree = data.tree ?? [];
+        break;
+      }
+    } catch { /* try next branch */ }
+  }
+  if (tree.length === 0) return 'STATIC SCAN: could not list repo tree.';
+
+  // Pull JS/TS source files. Cap to 30 files for budget — most apps fit.
+  const sourceFiles = tree
+    .filter((e) => e.type === 'blob' && /\.(js|ts|jsx|tsx|mjs|cjs)$/i.test(e.path))
+    .filter((e) => !/node_modules\//.test(e.path))
+    .filter((e) => (e.size ?? 0) < 200_000) // skip enormous files
+    .slice(0, 30);
+
+  const { scanFiles, summarizeFindings } = await import('@/lib/services/static-code-scan');
+  const scanned: Array<{ path: string; content: string }> = [];
+  for (const f of sourceFiles) {
+    try {
+      const r = await githubFetch(`${GITHUB_API}/repos/${company.github_repo}/git/blobs/${f.sha}`, { headers, signal: AbortSignal.timeout(8_000) });
+      if (!r.ok) continue;
+      const data = await r.json() as { content: string; encoding: string };
+      const content = data.encoding === 'base64' ? Buffer.from(data.content, 'base64').toString('utf8') : data.content;
+      scanned.push({ path: f.path, content });
+    } catch { /* skip */ }
+  }
+
+  const findings = scanFiles(scanned);
+  return summarizeFindings(findings);
+}
+
+// User-journey verifier — stateful HTTP walkthrough with cookie persistence
+// across steps. Lets the engineering agent prove the deployed app actually
+// works for users — not just that URLs return 2xx. Use as the final
+// verification step before declaring an engineering task done.
+
+async function handleVerifyUserJourney(input: Record<string, unknown>): Promise<string> {
+  const journeyName = (input.journey_name as string | undefined) ?? 'unnamed';
+  const baseUrl = input.base_url as string | undefined;
+  const stepsRaw = input.steps as unknown;
+  if (!baseUrl) return 'Error: base_url is required.';
+  if (!Array.isArray(stepsRaw) || stepsRaw.length === 0) return 'Error: steps must be a non-empty array.';
+
+  const { runJourney } = await import('@/lib/services/journey-runner.service');
+  const result = await runJourney({
+    journey_name: journeyName,
+    base_url: baseUrl,
+    steps: stepsRaw as Parameters<typeof runJourney>[0]['steps'],
+  });
+  return result.summary;
+}
+
+// DB-state verifier: closes the gap where a server returns 302 "saved" but
+// the INSERT actually failed. Pair with verify_user_journey to confirm
+// side-effects landed in the founder's database.
+async function handleVerifyDbState(input: Record<string, unknown>, companyId: string): Promise<string> {
+  const label = (input.label as string | undefined) ?? 'unnamed';
+  const sql = ((input.sql as string | undefined) ?? '').trim();
+  const minRows = typeof input.expect_min_rows === 'number' ? input.expect_min_rows : 1;
+  const maxRows = typeof input.expect_max_rows === 'number' ? input.expect_max_rows : Infinity;
+  const expectFirst = (input.expect_first_row_contains as Record<string, unknown> | undefined) ?? null;
+
+  if (!sql) return `DB STATE FAIL: "${label}" — sql is required.`;
+  if (!/^SELECT\b/i.test(sql)) return `DB STATE FAIL: "${label}" — only SELECT queries allowed.`;
+  if (/;/.test(sql)) return `DB STATE FAIL: "${label}" — multiple statements not allowed.`;
+
+  const dbInfo = await getCompanyDatabase(companyId);
+  if (!dbInfo?.connectionUri) return `DB STATE FAIL: "${label}" — no founder database provisioned.`;
+
+  let rows: Record<string, unknown>[];
+  try {
+    const { neon } = await import('@neondatabase/serverless');
+    const neonSql = neon(dbInfo.connectionUri);
+    rows = (await neonSql.query(sql)) as Record<string, unknown>[];
+  } catch (err) {
+    return `DB STATE FAIL: "${label}" — query threw: ${err instanceof Error ? err.message : String(err)}`;
+  }
+
+  const checks: Array<{ name: string; pass: boolean; detail: string }> = [];
+  checks.push({
+    name: `row count >= ${minRows}`,
+    pass: rows.length >= minRows,
+    detail: `actual=${rows.length}`,
+  });
+  if (Number.isFinite(maxRows)) {
+    checks.push({
+      name: `row count <= ${maxRows}`,
+      pass: rows.length <= maxRows,
+      detail: `actual=${rows.length}`,
+    });
+  }
+  if (expectFirst && rows[0]) {
+    for (const [k, v] of Object.entries(expectFirst)) {
+      const actual = (rows[0] as Record<string, unknown>)[k];
+      const same = JSON.stringify(actual) === JSON.stringify(v);
+      checks.push({
+        name: `first row.${k}`,
+        pass: same,
+        detail: `expected=${JSON.stringify(v).slice(0, 60)} actual=${JSON.stringify(actual).slice(0, 60)}`,
+      });
+    }
+  }
+
+  const allPassed = checks.every((c) => c.pass);
+  const header = allPassed
+    ? `DB STATE PASS: "${label}" — ${rows.length} row(s) matched.`
+    : `DB STATE FAIL: "${label}" — assertions failed.`;
+  const lines = checks.map((c) => `  ${c.pass ? 'PASS' : 'FAIL'} ${c.name} (${c.detail})`).join('\n');
+  const sample = rows[0] ? `\n  sample row: ${JSON.stringify(rows[0]).slice(0, 200)}` : '';
+  return `${header}\n${lines}${sample}`;
+}
+
+// Stock journey templates — return partial verify_user_journey inputs the
+// agent fills in with concrete URLs / field names. Lifts the most common
+// flow patterns out of the agent's per-task generation so we get consistent
+// coverage and reduce token cost.
+function handleListJourneyTemplates(input: Record<string, unknown>): string {
+  const which = ((input.template as string | undefined) ?? 'all').toLowerCase();
+  const TEMPLATES: Record<string, { description: string; steps: Array<Record<string, unknown>>; substitute: string[] }> = {
+    auth: {
+      description: 'register → reach authenticated dashboard → log out → log back in → reach dashboard again. Catches session-cookie bugs (trust-proxy missing, cookie.secure misconfig, store-not-persisting).',
+      steps: [
+        { step: 'landing loads',         path: '/',                                            expect_status: 200 },
+        { step: 'register form loads',   path: '/register',                                     expect_status: 200, expect_body_contains: 'password' },
+        { step: 'submit register',       method: 'POST', path: '/auth/register', body: { email: '<TEST_EMAIL>', password: '<TEST_PASSWORD>' }, body_type: 'form', expect_status: 302, expect_redirect: '/dashboard', expect_body_not_contains: 'failed' },
+        { step: 'dashboard authed',      path: '/dashboard',                                    expect_status: 200, expect_body_not_contains: 'Sign in' },
+        { step: 'logout',                method: 'POST', path: '/auth/logout',                  expect_status: 302 },
+        { step: 'login form loads',      path: '/login',                                        expect_status: 200 },
+        { step: 'submit login',          method: 'POST', path: '/auth/login',    body: { email: '<TEST_EMAIL>', password: '<TEST_PASSWORD>' }, body_type: 'form', expect_status: 302, expect_redirect: '/dashboard', expect_body_not_contains: 'Invalid' },
+        { step: 'dashboard after login', path: '/dashboard',                                    expect_status: 200 },
+      ],
+      substitute: ['<TEST_EMAIL>: a unique throwaway email like `test+<unix-ms>@baljia.test`', '<TEST_PASSWORD>: a 12+ char string the agent generates fresh per run'],
+    },
+    crud: {
+      description: 'register → create one item via POST → see it on the dashboard → delete it → confirm gone. Catches lying-server bugs (302 with silently-failed INSERT) and missing-FK bugs.',
+      steps: [
+        { step: 'register first',     method: 'POST', path: '/auth/register', body: { email: '<TEST_EMAIL>', password: '<TEST_PASSWORD>' }, body_type: 'form', expect_status: 302, expect_redirect: '/dashboard' },
+        { step: 'create item',        method: 'POST', path: '<CREATE_PATH>',  body: { '<TITLE_FIELD>': 'Smoke Test Item' },                  body_type: 'form', expect_status: [302, 201] },
+        { step: 'item appears',       path: '/dashboard',                                                                                    expect_status: 200, expect_body_contains: 'Smoke Test Item' },
+        { step: 'delete item',        method: 'POST', path: '<DELETE_PATH>',  expect_status: [200, 302] },
+        { step: 'item gone',          path: '/dashboard',                                                                                    expect_status: 200, expect_body_not_contains: 'Smoke Test Item' },
+      ],
+      substitute: ['<CREATE_PATH>: e.g. /api/items', '<DELETE_PATH>: e.g. /api/items/:id/delete (you fetch the ID first OR use a slug)', '<TITLE_FIELD>: name of the form field, usually `title`'],
+    },
+    payment: {
+      description: '/pricing page renders + Stripe payment link is reachable. Does not simulate Stripe checkout (that needs Stripe test-mode + webhooks); just proves the founder did wire a real link and not a placeholder.',
+      steps: [
+        { step: 'pricing page renders',  path: '/pricing',                                expect_status: 200, expect_body_contains: 'buy.stripe.com' },
+        { step: 'Stripe link reachable', path: '<EXTRACTED_STRIPE_LINK>',                 expect_status: 200 },
+      ],
+      substitute: ['<EXTRACTED_STRIPE_LINK>: extract from the pricing page response with a regex like /https:\\/\\/buy\\.stripe\\.com\\/[A-Za-z0-9_]+/'],
+    },
+    settings: {
+      description: 'register → update one profile field → reload dashboard → confirm new value rendered. Catches read-after-write bugs and session-data staleness.',
+      steps: [
+        { step: 'register',           method: 'POST', path: '/auth/register',   body: { email: '<TEST_EMAIL>', password: '<TEST_PASSWORD>' }, body_type: 'form', expect_status: 302 },
+        { step: 'open settings',      path: '/settings',                                                                                       expect_status: 200 },
+        { step: 'update field',       method: 'POST', path: '/settings/update', body: { '<FIELD>': '<NEW_VALUE>' },                            body_type: 'form', expect_status: [200, 302] },
+        { step: 'reload settings',    path: '/settings',                                                                                       expect_status: 200, expect_body_contains: '<NEW_VALUE>' },
+        { step: 'reload dashboard',   path: '/dashboard',                                                                                      expect_status: 200, expect_body_contains: '<NEW_VALUE>' },
+      ],
+      substitute: ['<FIELD>: settings field name, e.g. display_name', '<NEW_VALUE>: the value you submitted in the previous step'],
+    },
+    full_mvp: {
+      description: 'Full happy-path: auth → first feature use → upgrade flow visible. Combines auth + crud + payment into one stateful journey. Most engineering tasks should use this template.',
+      steps: [
+        { step: 'landing loads',           path: '/',                                                          expect_status: 200 },
+        { step: 'submit register',         method: 'POST', path: '/auth/register', body: { email: '<TEST_EMAIL>', password: '<TEST_PASSWORD>' }, body_type: 'form', expect_status: 302, expect_redirect: '/dashboard' },
+        { step: 'dashboard authed',        path: '/dashboard',                                                  expect_status: 200, expect_body_not_contains: 'Sign in' },
+        { step: 'create first item',       method: 'POST', path: '<CREATE_PATH>',  body: { '<TITLE_FIELD>': 'first item' },                       body_type: 'form', expect_status: [302, 201] },
+        { step: 'item visible',            path: '/dashboard',                                                  expect_status: 200, expect_body_contains: 'first item' },
+        { step: 'pricing rendered',        path: '/pricing',                                                    expect_status: 200, expect_body_contains: 'buy.stripe.com' },
+        { step: 'logout',                  method: 'POST', path: '/auth/logout',                                expect_status: 302 },
+        { step: 'sign back in',            method: 'POST', path: '/auth/login',    body: { email: '<TEST_EMAIL>', password: '<TEST_PASSWORD>' }, body_type: 'form', expect_status: 302, expect_redirect: '/dashboard' },
+        { step: 'item still there',        path: '/dashboard',                                                  expect_status: 200, expect_body_contains: 'first item' },
+      ],
+      substitute: ['<CREATE_PATH>: feature create endpoint, e.g. /api/items', '<TITLE_FIELD>: feature form field, usually `title`', 'Always pair with verify_db_state asserting the user row + item row landed.'],
+    },
+  };
+
+  const out: Record<string, unknown> = {};
+  if (which === 'all') {
+    for (const [k, v] of Object.entries(TEMPLATES)) out[k] = v;
+  } else if (TEMPLATES[which]) {
+    out[which] = TEMPLATES[which];
+  } else {
+    return `Error: unknown template "${which}". Valid: auth, crud, payment, settings, full_mvp, all.`;
+  }
+  return [
+    `## Journey templates`,
+    ``,
+    `Each template is a partial verify_user_journey input. Substitute the <PLACEHOLDERS> with concrete values, set base_url to the deployed app, and pass the result as the verify_user_journey \`steps\` field.`,
+    ``,
+    `\`\`\`json`,
+    JSON.stringify(out, null, 2),
+    `\`\`\``,
+    ``,
+    `Reminders:`,
+    `- Use a fresh test email per run: \`test+\${Date.now()}@baljia.test\``,
+    `- Pair every CRUD-touching journey with verify_db_state to catch lying-server 302s.`,
+    `- Stop on first failure; read render_get_logs; fix root cause; redeploy; re-run.`,
+  ].join('\n');
+}
 
 async function handleCheckUrlHealth(input: Record<string, unknown>): Promise<string> {
   const url = input.url as string;
@@ -2010,6 +2387,167 @@ function handleReadSkill(input: Record<string, unknown>): string {
 
 const SKELETON_REPO = 'BALAJIapps/Balaji'; // master template repo
 
+// ── Express skeleton fork (PRIMARY for Render-hosted founder apps) ──
+//
+// Reads the skeleton files from skeletons/express-render/ on the platform
+// disk, applies per-company placeholder substitution (__SLUG__, __APP_NAME__),
+// and pushes them all to the company's GitHub repo as a single atomic
+// commit via the Trees API. Mirrors the Next.js skeleton flow but for
+// plain Express + Postgres + sessions stacks deployed on Render.
+
+import { promises as fsp } from 'fs';
+import * as path from 'path';
+import { githubFetch } from '@/lib/services/github-throttle';
+
+const EXPRESS_SKELETON_DIR = path.join(process.cwd(), 'skeletons', 'express-render');
+
+async function collectSkeletonFiles(rootDir: string, slug: string, appName: string): Promise<Array<{ path: string; content: string }>> {
+  async function walk(absDir: string, relPrefix: string): Promise<Array<{ path: string; content: string }>> {
+    const entries = await fsp.readdir(absDir, { withFileTypes: true });
+    const out: Array<{ path: string; content: string }> = [];
+    for (const e of entries) {
+      const abs = path.join(absDir, e.name);
+      const rel = relPrefix ? `${relPrefix}/${e.name}` : e.name;
+      if (e.isDirectory()) {
+        out.push(...await walk(abs, rel));
+      } else if (e.isFile()) {
+        // node_modules / lockfiles / build output should not be in the
+        // skeleton dir, but skip the usual suspects defensively.
+        if (rel.startsWith('node_modules/') || rel.endsWith('.lock') || rel.endsWith('.pyc')) continue;
+        const raw = await fsp.readFile(abs, 'utf8');
+        const content = raw.replace(/__SLUG__/g, slug).replace(/__APP_NAME__/g, appName);
+        out.push({ path: rel, content });
+      }
+    }
+    return out;
+  }
+  return walk(rootDir, '');
+}
+
+async function handleForkExpressSkeleton(input: Record<string, unknown>, companyId: string): Promise<string> {
+  // 1. Look up company state — need github_repo + slug + display name.
+  const [company] = await db.select({
+    name: companies.name,
+    slug: companies.slug,
+    github_repo: companies.github_repo,
+  }).from(companies).where(eq(companies.id, companyId)).limit(1);
+  if (!company) return 'Error: company not found.';
+  if (!company.github_repo) {
+    return 'Error: no GitHub repo on this company. Call render_create_service or the GitHub provisioning path first; the repo must exist before the skeleton can be pushed.';
+  }
+  if (!company.slug) {
+    return 'Error: company has no slug. Onboarding is incomplete; cannot derive subdomain.';
+  }
+  // Render service names cap at 30 chars. Slugs from onboarding are typically
+  // 8-15, but defensively guard so a long slug doesn't cause render_create_service
+  // to 400 with a confusing error after we've already pushed code.
+  if (company.slug.length > 30) {
+    return `Error: slug "${company.slug}" is ${company.slug.length} chars; Render service names must be ≤30. Update the company slug before forking.`;
+  }
+  if (!/^[a-z][a-z0-9-]*$/.test(company.slug)) {
+    return `Error: slug "${company.slug}" must be lowercase alphanumeric + hyphens, starting with a letter.`;
+  }
+
+  const appName = (input.app_name as string | undefined)?.trim() || company.name || company.slug;
+  const repo = company.github_repo;
+  const headers = githubHeaders();
+
+  // 2. Read & template all skeleton files.
+  let files: Array<{ path: string; content: string }>;
+  try {
+    files = await collectSkeletonFiles(EXPRESS_SKELETON_DIR, company.slug, appName);
+  } catch (err) {
+    return `Error reading skeleton dir (${EXPRESS_SKELETON_DIR}): ${err instanceof Error ? err.message : String(err)}`;
+  }
+  if (files.length === 0) {
+    return `Error: skeleton dir ${EXPRESS_SKELETON_DIR} has no files.`;
+  }
+
+  // 3. Safety: refuse to overwrite a non-trivial existing repo. The fresh
+  // GitHub repo provisioned by the platform contains only auto-init README.
+  // If the repo already has app code (server.js, src/, etc.), the agent
+  // should be using github_create_commit to patch, not re-fork.
+  try {
+    const listRes = await githubFetch(`${GITHUB_API}/repos/${repo}/contents/`, { headers });
+    if (listRes.ok) {
+      const entries = await listRes.json() as Array<{ name: string; type: string }>;
+      const sentinels = ['server.js', 'package.json', 'src', 'tests'];
+      const collisions = entries.filter((e) => sentinels.includes(e.name));
+      if (collisions.length > 0) {
+        return `Refusing to fork-overwrite ${repo} — already contains: ${collisions.map((c) => c.name).join(', ')}. Use github_create_commit to patch specific files, or delete the repo and re-provision.`;
+      }
+    }
+  } catch {
+    // Listing failed; fall through and let the commit attempt surface the real error.
+  }
+
+  // 4. Get latest commit + tree on main (the auto-init commit).
+  const refRes = await githubFetch(`${GITHUB_API}/repos/${repo}/git/ref/heads/main`, { headers });
+  if (!refRes.ok) {
+    const errBody = await refRes.json().catch(() => ({})) as { message?: string };
+    return `Could not read main branch ref on ${repo}: ${errBody.message ?? refRes.statusText}`;
+  }
+  const refData = await refRes.json() as { object: { sha: string } };
+  const baseCommitSha = refData.object.sha;
+
+  const baseCommitRes = await githubFetch(`${GITHUB_API}/repos/${repo}/git/commits/${baseCommitSha}`, { headers });
+  if (!baseCommitRes.ok) return `Could not read base commit: ${baseCommitRes.statusText}`;
+  const baseCommit = await baseCommitRes.json() as { tree: { sha: string } };
+
+  // 5. Create new tree with all skeleton files. base_tree means the existing
+  // README from auto_init is preserved unless we explicitly overwrite it,
+  // which we DO via the README.md in the skeleton.
+  const treeRes = await githubFetch(`${GITHUB_API}/repos/${repo}/git/trees`, {
+    method: 'POST', headers,
+    body: JSON.stringify({
+      base_tree: baseCommit.tree.sha,
+      tree: files.map((f) => ({ path: f.path, mode: '100644' as const, type: 'blob' as const, content: f.content })),
+    }),
+  });
+  if (!treeRes.ok) {
+    const errBody = await treeRes.json().catch(() => ({})) as { message?: string };
+    return `Could not create tree: ${errBody.message ?? treeRes.statusText}`;
+  }
+  const treeData = await treeRes.json() as { sha: string };
+
+  // 6. Commit the tree.
+  const commitMsg = `Fork Baljia Express skeleton for ${appName}\n\nIncludes: Zod env validation, trust-proxy, Postgres sessions, /api/health probing DB+session+Stripe, structured logging, withTimeout helper, ok/fail discriminated unions, tests/.`;
+  const newCommitRes = await githubFetch(`${GITHUB_API}/repos/${repo}/git/commits`, {
+    method: 'POST', headers,
+    body: JSON.stringify({ message: commitMsg, tree: treeData.sha, parents: [baseCommitSha] }),
+  });
+  if (!newCommitRes.ok) {
+    const errBody = await newCommitRes.json().catch(() => ({})) as { message?: string };
+    return `Could not create commit: ${errBody.message ?? newCommitRes.statusText}`;
+  }
+  const newCommit = await newCommitRes.json() as { sha: string };
+
+  // 7. Update main to point at the new commit.
+  const updateRes = await githubFetch(`${GITHUB_API}/repos/${repo}/git/refs/heads/main`, {
+    method: 'PATCH', headers,
+    body: JSON.stringify({ sha: newCommit.sha }),
+  });
+  if (!updateRes.ok) {
+    return `Commit ${newCommit.sha.substring(0, 7)} created but branch update failed: ${updateRes.statusText}`;
+  }
+
+  const fileSummary = files.map((f) => `  - ${f.path}`).join('\n');
+  return [
+    `Express skeleton forked into ${repo}`,
+    `Commit: ${newCommit.sha.substring(0, 7)} (${files.length} files)`,
+    ``,
+    `Files written:`,
+    fileSummary,
+    ``,
+    `Next steps:`,
+    `1. run_migration with the contents of db/schema.sql to set up users + session + items tables`,
+    `2. Customize landingPage(), dashboardPage(), and the /api/items routes in server.js for your feature`,
+    `3. Update db/schema.sql with feature-specific tables (additions only — do not modify users / session)`,
+    `4. render_create_service to deploy. The skeleton's /api/health endpoint will be auto-used as Render's healthCheckPath.`,
+    `5. After deploy: verify_user_journey for register/login/dashboard. The skeleton's tests/ folder mirrors what the journey verifier checks.`,
+  ].join('\n');
+}
+
 async function githubForkSkeleton(input: Record<string, unknown>, companyId: string): Promise<string> {
   const repoSlug = (input.repo as string)?.trim();
   if (!repoSlug) return 'Error: repo is required (e.g. "genesis-advertising-hen6").';
@@ -2229,11 +2767,10 @@ async function handleCreateInstance(input: Record<string, unknown>, companyId: s
     BETTER_AUTH_SECRET: authSecret,
     BETTER_AUTH_URL: `https://${repoSlug}.onrender.com`,
     NEXT_PUBLIC_APP_URL: `https://${repoSlug}.onrender.com`,
-    AI_GATEWAY_URL: process.env.AI_GATEWAY_URL ?? 'https://ai.baljia.app',
-    AI_GATEWAY_TOKEN: process.env.AI_GATEWAY_TOKEN ?? '',
     NODE_ENV: 'production',
     ...extraEnvVars,
   };
+
 
   const renderApiKey = process.env.RENDER_API_KEY;
   if (!renderApiKey) {
