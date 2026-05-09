@@ -19,13 +19,13 @@ import { processTaskLearnings, buildContextPacket } from '@/lib/services/memory.
 import { buildPermissionSnapshot } from '@/lib/services/governance.service';
 import { remediateFailed } from '@/lib/services/remediation.service';
 import { checkAutoResolve } from '@/lib/services/failure.service';
-import { checkAndUpgrade } from '@/lib/services/stage.service';
 import { canExecuteTask } from '@/lib/services/guardrail.service';
 import { executeAgent } from './agent-factory';
 import { executeDeterministic } from './deterministic-executor';
 import { executeTemplate } from './template-executor';
 import type { AgentInput, AgentResult } from './agent-factory';
 import { Watchdog } from './watchdog';
+import { getCostCeilingForAgent } from './cost-ceilings';
 import { db, companies, tasks as tasksTable, taskExecutions } from '@/lib/db';
 import { eq, and, gte, inArray, sql } from 'drizzle-orm';
 import { createLogger } from '@/lib/logger';
@@ -178,8 +178,11 @@ export async function launchTask(taskId: string, opts: LaunchOptions = {}): Prom
     agent_id: agentId,
   });
 
-  // 4. Create watchdog with active monitoring
-  const watchdog = new Watchdog(taskId, task.max_turns, task.company_id);
+  // 4. Create watchdog with active monitoring + per-agent cost ceiling.
+  // The ceiling is a backstop against runaway token spend; the agent also
+  // sees the live budget summary in its per-turn context so it can self-pace.
+  const costCeilingUsd = getCostCeilingForAgent(agentId);
+  const watchdog = new Watchdog(taskId, task.max_turns, task.company_id, costCeilingUsd);
   const abortController = new AbortController();
   watchdog.startActiveMonitor(() => {
     abortController.abort();
@@ -289,6 +292,7 @@ export async function launchTask(taskId: string, opts: LaunchOptions = {}): Prom
     execution.turn_count = result.turnCount;
     execution.execution_log = result.log;
     execution.wall_clock_seconds = wallClockSeconds;
+    execution.token_usage = watchdog.getCostStatus() as unknown as Record<string, unknown>;
 
     await taskService.completeTask(taskId); // transitions to 'verifying'
     await taskService.updateTask(taskId, {
@@ -298,11 +302,10 @@ export async function launchTask(taskId: string, opts: LaunchOptions = {}): Prom
     });
 
     // 6.5. Persist execution_log + turn_count to DB BEFORE verification runs.
-    // Without this, verifier's deploy_evidence check (which queries
-    // task_executions.execution_log) sees null → 0 deploy tool calls →
-    // fails the task even when the agent successfully called cf_deploy_app.
-    // Bug observed 2026-04-28 task bdc6210c — Worker deployed (8503B) but
-    // task marked failed because the log wasn't visible to verifier yet.
+    // Without this, verifier's deploy evidence check (which queries
+    // task_executions.execution_log) can see null and miss deploy tool calls.
+    // Persisting here makes Render verification read the same log the agent
+    // just produced instead of racing the final execution update.
     // The final persist at the end of this function is now redundant for
     // execution_log but stays for the other fields (status, error_summary,
     // verification_evidence). Idempotent.
@@ -312,6 +315,7 @@ export async function launchTask(taskId: string, opts: LaunchOptions = {}): Prom
           execution_log: execution.execution_log,
           turn_count: execution.turn_count,
           wall_clock_seconds: execution.wall_clock_seconds,
+          token_usage: execution.token_usage,
         })
         .where(eq(taskExecutions.id, execution.id));
     } catch (preVerifyPersistError) {
@@ -344,12 +348,6 @@ export async function launchTask(taskId: string, opts: LaunchOptions = {}): Prom
       if (learned > 0) log.info('Extracted learnings', { taskId, title: task.title, learned });
     } catch { /* non-blocking */ }
 
-    // 10. Check stage progression (non-blocking)
-    try {
-      const newStage = await checkAndUpgrade(task.company_id);
-      log.info('Company stage updated', { companyId: task.company_id, stage: newStage });
-    } catch { /* non-blocking */ }
-
     log.info('Task completed', { taskId, title: task.title, turns: result.turnCount, wallClockSeconds, verified: verification.passed });
 
   } catch (error) {
@@ -360,6 +358,7 @@ export async function launchTask(taskId: string, opts: LaunchOptions = {}): Prom
     execution.wall_clock_seconds = wallClockSeconds;
     execution.error_summary = error instanceof Error ? error.message : 'Unknown error';
     execution.watchdog_events = watchdog.getEvents() as unknown as Record<string, unknown>[];
+    execution.token_usage = watchdog.getCostStatus() as unknown as Record<string, unknown>;
 
     // H-AGENT-011: FIX — classify failure based on watchdog state
     // Was: always 'worker_failure' regardless of watchdog state (copy-paste bug)

@@ -2,18 +2,26 @@
 // Architecture: Domain 5.4 max ~4 hours per task, max 200 turns
 // Tracks progress, detects idle/stuck, can kill execution
 // H-AGENT-020: Tool-call loop detection — kill agent on repeated same-tool calls
+// Cost ceiling: Per-run USD budget visible to the agent + hard kill on exceed.
 
 import type { WatchdogEvent } from '@/types';
+import { computeCostUsd } from './cost-ceilings';
 
 // Timeouts
 const IDLE_WARNING_MS = 2 * 60 * 1000;   // 2 min idle → warning
 const STUCK_DETECT_MS = 5 * 60 * 1000;   // 5 min idle → stuck
 const MAX_EXECUTION_MS = 4 * 60 * 60 * 1000; // 4 hours absolute max
 
-// Loop detection: if same tool called this many times consecutively, kill
-const LOOP_THRESHOLD = 5;
+// Loop detection: if same tool called this many times consecutively, kill.
+// Raised from 5 → 8: the engineering agent legitimately calls read_skill
+// 4-5 times in one turn (reading all relevant skills in parallel).
+// 8 consecutive identical calls is a genuine infinite loop.
+const LOOP_THRESHOLD = 8;
 // Rolling window of recent tool names to track
-const TOOL_HISTORY_SIZE = 8;
+const TOOL_HISTORY_SIZE = 12;
+
+// Cost ceiling: emit warning event the first time spend crosses this fraction.
+const COST_WARNING_FRACTION = 0.8;
 
 export class Watchdog {
   private taskId: string;
@@ -31,12 +39,21 @@ export class Watchdog {
   private monitorInterval: ReturnType<typeof setInterval> | null = null;
   private onKillCallback: (() => void) | null = null;
 
-  constructor(taskId: string, maxTurns: number, companyId: string) {
+  // Cost tracking (null ceiling = tracking off, ceiling never trips)
+  private costCeilingUsd: number | null;
+  private cumulativeInputTokens = 0;
+  private cumulativeOutputTokens = 0;
+  private cumulativeCostUsd = 0;
+  private modelBreakdown: Record<string, { in: number; out: number; usd: number }> = {};
+  private costWarnedAt80 = false;
+
+  constructor(taskId: string, maxTurns: number, companyId: string, costCeilingUsd?: number | null) {
     this.taskId = taskId;
     this.maxTurns = maxTurns;
     this.companyId = companyId;
     this.startedAt = Date.now();
     this.lastActivityAt = Date.now();
+    this.costCeilingUsd = costCeilingUsd ?? null;
   }
 
   /** Override max turns (used by execution mode dispatch to cap deterministic/template runs) */
@@ -93,6 +110,76 @@ export class Watchdog {
     }
 
     return 'continue';
+  }
+
+  // ── Cost tracking — call after each LLM response with that turn's usage ──
+
+  recordTokens(inputTokens: number, outputTokens: number, model: string): WatchdogVerdict {
+    if (!Number.isFinite(inputTokens) || inputTokens < 0) inputTokens = 0;
+    if (!Number.isFinite(outputTokens) || outputTokens < 0) outputTokens = 0;
+
+    const turnCostUsd = computeCostUsd(inputTokens, outputTokens, model);
+
+    this.cumulativeInputTokens += inputTokens;
+    this.cumulativeOutputTokens += outputTokens;
+    this.cumulativeCostUsd += turnCostUsd;
+
+    const slot = this.modelBreakdown[model] ?? { in: 0, out: 0, usd: 0 };
+    slot.in += inputTokens;
+    slot.out += outputTokens;
+    slot.usd += turnCostUsd;
+    this.modelBreakdown[model] = slot;
+
+    if (this.costCeilingUsd === null) return 'continue';
+
+    const fraction = this.cumulativeCostUsd / this.costCeilingUsd;
+
+    if (fraction >= 1) {
+      this.addEvent('cost_kill', null,
+        `Cost ceiling exceeded: $${this.cumulativeCostUsd.toFixed(4)} / $${this.costCeilingUsd.toFixed(2)}`);
+      this.killed = true;
+      return 'kill';
+    }
+
+    if (fraction >= COST_WARNING_FRACTION && !this.costWarnedAt80) {
+      this.costWarnedAt80 = true;
+      this.addEvent('cost_warning', null,
+        `Cost at ${Math.round(fraction * 100)}% of ceiling: $${this.cumulativeCostUsd.toFixed(4)} / $${this.costCeilingUsd.toFixed(2)}`);
+      return 'warn';
+    }
+
+    return 'continue';
+  }
+
+  /**
+   * One-line summary suitable for injection into the agent's per-turn context.
+   * Format: `BUDGET: turn N/M (P%) · $X.XXXX/$Y.YY spent (Q%)`
+   * If no ceiling is set, the cost portion is omitted.
+   */
+  getBudgetSummary(): string {
+    const turnPct = this.maxTurns > 0 ? Math.round((this.turnCount / this.maxTurns) * 100) : 0;
+    const turnPart = `turn ${this.turnCount}/${this.maxTurns} (${turnPct}%)`;
+    if (this.costCeilingUsd === null) return `BUDGET: ${turnPart}`;
+    const costPct = Math.round((this.cumulativeCostUsd / this.costCeilingUsd) * 100);
+    const costPart = `$${this.cumulativeCostUsd.toFixed(4)}/$${this.costCeilingUsd.toFixed(2)} spent (${costPct}%)`;
+    return `BUDGET: ${turnPart} · ${costPart}`;
+  }
+
+  /** Structured cost snapshot — persisted into task_executions.token_usage. */
+  getCostStatus(): {
+    input_tokens: number;
+    output_tokens: number;
+    cost_usd: number;
+    ceiling_usd: number | null;
+    model_breakdown: Record<string, { in: number; out: number; usd: number }>;
+  } {
+    return {
+      input_tokens: this.cumulativeInputTokens,
+      output_tokens: this.cumulativeOutputTokens,
+      cost_usd: Number(this.cumulativeCostUsd.toFixed(6)),
+      ceiling_usd: this.costCeilingUsd,
+      model_breakdown: { ...this.modelBreakdown },
+    };
   }
 
   // ── Periodic health check (call between turns) ──

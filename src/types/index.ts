@@ -12,7 +12,6 @@ export type Lifecycle = 'trial_active' | 'trial_expired' | 'full_active' | 'keep
 export type ExecutionState = 'active' | 'paused' | 'suspended';
 export type BillingState = 'free' | 'trial' | 'active' | 'past_due' | 'cancelled';
 export type HostingState = 'live' | 'suspended' | 'archived';
-export type CompanyStage = 'early' | 'validation' | 'monetization' | 'retention' | 'scale' | 'compounding';
 
 export type TaskStatus = 'todo' | 'in_progress' | 'verifying' | 'completed' | 'failed' | 'failed_permanent' | 'rejected' | 'blocked_pre_start' | 'blocked_in_run' | 'repair';
 export type TaskSource = 'founder_requested' | 'ceo_suggested' | 'night_shift_generated' | 'auto_remediation' | 'recurring' | 'onboarding';
@@ -91,7 +90,6 @@ export interface Company {
   execution_state: ExecutionState;
   billing_state: BillingState;
   hosting_state: HostingState;
-  company_stage: CompanyStage;
   subdomain: string | null;
   email_identity: string | null;
   company_email: string | null;     // Drizzle: company_email VARCHAR(255)
@@ -270,6 +268,7 @@ export type EventType =
   | 'task_started'
   | 'task_completed'
   | 'task_failed'
+  | 'task_launch_failed'
   | 'credit_purchased'
   | 'credit_deducted'
   | 'credits_depleted'
@@ -285,6 +284,7 @@ export type EventType =
   | 'onboarding_transformation'
   | 'onboarding_completed'
   | 'onboarding_failed'
+  | 'onboarding_issue'
   | 'credit_low'
   | 'tweet_scheduled'
   | 'referral_credited'
@@ -456,7 +456,6 @@ export interface ContextPacket {
   prior_reports: Array<{ id: string; title: string; content: string; task_id: string }>;
   failure_fingerprints: Array<{ fingerprint: string; category: string; description: string }>;
   company_state: {
-    stage: CompanyStage;
     lifecycle: Lifecycle;
     billing_state: BillingState;
   };
@@ -500,7 +499,6 @@ export interface NightShiftCycle {
   id: string;
   company_id: string;
   cycle_number: number | null;      // DB: cycle_number INTEGER
-  company_stage: string | null;     // DB: company_stage VARCHAR(50)
   trust_score: number | null;       // DB: trust_score DECIMAL(3,2)
   planned_tasks: string[] | null;   // DB: planned_tasks UUID[]
   executed_tasks: string[] | null;  // DB: executed_tasks UUID[]
@@ -619,7 +617,6 @@ export interface CompiledBriefing {
     name: string;
     slug: string;
     one_liner: string | null;
-    stage: CompanyStage;
   };
   memory_packet: string;
   template_vars: Record<string, string>;
@@ -630,7 +627,7 @@ export interface CompiledBriefing {
 
 export interface WatchdogEvent {
   timestamp: string;
-  type: 'progress' | 'idle_warning' | 'stuck_detected' | 'killed' | 'loop_detected';
+  type: 'progress' | 'idle_warning' | 'stuck_detected' | 'killed' | 'loop_detected' | 'cost_warning' | 'cost_kill';
   tool: string | null;
   message: string;
 }

@@ -13,7 +13,7 @@ import * as memoryService from '@/lib/services/memory.service';
 import * as documentService from '@/lib/services/document.service';
 import * as failureService from '@/lib/services/failure.service';
 import { Watchdog } from './watchdog';
-import { getBrowserTools, handleBrowserTool } from './tools/browser.tools';
+import { getBrowserTools, getBrowserVerificationTools, handleBrowserTool } from './tools/browser.tools';
 import { getResearchTools, handleResearchTool } from './tools/research.tools';
 import { getDataTools, handleDataTool } from './tools/data.tools';
 import { getSupportTools, handleSupportTool } from './tools/support.tools';
@@ -21,6 +21,8 @@ import { getTwitterTools, handleTwitterTool } from './tools/twitter.tools';
 import { getMetaAdsTools, handleMetaAdsTool } from './tools/meta-ads.tools';
 import { getOutreachTools, handleOutreachTool } from './tools/outreach.tools';
 import { getEngineeringTools, handleEngineeringTool } from './tools/engineering.tools';
+import { pickProviderOrder, recordProviderOutcome } from './llm-provider-router';
+import { withPolicyGate } from './policy-gate';
 import { callAnthropicWithTimeout, callOpenRouterWithTimeout, callGeminiWithTimeout } from '@/lib/llm-safety';
 import { isAnthropicAvailable, isBedrockAvailable, isDirectAnthropicAvailable, isAnthropicOAuthAvailable, isOpenAIAvailable, getOpenAIApiKey, isOpenRouterAvailable, isGeminiAvailable, OPENROUTER_MODELS, OPENAI_MODELS, getPreferredProvider } from '@/lib/llm-provider';
 import { createAnthropicWithOAuthAsync, withClaudeCodeIdentity } from '@/lib/anthropic-oauth';
@@ -76,12 +78,17 @@ Skill matrix — read the listed skill BEFORE writing code in that domain:
 |---|---|
 | Building a full-stack founder app for Render | frontend-design + neon-postgres |
 | Database / SQL / migrations / schema | neon-postgres |
+| Vector search / semantic search / RAG / embeddings storage (pgvector) | neon-postgres |
 | HTML / pages / dashboards / Tailwind / UI | frontend-design |
 | Payments / Stripe / pricing / subscriptions | stripe-payments |
 | Static assets / images included in the app | frontend-design |
 | Generated media / ad creative files / public asset URLs | r2-storage |
 | Email send / notifications / inbound mail | email-postmark |
 | AI features (LLM calls, agent loops, prompt-template logic) | agent-sdk |
+| Embeddings / image generation / OCR via the AI gateway | openai-proxy |
+| Live updates / SSE / streaming chat tokens / polling / progress bars | realtime-features |
+| Forecasts / projections / trend lines / "where will we be in 30 days" | forecasting |
+| Track user actions / product analytics / funnels / DAU / event firing | event-tracking |
 | Frontend craft / quality / state coverage / form a11y / why does my UI look AI-default | craft-frontend |
 
 If you write code in a domain WITHOUT reading its skill first, you will likely
@@ -93,13 +100,27 @@ match the current hosting/runtime.
 
 1. **Skills first.** Call list_skills + read the relevant ones BEFORE coding. This is the single most important rule.
 2. **Know the company state.** Call get_company_tech to know slug + DB status before infra work.
-3. **Default deploy path for engineering tasks is Render.**
-   - **First deploy** (no Render service yet): create a company GitHub repo if missing, push a complete minimal app, call render_create_service with plan "free", then check deploy status and health.
-   - **Update** (render_service_id exists): read/list the GitHub repo, edit only what the task requires, push/commit, call render_deploy, then check deploy status and health.
+3. **Default deploy path for engineering tasks is Render — and for plain Express + Postgres apps you fork the hardened skeleton, you do NOT write server.js from scratch.**
+   - **First deploy of an Express app** (no Render service yet, plain Express stack): call \`fork_express_skeleton\` first. It pushes a single atomic commit containing server.js (with all Backend Quality Bar P0 patterns pre-wired: Zod env validation, trust-proxy, Postgres sessions, /api/health that probes DB + session + Stripe, structured logging, withTimeout helper, discriminated unions, register/login/logout flows), package.json, render.yaml, db/schema.sql, tests/{config,auth,health}.test.js, README.md. Then \`run_migration\` with db/schema.sql, customize landingPage()/dashboardPage()/feature routes via \`github_create_commit\`, and \`render_create_service\` with plan "free". Every from-scratch attempt has shipped with at least one P0 violation; the skeleton has them all pre-wired.
+   - **First deploy of a Next.js app**: use \`github_fork_skeleton\` (the existing Next.js skeleton at BALAJIapps/Balaji) instead.
+   - **Update** (render_service_id exists): read/list the GitHub repo, edit only what the task requires via \`github_create_commit\` (atomic multi-file), call \`render_deploy\`, then check deploy status and health.
    - Do not create duplicate Render services. One company gets one trial Render service.
+   - Do not modify the skeleton's framework files (the Zod schema, trust-proxy line, session middleware, /api/health, withTimeout helper, register/login/logout handlers). Customize ONLY: landing copy in landingPage(), dashboard rendering in dashboardPage(), feature routes (rename /api/items to your feature noun), and add feature-specific tables to db/schema.sql.
 4. **Provision before deploy.** If the app needs a DB, call provision_database FIRST, then pass DATABASE_URL/NEON_CONNECTION_STRING as a Render env var. The tool will replace masked DB URLs with the real company DB URL.
-5. **Always verify.** After Render deploy, call render_get_deploy_status and check_url_health for the company live URL. If a route was requested, health-check that route too.
-6. **"Completed" = feature actually works.** A successful deploy alone is not enough. Verify the feature behavior the founder asked for.
+5. **Verification gate — you cannot finish without this.** A 200 response does NOT mean the app works. After every deploy you MUST run, in order. Two of the steps run BEFORE deploy (against the pushed code) and the rest run AFTER:
+
+   PRE-DEPLOY (after github_create_commit, before render_create_service):
+   - \`static_code_scan\` — fast pattern-based check over the JS/TS files. Catches silent catch blocks, secret-in-log, template-SQL injection, missing trust-proxy, hardcoded test emails. Address all HIGH-severity findings via github_create_commit before deploying.
+   - \`review_pushed_code\` — Haiku-based semantic review of the diff. Catches auth bypass, race conditions, async ordering bugs the static scanner can't see. Address all HIGH-severity findings before deploying.
+
+   POST-DEPLOY:
+   - \`render_get_deploy_status\` — wait until status=live (poll up to 10 min).
+   - \`render_get_logs\` to inspect the last ~1-2 minutes of logs. Pass \`limit: 200\` and let the tool default the \`since\` window. **This is mandatory, not optional.** Apps that boot with bad env vars, wrong DATABASE_URL SSL config, or missing tables will log \`error\` lines on startup and at first request, while every URL still returns nominally-OK status. Look for: \`level=error\`, \`level=fatal\`, lines containing "ECONNREFUSED" / "Cannot find module" / "permission denied" / "rate limit" / Postgres SQLSTATE codes (28000, 28P01, 42P01, etc.). If you find any, treat the deploy as broken: read the actual message (don't just count lines), identify the root cause, fix it in code, push, redeploy, and re-pull logs. Do NOT proceed to journey verification with errors in the log — you will get a misleading PASS that hides a real bug.
+   - \`check_url_health\` — confirm at least the landing route returns 2xx. If \`/api/health\` exists, also call it and confirm \`body.checks.*\` are ALL \`ok\`. A 200 with \`db: error\` means the app is up but broken.
+   - \`verify_user_journey\` — walk the critical user flow end-to-end with assertions. This is mandatory for engineering-tagged tasks; the deterministic verifier will REJECT the task and remediation will fire if you skip it. Pick the highest-value flow the task implies — for an auth+CRUD app this is "register → reach dashboard → submit one create-form → see the new item appear → log out → log in → see it again". Use \`expect_status\`, \`expect_redirect\`, \`expect_body_contains\`, and especially \`expect_body_not_contains\` to assert error toasts like "Registration failed" do NOT appear. Stop on first failure, read \`render_get_logs\`, fix the root cause in code, push, redeploy, and re-run the journey. Repeat until \`JOURNEY PASS\`.
+   - \`verify_db_state\` — for any flow that writes to the founder DB (auth, form submissions, settings updates), follow the journey with at least one SELECT-based assertion to prove the row actually landed (e.g., \`SELECT email FROM users WHERE email='<the test email>'\` with \`expect_min_rows: 1\`). Servers can return 302 with a silently-failed INSERT; this is the only way to catch that. Advisory in the verifier but a strong recommendation in practice.
+   - **Browser verification (for JS-heavy apps only)** — \`verify_user_journey\` is HTTP-only; it cannot execute JavaScript or interact with React/Vue/Next.js dynamic UI. If the app you shipped has significant client-side JS — anywhere a form submits via \`fetch()\` instead of native form-POST, anywhere a modal or AJAX-list updates the page without reload, or any Next.js route group with client components — you MUST also run a browser-driven walkthrough using the \`browser_*\` tools (navigate, fill, click, get_content, evaluate). Sequence: \`browser_navigate\` to /, \`browser_navigate\` to /register, \`browser_fill\` the inputs, \`browser_click\` the submit, then \`browser_navigate\` to /dashboard and use \`browser_get_content\` to assert the expected text appears. One session per deploy is enough — Browserbase costs real money. For server-rendered apps (plain Express + HTML forms), skip this step; verify_user_journey is sufficient.
+6. **"Completed" = JOURNEY PASS, not deploy success.** A successful render_deploy with no journey verification is not "done" — the verifier will mark the task failed. If the journey fails repeatedly and you cannot fix it, write a report explaining what works and what doesn't rather than ship a green-status broken app.
 7. **Report honestly.** Tool calls you made, URLs/endpoints you exposed, env vars needed, AND any verification gaps you couldn't close.
 
 ## Frontend Quality Bar (non-negotiable)
@@ -148,7 +169,73 @@ Walk through the page and confirm:
 - No lorem ipsum or "feature one/two/three".
 - Accent token visible ≤ 2 times per screen.
 - One unconventional section breaks the template skeleton.
-- One distinctive choice is identifiable.`,
+- One distinctive choice is identifiable.
+
+Then walk through the verification gate (rule 5) and confirm:
+- render_get_deploy_status returned status=live
+- check_url_health returned 2xx for at least the landing
+- verify_user_journey returned JOURNEY PASS for the critical flow (NOT just "/" loading — the actual register/submit/use-feature/sign-back-in path)
+- For any flow that writes to the DB: verify_db_state returned DB STATE PASS proving the row landed
+- If any of the above failed: you read render_get_logs, fixed the root cause, redeployed, and re-ran the journey. You did NOT mark the task complete with a known-broken flow.
+
+## Backend Quality Bar (non-negotiable)
+
+The Frontend Quality Bar above eliminates AI-default visual tells. This bar eliminates AI-default RUNTIME tells — the patterns that ship with apps that "deploy successfully" but break the moment a real user touches them.
+
+These rules apply to EVERY backend you write, regardless of stack (Express, Next.js API routes, FastAPI). Most originate from real production failures we've debugged.
+
+### P0 — do not ship if any of these are present
+
+1. **No required env var read without boot-time validation.** At app startup, before \`app.listen()\`, validate every required env var with Zod (or equivalent) and exit with a clear error if any are missing or malformed:
+   \`\`\`ts
+   import { z } from 'zod';
+   const ConfigSchema = z.object({
+     DATABASE_URL:    z.string().url(),
+     SESSION_SECRET:  z.string().min(32),
+     STRIPE_API_KEY:  z.string().min(20).optional(), // optional only if Stripe truly isn't used
+     NODE_ENV:        z.enum(['development', 'production']),
+     PORT:            z.coerce.number().int().positive(),
+   });
+   const config = ConfigSchema.parse(process.env); // throws with field-level error if invalid
+   \`\`\`
+   If you read \`process.env.X\` directly anywhere in the app code without first validating X via the schema, that's a violation. The host (Render) silently drops env vars when its API shape mismatches; without boot validation the app boots with \`undefined\` everywhere and fails at the first user request.
+
+2. **No external call without a timeout.** Every \`fetch\`, \`pool.query\`, \`stripe.x.create\`, \`postmark.send\`, etc. must have a bounded timeout. Use \`AbortSignal.timeout(ms)\` for fetch and a \`statement_timeout\` setting on the pg Pool. Apps that hang on a slow Postgres ship 504s and zombie connections.
+
+3. **No \`/health\` that only does \`SELECT 1\`.** A health endpoint must probe every external dependency the app needs to do its job: DB connectivity, session-store reachability, Stripe API ping (treat 400/401/403 as "reachable but bad config", NOT "down"). The endpoint returns \`{ ok: true, checks: {...} }\` with per-dependency status. We were bitten today by \`/api/health\` returning \`db: connected\` while every register request still threw — because the SELECT 1 worked but DATABASE_URL was wrong for the actual app queries.
+
+4. **No \`app.use(session(...))\` behind a reverse proxy without \`app.set('trust proxy', 1)\` first.** Render, Vercel, Cloudflare, every modern host runs an HTTP-only proxy in front of the Node process. Without trust-proxy, express-session refuses to send Secure cookies and authentication silently fails to persist. \`MemoryStore\` is also banned — sessions must use \`connect-pg-simple\` (or Redis) so they survive restarts.
+
+5. **No success response on a write without verifying the write landed.** A handler that does \`await pool.query('INSERT ...')\` then \`res.redirect('/dashboard')\` must also have downstream verification. Either: (a) use \`RETURNING\` and 500 if no row came back, or (b) wrap in a transaction with explicit \`COMMIT\` and 500 on rollback. The deployed-app test suite must include a failure-mode test that proves a constraint violation actually returns 500, not 302.
+
+6. **No silent error swallowing.** \`catch (e) { return false }\` and \`catch (e) { res.send('Something went wrong') }\` are the two highest-cost patterns in deployed apps because they make production debugging impossible. Catch blocks must: log structured (level=error, with request id, user id if known, error.message, error.code if any), include the original error in the log NOT in the response, and return a typed error response \`{ ok: false, error: { code, message } }\`.
+
+7. **No tests directory missing or empty.** Every app you ship must have a \`tests/\` folder with at minimum: one happy-path journey test, one failure-mode test per critical handler (constraint violations, missing auth, malformed input), one boot-time test that the env-var schema rejects missing required values. Use the same shape \`verify_user_journey\` would: arrange → POST/GET → assert status + body + DB state.
+
+8. **No secrets in code, URLs, or logs.** \`DATABASE_URL\`, \`STRIPE_API_KEY\`, \`SESSION_SECRET\`, OAuth tokens — never inline. Never query-string. Never logged. The structured logger must redact known sensitive keys.
+
+### P1 — soft tells, fix before finishing
+
+- **Raw \`console.log\` for non-debug output.** Use a structured logger (pino, winston) with explicit level. \`console.log\` is fine for one-off scripts but not for handlers that run in production.
+- **Inconsistent handler return shapes.** Pick one — \`{ ok: true, data }\` / \`{ ok: false, error }\` is the recommended discriminated union — and use it everywhere. Mixing \`res.json(thing)\` and \`res.json({ data: thing })\` is a silent integration tax on the frontend.
+- **\`/api/health\` returning 200 when a downstream dependency is degraded.** It should return 503 with the per-check breakdown so Render's healthcheck (and your own monitors) can route around it.
+- **No README for the deployed app.** A 30-line README explaining required env vars, how to run tests locally, and how to redeploy is non-negotiable for an app that needs to live longer than the founder's first session.
+
+### Soul rule
+
+A perfectly-working full-stack app is one where: the founder's first three actions on the live URL all succeed, the app's logs make a future debug session possible without source access, and any deploy that breaks a previously-working flow is caught by a test before it ships. Aim there.
+
+### Self-check before declaring complete (backend layer)
+
+After finishing the verification gate above, walk through the code you pushed and confirm:
+- Every \`process.env.X\` access is downstream of a Zod-validated config object.
+- Every external call has a timeout.
+- \`/health\` probes every integration the app uses, not just the DB.
+- \`app.set('trust proxy', N)\` exists if the app uses sessions or cookies.
+- No \`catch (e) { return false }\` or empty catch blocks in handlers.
+- \`tests/\` folder exists with at minimum the journey + one failure-mode test.
+- No secret strings in source files (grep for the actual leaked values, not just the keys).
+- The README has the env-var list and the test command.`,
 
   29: `You are the Research Agent for Baljia AI. You analyze markets, competitors, and opportunities.
 
@@ -689,7 +776,7 @@ const COMPANY_EMAIL_TOOLS = [
 export function getAgentTools(agentId: number) {
   // Add domain-specific tools
   switch (agentId) {
-    case 30: return [...BASE_TOOLS, ...getEngineeringTools()];                        // Engineering
+    case 30: return [...BASE_TOOLS, ...getEngineeringTools(), ...getBrowserVerificationTools()]; // Engineering + JS-verification subset
     case 42: return [...BASE_TOOLS, ...getBrowserTools(), ...COMPANY_EMAIL_TOOLS];    // Browser + email read
     case 29: return [...BASE_TOOLS, ...getResearchTools()];                           // Research
     case 33: return [...BASE_TOOLS, ...getDataTools()];                               // Data
@@ -1406,6 +1493,11 @@ const ENGINEERING_TOOLS = new Set([
   // route them to handleEngineeringTool. Production failure on
   // task 9a36e013-...-cd26 was the symptom.)
   'list_skills', 'read_skill',
+  // Verification layer (added 2026-05-08)
+  'verify_user_journey', 'verify_db_state', 'list_journey_templates', 'static_code_scan',
+  'review_pushed_code',
+  // Express skeleton fork (added 2026-05-08)
+  'fork_express_skeleton',
   // GitHub (source control)
   'github_create_repo', 'github_push_file', 'github_read_file',
   'github_list_files', 'github_delete_file',
@@ -1487,15 +1579,20 @@ async function handleDomainTool(
   toolInput: Record<string, unknown>,
   task: Task,
 ): Promise<string> {
-  if (ENGINEERING_TOOLS.has(toolName)) return handleEngineeringTool(toolName, toolInput, task);
-  if (BROWSER_TOOLS.has(toolName)) return handleBrowserTool(toolName, toolInput, task);
-  if (RESEARCH_TOOLS.has(toolName)) return handleResearchTool(toolName, toolInput, task);
-  if (DATA_TOOLS.has(toolName)) return handleDataTool(toolName, toolInput, task);
-  if (SUPPORT_TOOLS.has(toolName)) return handleSupportTool(toolName, toolInput, task);
-  if (TWITTER_TOOLS.has(toolName)) return handleTwitterTool(toolName, toolInput, task);
-  if (META_ADS_TOOLS.has(toolName)) return handleMetaAdsTool(toolName, toolInput, task);
-  if (OUTREACH_TOOLS.has(toolName)) return handleOutreachTool(toolName, toolInput, task);
-  return `Unknown tool: ${toolName}`;
+  // Policy gate runs BEFORE dispatch so destructive operations (render_delete_service
+  // without confirm, raw DROP TABLE in run_migration, force-pushes) get blocked
+  // with a clear message the agent sees as the tool result.
+  return withPolicyGate(toolName, toolInput, task, () => {
+    if (ENGINEERING_TOOLS.has(toolName)) return handleEngineeringTool(toolName, toolInput, task);
+    if (BROWSER_TOOLS.has(toolName)) return handleBrowserTool(toolName, toolInput, task);
+    if (RESEARCH_TOOLS.has(toolName)) return handleResearchTool(toolName, toolInput, task);
+    if (DATA_TOOLS.has(toolName)) return handleDataTool(toolName, toolInput, task);
+    if (SUPPORT_TOOLS.has(toolName)) return handleSupportTool(toolName, toolInput, task);
+    if (TWITTER_TOOLS.has(toolName)) return handleTwitterTool(toolName, toolInput, task);
+    if (META_ADS_TOOLS.has(toolName)) return handleMetaAdsTool(toolName, toolInput, task);
+    if (OUTREACH_TOOLS.has(toolName)) return handleOutreachTool(toolName, toolInput, task);
+    return Promise.resolve(`Unknown tool: ${toolName}`);
+  });
 }
 
 // ══════════════════════════════════════════════
@@ -1574,19 +1671,30 @@ export async function runAgentLoop(input: AgentInput, config: AgentLoopConfig): 
   // Sort by preferred provider order
   const preferred = getPreferredProvider();
   const preferredProvider = providers.find(p => p.name === preferred);
-  const sorted = preferredProvider
+  const preferredFirst = preferredProvider
     ? [preferredProvider, ...providers.filter(p => p.name !== preferred)]
     : providers;
+
+  // Apply EMA-scored re-ordering: a provider that's been failing recently gets
+  // demoted below healthier ones, even if it's the configured preferred. After
+  // its cooldown elapses (~60s), the router lets it back in for a probe.
+  const availableInPreferredOrder = preferredFirst.filter((p) => p.available()).map((p) => p.name);
+  const scoredOrder = pickProviderOrder(availableInPreferredOrder);
+  const sorted = scoredOrder.map((name) => preferredFirst.find((p) => p.name === name)!).filter(Boolean);
 
   let lastError: unknown;
   const providerFailures: string[] = [];
   for (const p of sorted) {
     if (!p.available()) continue;
     const logCountBeforeProvider = logEntries.length;
+    const t0 = Date.now();
     try {
-      return await p.run();
+      const result = await p.run();
+      recordProviderOutcome(p.name, true, Date.now() - t0);
+      return result;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      recordProviderOutcome(p.name, false, Date.now() - t0);
       providerFailures.push(`${p.name}: ${message}`);
       if (logEntries.length > logCountBeforeProvider) {
         pushLog(logEntries, {
@@ -1725,6 +1833,17 @@ async function runWithClaude(
       break;
     }
 
+    // Cost tracking — record this turn's token spend
+    const costVerdict = watchdog.recordTokens(
+      response.usage?.input_tokens ?? 0,
+      response.usage?.output_tokens ?? 0,
+      modelId,
+    );
+    if (costVerdict === 'kill') {
+      pushLog(log_entries, { turn: turnCount, event: 'cost_kill', reason: 'cost ceiling exceeded' });
+      break;
+    }
+
     // Process response
     const assistantContent = response.content;
     messages.push({ role: 'assistant', content: assistantContent });
@@ -1777,7 +1896,13 @@ async function runWithClaude(
 
     if (loopKill) break;
 
-    messages.push({ role: 'user', content: toolResults });
+    // Inject the per-turn budget summary as a text block alongside tool
+    // results so the agent can self-pace as it nears the ceiling.
+    const userContent: Array<Anthropic.ToolResultBlockParam | Anthropic.TextBlockParam> = [
+      ...toolResults,
+      { type: 'text', text: watchdog.getBudgetSummary() },
+    ];
+    messages.push({ role: 'user', content: userContent });
 
     // Check stop reason
     if (response.stop_reason === 'end_turn') {
@@ -1857,6 +1982,17 @@ async function runWithOpenAI(
       break;
     }
 
+    // Cost tracking — OpenAI surfaces prompt_tokens / completion_tokens
+    const costVerdict = watchdog.recordTokens(
+      response.usage?.prompt_tokens ?? 0,
+      response.usage?.completion_tokens ?? 0,
+      modelId,
+    );
+    if (costVerdict === 'kill') {
+      pushLog(log_entries, { turn: turnCount, event: 'cost_kill', reason: 'cost ceiling exceeded' });
+      break;
+    }
+
     const choice = response.choices[0];
     if (!choice) break;
 
@@ -1871,7 +2007,9 @@ async function runWithOpenAI(
     }
 
     let loopKill = false;
-    for (const tc of toolCalls) {
+    const lastIdx = toolCalls.length - 1;
+    for (let i = 0; i < toolCalls.length; i++) {
+      const tc = toolCalls[i];
       if (!('function' in tc)) continue; // skip non-standard tool call types
       const fnName = tc.function.name;
       const loopVerdict = watchdog.recordToolCall(fnName);
@@ -1887,7 +2025,10 @@ async function runWithOpenAI(
       const toolResult = await handleToolCall(fnName, args, task, agentId);
       pushLog(log_entries, { turn: turnCount, tool: fnName, input: args, result: toolResult });
 
-      messages.push({ role: 'tool', content: toolResult, tool_call_id: tc.id });
+      // Append per-turn budget summary to the LAST tool result so the agent
+      // sees it once per turn (rather than after every individual tool).
+      const content = i === lastIdx ? `${toolResult}\n\n[${watchdog.getBudgetSummary()}]` : toolResult;
+      messages.push({ role: 'tool', content, tool_call_id: tc.id });
     }
 
     if (loopKill) break;
@@ -1950,6 +2091,17 @@ async function runWithCodex(
       break;
     }
 
+    // Cost tracking — pi-ai gives us { input, output } directly
+    const costVerdict = watchdog.recordTokens(
+      turn.usage?.input ?? 0,
+      turn.usage?.output ?? 0,
+      'gpt-5.4',
+    );
+    if (costVerdict === 'kill') {
+      pushLog(log_entries, { turn: turnCount, event: 'cost_kill', reason: 'cost ceiling exceeded' });
+      break;
+    }
+
     // CRITICAL: push the raw pi-ai AssistantMessage (which embeds toolCalls with
     // their call_ids) back into history. Otherwise next turn's tool-result
     // messages can't be paired with the originating call → 400 error.
@@ -1965,7 +2117,9 @@ async function runWithCodex(
     }
 
     let loopKill = false;
-    for (const tc of turn.toolCalls) {
+    const lastIdx = turn.toolCalls.length - 1;
+    for (let i = 0; i < turn.toolCalls.length; i++) {
+      const tc = turn.toolCalls[i];
       const loopVerdict = watchdog.recordToolCall(tc.name);
       if (loopVerdict === 'kill') {
         pushLog(log_entries, { turn: turnCount, event: 'loop_kill', tool: tc.name, reason: 'Repeated tool-call loop detected' });
@@ -1976,7 +2130,8 @@ async function runWithCodex(
       const toolResult = await handleToolCall(tc.name, tc.arguments, task, agentId);
       pushLog(log_entries, { turn: turnCount, tool: tc.name, input: tc.arguments, result: toolResult });
 
-      messages.push({ role: 'tool', content: toolResult, tool_call_id: tc.id, tool_name: tc.name });
+      const content = i === lastIdx ? `${toolResult}\n\n[${watchdog.getBudgetSummary()}]` : toolResult;
+      messages.push({ role: 'tool', content, tool_call_id: tc.id, tool_name: tc.name });
     }
 
     if (loopKill) break;
@@ -2047,12 +2202,30 @@ async function runWithGemini(
     const result = await callGeminiWithTimeout(
       () => chat.sendMessage(currentMessage),
       { label: `gemini_turn_${turnCount + 1}`, timeoutMs: getAgentCallTimeoutMs(agentId) }
-    ) as { response: { candidates?: Array<{ content?: { parts?: Array<Record<string, unknown>> } }>; text: () => string } };
+    ) as { response: {
+      candidates?: Array<{ content?: { parts?: Array<Record<string, unknown>> } }>;
+      text: () => string;
+      usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number };
+    } };
     turnCount++;
 
     const verdict = watchdog.recordTurn(null);
     if (verdict === 'kill') {
       pushLog(log_entries, { turn: turnCount, event: 'watchdog_kill', reason: 'turn/time limit' });
+      break;
+    }
+
+    // Cost tracking — Gemini exposes usage on response.usageMetadata.
+    // No per-turn budget injection: Gemini's function-response parts don't
+    // accept ad-hoc text without breaking schema. Tracking + ceiling kill
+    // still apply.
+    const costVerdict = watchdog.recordTokens(
+      result.response.usageMetadata?.promptTokenCount ?? 0,
+      result.response.usageMetadata?.candidatesTokenCount ?? 0,
+      modelId,
+    );
+    if (costVerdict === 'kill') {
+      pushLog(log_entries, { turn: turnCount, event: 'cost_kill', reason: 'cost ceiling exceeded' });
       break;
     }
 
@@ -2174,13 +2347,27 @@ async function runWithOpenRouter(
         );
       },
       { label: `openrouter_${modelId}_turn_${turnCount + 1}`, timeoutMs: getAgentCallTimeoutMs(agentId) }
-    ) as { choices: Array<{ message: { role: string; content?: string | null; tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }> } }> };
+    ) as {
+      choices: Array<{ message: { role: string; content?: string | null; tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }> } }>;
+      usage?: { prompt_tokens?: number; completion_tokens?: number };
+    };
 
     turnCount++;
 
     const verdict = watchdog.recordTurn(null);
     if (verdict === 'kill') {
       pushLog(log_entries, { turn: turnCount, event: 'watchdog_kill', reason: 'turn/time limit' });
+      break;
+    }
+
+    // Cost tracking — OpenRouter mirrors OpenAI's usage shape
+    const costVerdict = watchdog.recordTokens(
+      response.usage?.prompt_tokens ?? 0,
+      response.usage?.completion_tokens ?? 0,
+      modelId,
+    );
+    if (costVerdict === 'kill') {
+      pushLog(log_entries, { turn: turnCount, event: 'cost_kill', reason: 'cost ceiling exceeded' });
       break;
     }
 
@@ -2201,7 +2388,9 @@ async function runWithOpenRouter(
 
     // Execute tool calls
     let loopKill = false;
-    for (const tc of toolCalls) {
+    const lastIdx = toolCalls.length - 1;
+    for (let i = 0; i < toolCalls.length; i++) {
+      const tc = toolCalls[i];
       const fnName = tc.function.name;
 
       // Loop detection
@@ -2222,10 +2411,10 @@ async function runWithOpenRouter(
       const toolResult = await handleToolCall(fnName, args, task, agentId);
       pushLog(log_entries, { turn: turnCount, tool: fnName, input: args, result: toolResult });
 
-      // Add tool response to conversation
+      const content = i === lastIdx ? `${toolResult}\n\n[${watchdog.getBudgetSummary()}]` : toolResult;
       messages.push({
         role: 'tool',
-        content: toolResult,
+        content,
         tool_call_id: tc.id,
       });
     }
