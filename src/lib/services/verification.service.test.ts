@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 // Default mock: no execution log for the task — used by unit-only tests like
 // extractRequestedBrowserPaths. Per-test overrides below replace this for the
