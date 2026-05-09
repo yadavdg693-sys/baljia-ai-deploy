@@ -205,6 +205,35 @@ export async function getCompanyAppUrl(companyId: string): Promise<string | null
   }
 }
 
+/**
+ * Verifier-side fallback when the engineering agent finished a deploy
+ * without calling verify_user_journey. Probes the deployed URL with a
+ * minimal "is this app actually responding?" walk: GET / and GET /api/health.
+ *
+ * Returns null when the URL can't be resolved (no fallback possible).
+ * Otherwise returns a JourneyResult — the caller pushes it as journey
+ * evidence into the verification check list.
+ *
+ * Intentionally narrow: we don't run the full register→login flow
+ * because we'd be writing rows to the founder DB. The agent's own
+ * verify_user_journey is the right place for that. The fallback is
+ * a backstop, not a replacement.
+ */
+export async function runFallbackJourney(companyId: string): Promise<import('./journey-runner.service').JourneyResult | null> {
+  const baseUrl = await getCompanyAppUrl(companyId);
+  if (!baseUrl) return null;
+
+  const { runJourney } = await import('./journey-runner.service');
+  return runJourney({
+    journey_name: 'verifier-fallback (read-only liveness)',
+    base_url: baseUrl,
+    steps: [
+      { step: 'landing responds 2xx', path: '/',           expect_status: [200, 301, 302] },
+      { step: 'health endpoint up',   path: '/api/health', expect_status: [200, 404] }, // 404 is acceptable — not all apps expose /api/health
+    ],
+  });
+}
+
 async function getRepoHygiene(repo: string | null): Promise<RepoHygiene> {
   if (!repo) return { reachable: false, hasTestsFolder: false, hasReadme: false, testFileCount: 0, readmeBytes: 0, detail: 'no github_repo on company' };
   const token = process.env.GITHUB_TOKEN;

@@ -302,3 +302,54 @@ describe('getCompanyAppUrl helper', () => {
     expect(url).toBeNull();
   });
 });
+
+describe('runFallbackJourney', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.unstubAllGlobals();
+  });
+
+  it('returns null when company has no resolvable URL', async () => {
+    vi.doMock('@/lib/db', () => ({
+      db: { select: () => ({
+        from: () => ({ where: () => ({ limit: async () => [{ custom_domain: null, render_service_id: null }] }) }),
+      }) },
+      reports: {}, companies: { id: {}, custom_domain: {}, render_service_id: {} },
+      taskExecutions: {},
+    }));
+    const { runFallbackJourney } = await import('@/lib/services/verification.service');
+    const result = await runFallbackJourney('c1');
+    expect(result).toBeNull();
+  });
+
+  it('returns JOURNEY PASS when / and /api/health both 2xx', async () => {
+    vi.doMock('@/lib/db', () => ({
+      db: { select: () => ({
+        from: () => ({ where: () => ({ limit: async () => [{ custom_domain: 'app.example.com', render_service_id: 'srv-x' }] }) }),
+      }) },
+      reports: {}, companies: { id: {}, custom_domain: {}, render_service_id: {} },
+      taskExecutions: {},
+    }));
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: 200, headers: { 'content-type': 'text/html' } })));
+    const { runFallbackJourney } = await import('@/lib/services/verification.service');
+    const result = await runFallbackJourney('c1');
+    expect(result).not.toBeNull();
+    expect(result!.allPassed).toBe(true);
+    expect(result!.summary).toMatch(/JOURNEY PASS/);
+  });
+
+  it('returns JOURNEY FAIL when / returns 5xx', async () => {
+    vi.doMock('@/lib/db', () => ({
+      db: { select: () => ({
+        from: () => ({ where: () => ({ limit: async () => [{ custom_domain: 'app.example.com', render_service_id: 'srv-x' }] }) }),
+      }) },
+      reports: {}, companies: { id: {}, custom_domain: {}, render_service_id: {} },
+      taskExecutions: {},
+    }));
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('error', { status: 502 })));
+    const { runFallbackJourney } = await import('@/lib/services/verification.service');
+    const result = await runFallbackJourney('c1');
+    expect(result).not.toBeNull();
+    expect(result!.allPassed).toBe(false);
+  });
+});
