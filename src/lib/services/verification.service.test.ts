@@ -353,3 +353,68 @@ describe('runFallbackJourney', () => {
     expect(result!.allPassed).toBe(false);
   });
 });
+
+describe('verifyDeterministic — journey fallback', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.unstubAllGlobals();
+  });
+
+  function setupForFallback(opts: { fetchStatus: number }) {
+    const exec = {
+      execution_log: [
+        { tool: 'render_create_service', result: 'Render service created!\nService ID: srv-1' },
+        { tool: 'check_url_health',      result: '✅ https://app.x.com is UP — HTTP 200 in 50ms' },
+      ],
+    };
+    const company = { custom_domain: 'app.x.com', render_service_id: 'srv-1', github_repo: null };
+
+    let callIdx = 0;
+    const sequence: unknown[] = [exec, company, company]; // 1: exec_log, 2: companies for repo hygiene, 3: companies for getCompanyAppUrl
+    const makeChain = () => {
+      const rows = sequence[callIdx] ?? [];
+      callIdx++;
+      const chain: Record<string, unknown> = {};
+      const wrap = (val: unknown) => Object.assign([...(Array.isArray(val) ? val : [val])], chain);
+      chain.from    = () => chain;
+      chain.where   = () => wrap(rows);
+      chain.orderBy = () => chain;
+      chain.limit   = () => wrap(rows);
+      return chain;
+    };
+    vi.doMock('@/lib/db', () => ({
+      db: { select: () => makeChain() },
+      reports: { id: {}, title: {}, task_id: {} },
+      companies: { id: {}, custom_domain: {}, render_service_id: {}, github_repo: {} },
+      taskExecutions: { task_id: {}, created_at: {}, execution_log: {} },
+    }));
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: opts.fetchStatus })));
+  }
+
+  it('runs fallback journey when agent skipped verify_user_journey but deploy succeeded', async () => {
+    setupForFallback({ fetchStatus: 200 });
+    const { verifyTask } = await import('@/lib/services/verification.service');
+    const result = await verifyTask({
+      id: 't1', company_id: 'c1', tag: 'engineering', title: 'x', description: '',
+      turn_count: 5, max_turns: 200, status: 'in_progress', failure_class: null,
+      verification_level: 'deterministic',
+    } as never);
+    const journeyCheck = result.checks.find((c) => c.name === 'user_journey_evidence');
+    expect(journeyCheck?.passed).toBe(true);
+    expect(journeyCheck?.detail).toMatch(/fallback/i);
+  });
+
+  it('fails task when fallback journey probe fails', async () => {
+    setupForFallback({ fetchStatus: 502 });
+    const { verifyTask } = await import('@/lib/services/verification.service');
+    const result = await verifyTask({
+      id: 't1', company_id: 'c1', tag: 'engineering', title: 'x', description: '',
+      turn_count: 5, max_turns: 200, status: 'in_progress', failure_class: null,
+      verification_level: 'deterministic',
+    } as never);
+    const journeyCheck = result.checks.find((c) => c.name === 'user_journey_evidence');
+    expect(journeyCheck?.passed).toBe(false);
+    expect(journeyCheck?.detail).toMatch(/fallback/i);
+    expect(result.passed).toBe(false);
+  });
+});

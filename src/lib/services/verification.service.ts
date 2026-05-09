@@ -517,13 +517,41 @@ async function verifyDeterministic(task: Task): Promise<VerificationResult> {
     const attemptedJourneys = toolCalls
       .filter((t) => JOURNEY_TOOL_NAMES.has(t.tool))
       .map((t) => t.tool);
-    checks.push({
-      name: 'user_journey_evidence',
-      passed: journeyCalls.length > 0,
-      detail: journeyCalls.length > 0
-        ? `${journeyCalls.length} passing user journey verification(s).`
-        : `Engineering task must run verify_user_journey after deploy to prove the app actually works for real users (register → use feature → log in). Journey attempts: ${attemptedJourneys.length ? attemptedJourneys.join(', ') : 'none'}.`,
-    });
+
+    if (journeyCalls.length > 0) {
+      checks.push({
+        name: 'user_journey_evidence',
+        passed: true,
+        detail: `${journeyCalls.length} passing user journey verification(s).`,
+      });
+    } else if (deployCalls.length > 0) {
+      // Agent skipped verify_user_journey but deploy succeeded — run a
+      // verifier-side fallback. Converts the prompt-level mandate into a
+      // structural guarantee. Read-only probe (GET / + /api/health) so we
+      // don't pollute the founder DB with test users.
+      const fallback = await runFallbackJourney(task.company_id);
+      if (!fallback) {
+        checks.push({
+          name: 'user_journey_evidence',
+          passed: false,
+          detail: `Engineering task must run verify_user_journey after deploy. Agent did not run it AND fallback could not resolve a deployed URL (no custom_domain / no render_service_id). Journey attempts: ${attemptedJourneys.length ? attemptedJourneys.join(', ') : 'none'}.`,
+        });
+      } else {
+        checks.push({
+          name: 'user_journey_evidence',
+          passed: fallback.allPassed,
+          detail: fallback.allPassed
+            ? `Verifier-side fallback journey PASS (${fallback.passedSteps}/${fallback.totalSteps} steps). The agent should still call verify_user_journey itself for full register→login coverage.`
+            : `Verifier-side fallback journey FAIL — the deployed URL responded but the basic liveness probe failed. ${fallback.summary.split('\n')[0]}`,
+        });
+      }
+    } else {
+      checks.push({
+        name: 'user_journey_evidence',
+        passed: false,
+        detail: `Engineering task must run verify_user_journey after deploy to prove the app actually works for real users (register → use feature → log in). Journey attempts: ${attemptedJourneys.length ? attemptedJourneys.join(', ') : 'none'}.`,
+      });
+    }
 
     // ADVISORY (does NOT fail the task): if the agent ran any DB-write
     // operations as part of the journey, it should have followed up with at
