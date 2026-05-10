@@ -306,6 +306,17 @@ export function getEngineeringTools(): EngineeringToolDefinition[] {
       },
     },
     {
+      name: 'read_known_issues',
+      description: 'Read past failure fingerprints relevant to what you are about to do. Returns up to 5 entries — both still-open issues AND already-fixed ones with their fix_notes. Call this BEFORE any deploy / migration / Render service creation / GitHub commit so you avoid repeating known mistakes. Each entry includes a [STATUS] tag and (when available) the exact fix that worked. Examples of useful contexts: "creating Render service", "session middleware Express", "GitHub Trees API commit", "Drizzle migration on production".',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          context: { type: 'string' as const, description: 'Free-text describing what you are about to do, e.g. "creating Render service" or "adding session middleware". The longer/more specific the better — words ≥4 chars are matched against fingerprint descriptions.' },
+        },
+        required: ['context'],
+      },
+    },
+    {
       name: 'verify_db_state',
       description: 'Run a SELECT query against the founder DB and assert on the result. Use AFTER verify_user_journey to confirm side-effects actually landed in the database — not just that the HTTP redirect succeeded. Example: after a "submit register" journey step passes, call this with sql:"SELECT email FROM users WHERE email=$1" + expect_min_rows:1 to prove the user row was actually created. Without this, a server that returns 302 but silently fails the INSERT will go unnoticed.',
       input_schema: {
@@ -724,6 +735,8 @@ export async function handleEngineeringTool(
       return handleStaticCodeScan(task.company_id);
     case 'review_pushed_code':
       return handleReviewPushedCode(task.company_id);
+    case 'read_known_issues':
+      return handleReadKnownIssues(input);
 
     // Ã¢â€â‚¬Ã¢â€â‚¬ Database Infrastructure Ã¢â€â‚¬Ã¢â€â‚¬
     case 'provision_database':
@@ -1456,6 +1469,21 @@ async function handleStaticCodeScan(companyId: string): Promise<string> {
 
   const findings = scanFiles(scanned);
   return summarizeFindings(findings);
+}
+
+// Known-issues lookup — agent calls before doing risky work to avoid repeating
+// past failures. Returns FIXED issues (with fix_notes) AND still-open ones.
+
+async function handleReadKnownIssues(input: Record<string, unknown>): Promise<string> {
+  const context = (input.context as string | undefined) ?? '';
+  if (!context.trim()) return 'Error: context is required (free-text describing what you are about to do).';
+  const { getRelevantKnownIssuesForAgent, formatKnownIssuesForAgent } = await import('@/lib/services/failure.service');
+  try {
+    const issues = await getRelevantKnownIssuesForAgent(context, 30, 5);
+    return formatKnownIssuesForAgent(issues);
+  } catch (err) {
+    return `KNOWN ISSUES: lookup failed (${err instanceof Error ? err.message : 'unknown'}). Proceed cautiously.`;
+  }
 }
 
 // User-journey verifier — stateful HTTP walkthrough with cookie persistence

@@ -204,6 +204,45 @@ export async function getKnownIssuesForTag(tag: string): Promise<FailureFingerpr
     .limit(10) as unknown as Promise<FailureFingerprint[]>;
 }
 
+/**
+ * Engineering-agent helper: returns BOTH unresolved issues and FIXED issues
+ * (with fix_notes) that match a free-text context. Used by `read_known_issues`
+ * tool — agent calls before doing risky work to avoid repeating known mistakes.
+ *
+ * Filters by description / affected_tools containing any token from `context`.
+ */
+export async function getRelevantKnownIssuesForAgent(
+  context: string,
+  agentId: number = 30,
+  limit = 5,
+): Promise<FailureFingerprint[]> {
+  const tokens = context.toLowerCase().split(/[^a-z0-9_-]+/).filter((t) => t.length >= 4);
+  if (tokens.length === 0) return [];
+  // ILIKE ANY array — match if description contains any token
+  const ilikeArr = tokens.map((t) => `%${t}%`);
+  return db.select().from(failureFingerprints)
+    .where(and(
+      ne(failureFingerprints.fix_status, 'wont_fix'),
+      sql`(${failureFingerprints.description} ILIKE ANY (ARRAY[${sql.join(ilikeArr.map((p) => sql`${p}`), sql`, `)}]::text[])
+           OR ${failureFingerprints.affected_agents}::text ILIKE ${'%' + agentId + '%'})`,
+    ))
+    .orderBy(desc(failureFingerprints.occurrence_count), desc(failureFingerprints.last_seen_at))
+    .limit(limit) as unknown as Promise<FailureFingerprint[]>;
+}
+
+/** Format known issues for the engineering agent's tool result. Compact, ≤ 800 chars target. */
+export function formatKnownIssuesForAgent(issues: FailureFingerprint[]): string {
+  if (issues.length === 0) return 'KNOWN ISSUES: none match this context.';
+  const lines = [`KNOWN ISSUES: ${issues.length} relevant entr${issues.length === 1 ? 'y' : 'ies'}`, ''];
+  for (const fp of issues) {
+    const status = fp.fix_status === 'fixed' ? '[FIXED]' : `[${(fp.fix_status ?? 'open').toUpperCase()}]`;
+    const desc = (fp.description ?? '').slice(0, 120);
+    lines.push(`- ${status} ${desc}`);
+    if (fp.fix_notes) lines.push(`  fix: ${fp.fix_notes.slice(0, 200)}`);
+  }
+  return lines.join('\n');
+}
+
 /** Grouped summary for platform ops dashboard */
 export async function getKnownIssuesSummary(): Promise<{
   open: number;
