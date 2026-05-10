@@ -127,4 +127,17 @@ describe('Watchdog cost tracking', () => {
     for (let i = 0; i < 10; i++) lastVerdict = wd2.recordToolCall('same_tool');
     expect(lastVerdict).toBe('kill');
   });
+
+  it('polling tools tolerate many consecutive calls (Render builds take 2-5 min)', () => {
+    const wd = new Watchdog(TASK_ID, 200, COMPANY_ID, null);
+    let lastVerdict: ReturnType<typeof wd.recordToolCall> = 'continue';
+    // 20 consecutive render_get_deploy_status calls — would have killed at 8 under old rules
+    for (let i = 0; i < 20; i++) lastVerdict = wd.recordToolCall('render_get_deploy_status');
+    expect(lastVerdict).toBe('continue');
+    expect(wd.wasKilled()).toBe(false);
+
+    // 25 should still trip the polling threshold
+    for (let i = 0; i < 5; i++) lastVerdict = wd.recordToolCall('render_get_deploy_status');
+    expect(lastVerdict).toBe('kill');
+  });
 });

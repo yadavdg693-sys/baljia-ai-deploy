@@ -15,10 +15,22 @@ const MAX_EXECUTION_MS = 4 * 60 * 60 * 1000; // 4 hours absolute max
 // Loop detection: if same tool called this many times consecutively, kill.
 // Raised from 5 → 8: the engineering agent legitimately calls read_skill
 // 4-5 times in one turn (reading all relevant skills in parallel).
-// 8 consecutive identical calls is a genuine infinite loop.
+// 8 consecutive identical calls is a genuine infinite loop FOR MOST TOOLS.
 const LOOP_THRESHOLD = 8;
 // Rolling window of recent tool names to track
-const TOOL_HISTORY_SIZE = 12;
+const TOOL_HISTORY_SIZE = 30;
+
+// Polling tools that legitimately need many consecutive calls (waiting on
+// async infrastructure to finish). Render builds take 2-5 min, the agent
+// polls every ~3-5 sec, so 8 consecutive calls is normal — not a loop.
+// Use a much higher threshold for these specifically.
+const POLLING_TOOLS = new Set<string>([
+  'render_get_deploy_status',
+  'render_get_logs',
+  'check_url_health',
+  'verify_custom_domain',
+]);
+const POLLING_LOOP_THRESHOLD = 25;
 
 // Cost ceiling: emit warning event the first time spend crosses this fraction.
 const COST_WARNING_FRACTION = 0.8;
@@ -97,13 +109,19 @@ export class Watchdog {
       this.recentTools.shift();
     }
 
-    // Check for loop: same tool called LOOP_THRESHOLD times consecutively
-    if (this.recentTools.length >= LOOP_THRESHOLD) {
-      const tail = this.recentTools.slice(-LOOP_THRESHOLD);
+    // Polling tools (render_get_deploy_status, check_url_health waiting for
+    // first 200, etc.) legitimately need many consecutive calls. Use a much
+    // higher threshold; otherwise any 4-5 minute Render build would trip it.
+    const isPolling = POLLING_TOOLS.has(toolName);
+    const threshold = isPolling ? POLLING_LOOP_THRESHOLD : LOOP_THRESHOLD;
+
+    // Check for loop: same tool called `threshold` times consecutively
+    if (this.recentTools.length >= threshold) {
+      const tail = this.recentTools.slice(-threshold);
       const allSame = tail.every((t) => t === tail[0]);
       if (allSame) {
         this.addEvent('loop_detected', toolName,
-          `Tool "${toolName}" called ${LOOP_THRESHOLD} times consecutively — killing agent`);
+          `Tool "${toolName}" called ${threshold} times consecutively — killing agent (${isPolling ? 'polling-tool threshold' : 'standard threshold'})`);
         this.killed = true;
         return 'kill';
       }
