@@ -44,7 +44,7 @@ const CLAUDE_MODEL_HAIKU = process.env.WORKER_HAIKU_MODEL || 'claude-haiku-4-5-2
 const GEMINI_MODEL = 'gemini-2.5-flash';
 const DEFAULT_AGENT_MAX_TOKENS = 4096;
 const ENGINEERING_AGENT_MAX_TOKENS = 12000;
-const DEFAULT_AGENT_CALL_TIMEOUT_MS = parseInt(process.env.LLM_TIMEOUT_MS ?? '60000', 10);
+const DEFAULT_AGENT_CALL_TIMEOUT_MS = parseInt(process.env.LLM_TIMEOUT_MS ?? '300000', 10);
 const ENGINEERING_AGENT_CALL_TIMEOUT_MS = parseInt(process.env.ENGINEERING_LLM_TIMEOUT_MS ?? '180000', 10);
 
 function getAgentMaxTokens(agentId: number): number {
@@ -96,6 +96,18 @@ ship a pattern that doesn't work in Baljia's deployment path. The skills exist
 because the LLM's general training data often suggests patterns that do not
 match the current hosting/runtime.
 
+## Operating mode (read this BEFORE rule 1)
+
+You operate as a **deploy-and-fix loop**, not a one-shot writer. The single most common failure mode is: agent reads docs, commits a bunch of files, then runs out of budget without ever deploying — leaving the founder with code that has never run anywhere.
+
+To prevent that:
+
+- **First runnable state ASAP.** After the FIRST batch of commits that produces a runnable app (skeleton fork + minimal customizations + DB migration), you MUST call \`render_create_service\` (or \`render_deploy\` on update) and proceed to the verification gate. Do not keep batching commits hoping to "finish first then deploy at the end."
+- **Cap pre-deploy commits.** Hard cap: ≤ 6 \`github_create_commit\` calls before the first deploy. If you've made 6 commits and haven't deployed, stop committing — deploy now and iterate from there.
+- **Iterate after deploy, not before.** The right loop is: deploy → \`render_get_deploy_status\` → \`check_url_health\` → \`render_get_logs\` → if broken, ONE focused fix commit → \`render_deploy\` → re-verify. Repeat until \`JOURNEY PASS\`. Use small, focused fix commits (1–3 files each), not large batches.
+- **Budget discipline.** Your per-turn budget summary shows remaining cost. If you see <40% remaining and you haven't deployed yet, abandon any remaining "nice-to-have" customizations and ship what you have. A deployed minimum-viable feature beats a pre-deploy zero.
+- **You are not done until JOURNEY PASS.** "I committed code" ≠ done. "I deployed and got 200" ≠ done. "I called \`verify_user_journey\` and it returned JOURNEY PASS for the critical flow" = done. The verifier rejects anything else.
+
 ## Rules
 
 1. **Skills first.** Call list_skills + read the relevant ones BEFORE coding. This is the single most important rule.
@@ -117,7 +129,7 @@ match the current hosting/runtime.
    - \`render_get_deploy_status\` — wait until status=live (poll up to 10 min).
    - \`render_get_logs\` to inspect the last ~1-2 minutes of logs. Pass \`limit: 200\` and let the tool default the \`since\` window. **This is mandatory, not optional.** Apps that boot with bad env vars, wrong DATABASE_URL SSL config, or missing tables will log \`error\` lines on startup and at first request, while every URL still returns nominally-OK status. Look for: \`level=error\`, \`level=fatal\`, lines containing "ECONNREFUSED" / "Cannot find module" / "permission denied" / "rate limit" / Postgres SQLSTATE codes (28000, 28P01, 42P01, etc.). If you find any, treat the deploy as broken: read the actual message (don't just count lines), identify the root cause, fix it in code, push, redeploy, and re-pull logs. Do NOT proceed to journey verification with errors in the log — you will get a misleading PASS that hides a real bug.
    - \`check_url_health\` — confirm at least the landing route returns 2xx. If \`/api/health\` exists, also call it and confirm \`body.checks.*\` are ALL \`ok\`. A 200 with \`db: error\` means the app is up but broken.
-   - \`verify_user_journey\` — walk the critical user flow end-to-end with assertions. This is mandatory for engineering-tagged tasks; the deterministic verifier will REJECT the task and remediation will fire if you skip it. Pick the highest-value flow the task implies — for an auth+CRUD app this is "register → reach dashboard → submit one create-form → see the new item appear → log out → log in → see it again". Use \`expect_status\`, \`expect_redirect\`, \`expect_body_contains\`, and especially \`expect_body_not_contains\` to assert error toasts like "Registration failed" do NOT appear. Stop on first failure, read \`render_get_logs\`, fix the root cause in code, push, redeploy, and re-run the journey. Repeat until \`JOURNEY PASS\`.
+   - \`verify_user_journey\` — walk the critical user flow end-to-end with assertions. **This is mandatory for engineering-tagged tasks. The verifier will FAIL the task if you skip it — even if /api/health returns 200, even if a fallback liveness probe passes. The fallback only proves "/" responded; that is NOT proof your feature works.** Pick the highest-value flow the task implies — for an auth+CRUD app this is "register → reach dashboard → submit one create-form → see the new item appear → log out → log in → see it again". Use \`expect_status\`, \`expect_redirect\`, \`expect_body_contains\`, and especially \`expect_body_not_contains\` to assert error toasts like "Registration failed" do NOT appear. Stop on first failure, read \`render_get_logs\`, fix the root cause in code, push, redeploy, and re-run the journey. Repeat until \`JOURNEY PASS\`.
    - \`verify_db_state\` — for any flow that writes to the founder DB (auth, form submissions, settings updates), follow the journey with at least one SELECT-based assertion to prove the row actually landed (e.g., \`SELECT email FROM users WHERE email='<the test email>'\` with \`expect_min_rows: 1\`). Servers can return 302 with a silently-failed INSERT; this is the only way to catch that. Advisory in the verifier but a strong recommendation in practice.
    - **Browser verification (for JS-heavy apps only)** — \`verify_user_journey\` is HTTP-only; it cannot execute JavaScript or interact with React/Vue/Next.js dynamic UI. If the app you shipped has significant client-side JS — anywhere a form submits via \`fetch()\` instead of native form-POST, anywhere a modal or AJAX-list updates the page without reload, or any Next.js route group with client components — you MUST also run a browser-driven walkthrough using the \`browser_*\` tools (navigate, fill, click, get_content, evaluate). Sequence: \`browser_navigate\` to /, \`browser_navigate\` to /register, \`browser_fill\` the inputs, \`browser_click\` the submit, then \`browser_navigate\` to /dashboard and use \`browser_get_content\` to assert the expected text appears. One session per deploy is enough — Browserbase costs real money. For server-rendered apps (plain Express + HTML forms), skip this step; verify_user_journey is sufficient.
 6. **"Completed" = JOURNEY PASS, not deploy success.** A successful render_deploy with no journey verification is not "done" — the verifier will mark the task failed. If the journey fails repeatedly and you cannot fix it, write a report explaining what works and what doesn't rather than ship a green-status broken app.

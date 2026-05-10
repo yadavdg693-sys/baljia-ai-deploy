@@ -391,7 +391,7 @@ describe('verifyDeterministic — journey fallback', () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('ok', { status: opts.fetchStatus })));
   }
 
-  it('runs fallback journey when agent skipped verify_user_journey but deploy succeeded', async () => {
+  it('FAILS task when agent skipped verify_user_journey, even if fallback liveness probe passes (mandatory call enforcement)', async () => {
     setupForFallback({ fetchStatus: 200 });
     const { verifyTask } = await import('@/lib/services/verification.service');
     const result = await verifyTask({
@@ -400,11 +400,14 @@ describe('verifyDeterministic — journey fallback', () => {
       verification_level: 'deterministic',
     } as never);
     const journeyCheck = result.checks.find((c) => c.name === 'user_journey_evidence');
-    expect(journeyCheck?.passed).toBe(true);
-    expect(journeyCheck?.detail).toMatch(/fallback/i);
+    // Fallback is diagnostic only — agent skipping is a hard fail regardless
+    expect(journeyCheck?.passed).toBe(false);
+    expect(journeyCheck?.detail).toMatch(/agent skipped/i);
+    expect(journeyCheck?.detail).toMatch(/fallback liveness probe PASSED/);
+    expect(result.passed).toBe(false);
   });
 
-  it('fails task when fallback journey probe fails', async () => {
+  it('FAILS task when fallback journey probe fails (and agent skipped journey)', async () => {
     setupForFallback({ fetchStatus: 502 });
     const { verifyTask } = await import('@/lib/services/verification.service');
     const result = await verifyTask({
@@ -414,7 +417,8 @@ describe('verifyDeterministic — journey fallback', () => {
     } as never);
     const journeyCheck = result.checks.find((c) => c.name === 'user_journey_evidence');
     expect(journeyCheck?.passed).toBe(false);
-    expect(journeyCheck?.detail).toMatch(/fallback/i);
+    expect(journeyCheck?.detail).toMatch(/agent skipped/i);
+    expect(journeyCheck?.detail).toMatch(/fallback liveness probe FAILED/);
     expect(result.passed).toBe(false);
   });
 });

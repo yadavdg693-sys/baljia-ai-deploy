@@ -26,6 +26,7 @@ import { executeTemplate } from './template-executor';
 import type { AgentInput, AgentResult } from './agent-factory';
 import { Watchdog } from './watchdog';
 import { getCostCeilingForAgent } from './cost-ceilings';
+import { preflightCheck, formatPreflightFailures } from '@/lib/services/preflight.service';
 import { db, companies, tasks as tasksTable, taskExecutions } from '@/lib/db';
 import { eq, and, gte, inArray, sql } from 'drizzle-orm';
 import { createLogger } from '@/lib/logger';
@@ -118,6 +119,24 @@ export async function launchTask(taskId: string, opts: LaunchOptions = {}): Prom
 
   log.info('Launching task', { taskId, title: task.title, agent: agentName, agentId });
 
+  // PREFLIGHT: For engineering tasks, verify all required external creds are
+  // healthy BEFORE claiming a slot or charging credits. Stale GitHub tokens,
+  // missing Render keys, and unreachable Neon connections used to waste
+  // entire 200-turn runs before discovery. Fail loud, fail cheap.
+  if (agentId === 30) {
+    const preflight = await preflightCheck();
+    if (!preflight.ok) {
+      const reason = formatPreflightFailures(preflight.failures);
+      await taskService.updateTask(taskId, { status: 'failed' });
+      await eventService.emit(task.company_id, 'task_failed', {
+        task_id: taskId,
+        title: task.title,
+        reason,
+      });
+      throw new Error(reason);
+    }
+  }
+
   // ATOMIC: Claim slot (+ deduct credit for founder-funded runs) in one SQL
   // statement. Night-shift cycles are subscription-funded, so they skip the
   // credit_ledger deduction and use claimSlotOnly instead.
@@ -181,7 +200,7 @@ export async function launchTask(taskId: string, opts: LaunchOptions = {}): Prom
   // 4. Create watchdog with active monitoring + per-agent cost ceiling.
   // The ceiling is a backstop against runaway token spend; the agent also
   // sees the live budget summary in its per-turn context so it can self-pace.
-  const costCeilingUsd = getCostCeilingForAgent(agentId);
+  const costCeilingUsd = getCostCeilingForAgent(agentId, task.complexity);
   const watchdog = new Watchdog(taskId, task.max_turns, task.company_id, costCeilingUsd);
   const abortController = new AbortController();
   watchdog.startActiveMonitor(() => {

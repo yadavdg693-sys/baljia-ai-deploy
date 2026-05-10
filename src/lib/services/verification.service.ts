@@ -525,26 +525,23 @@ async function verifyDeterministic(task: Task): Promise<VerificationResult> {
         detail: `${journeyCalls.length} passing user journey verification(s).`,
       });
     } else if (deployCalls.length > 0) {
-      // Agent skipped verify_user_journey but deploy succeeded — run a
-      // verifier-side fallback. Converts the prompt-level mandate into a
-      // structural guarantee. Read-only probe (GET / + /api/health) so we
-      // don't pollute the founder DB with test users.
+      // Agent skipped verify_user_journey but deploy succeeded. Run the
+      // verifier-side fallback for diagnostic visibility, but DO NOT let it
+      // substitute for the mandatory agent journey call — skipping is a hard
+      // fail regardless of fallback outcome. Fallback only proves "/" and
+      // "/api/health" respond; that's not the same as proving the requested
+      // feature actually works for a real user.
       const fallback = await runFallbackJourney(task.company_id);
-      if (!fallback) {
-        checks.push({
-          name: 'user_journey_evidence',
-          passed: false,
-          detail: `Engineering task must run verify_user_journey after deploy. Agent did not run it AND fallback could not resolve a deployed URL (no custom_domain / no render_service_id). Journey attempts: ${attemptedJourneys.length ? attemptedJourneys.join(', ') : 'none'}.`,
-        });
-      } else {
-        checks.push({
-          name: 'user_journey_evidence',
-          passed: fallback.allPassed,
-          detail: fallback.allPassed
-            ? `Verifier-side fallback journey PASS (${fallback.passedSteps}/${fallback.totalSteps} steps). The agent should still call verify_user_journey itself for full register→login coverage.`
-            : `Verifier-side fallback journey FAIL — the deployed URL responded but the basic liveness probe failed. ${fallback.summary.split('\n')[0]}`,
-        });
-      }
+      const fallbackDetail = !fallback
+        ? 'fallback could not resolve a deployed URL (no custom_domain / no render_service_id)'
+        : fallback.allPassed
+          ? `fallback liveness probe PASSED (${fallback.passedSteps}/${fallback.totalSteps}) — but / and /api/health responding is NOT proof the requested feature works`
+          : `fallback liveness probe FAILED — ${fallback.summary.split('\n')[0]}`;
+      checks.push({
+        name: 'user_journey_evidence',
+        passed: false,
+        detail: `Engineering task must call verify_user_journey itself after deploy — the agent skipped it. ${fallbackDetail}. Journey attempts: ${attemptedJourneys.length ? attemptedJourneys.join(', ') : 'none'}.`,
+      });
     } else {
       checks.push({
         name: 'user_journey_evidence',
