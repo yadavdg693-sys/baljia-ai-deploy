@@ -306,6 +306,20 @@ export function getEngineeringTools(): EngineeringToolDefinition[] {
       },
     },
     {
+      name: 'http_fetch_full',
+      description: 'Make a single HTTP request and return the FULL response: status, headers, and body (truncated to 4KB). Use this for live debugging when verify_user_journey or check_url_health surfaces a failure — check_url_health only returns 200/non-200, but http_fetch_full lets you inspect WHY a request is failing (which header is wrong, what error JSON the server returned, what redirect target). Always use this BEFORE assuming a fix; never patch blind.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          url:     { type: 'string' as const,  description: 'Full URL to fetch.' },
+          method:  { type: 'string' as const,  enum: ['GET','POST','PUT','DELETE','PATCH','HEAD'], description: 'Default GET.' },
+          headers: { type: 'object' as const,  description: 'Optional request headers as { name: value }.' },
+          body:    { type: 'string' as const,  description: 'Optional request body as a string.' },
+        },
+        required: ['url'],
+      },
+    },
+    {
       name: 'read_known_issues',
       description: 'Read past failure fingerprints relevant to what you are about to do. Returns up to 5 entries — both still-open issues AND already-fixed ones with their fix_notes. Call this BEFORE any deploy / migration / Render service creation / GitHub commit so you avoid repeating known mistakes. Each entry includes a [STATUS] tag and (when available) the exact fix that worked. Examples of useful contexts: "creating Render service", "session middleware Express", "GitHub Trees API commit", "Drizzle migration on production".',
       input_schema: {
@@ -737,6 +751,8 @@ export async function handleEngineeringTool(
       return handleReviewPushedCode(task.company_id);
     case 'read_known_issues':
       return handleReadKnownIssues(input);
+    case 'http_fetch_full':
+      return handleHttpFetchFull(input);
 
     // Ã¢â€â‚¬Ã¢â€â‚¬ Database Infrastructure Ã¢â€â‚¬Ã¢â€â‚¬
     case 'provision_database':
@@ -1469,6 +1485,41 @@ async function handleStaticCodeScan(companyId: string): Promise<string> {
 
   const findings = scanFiles(scanned);
   return summarizeFindings(findings);
+}
+
+// Live debug helper — full HTTP response (status + headers + body) so the
+// agent can diagnose why a request failed instead of just knowing it failed.
+// check_url_health is binary 200/not-200; http_fetch_full gives the why.
+
+async function handleHttpFetchFull(input: Record<string, unknown>): Promise<string> {
+  const url     = input.url as string | undefined;
+  const method  = ((input.method as string | undefined) ?? 'GET').toUpperCase();
+  const headers = (input.headers as Record<string, string> | undefined) ?? {};
+  const body    = input.body as string | undefined;
+
+  if (!url) return 'Error: url is required.';
+  try {
+    const resp = await fetch(url, {
+      method,
+      headers: { 'User-Agent': 'Baljia/1.0 engineering-debug', ...headers },
+      body: method === 'GET' || method === 'HEAD' ? undefined : body,
+      redirect: 'manual',
+      signal: AbortSignal.timeout(10_000),
+    });
+    const respHeaders: Record<string, string> = {};
+    resp.headers.forEach((v, k) => { respHeaders[k] = v; });
+    let respBody = '';
+    try { respBody = await resp.text(); } catch { /* binary or empty */ }
+    if (respBody.length > 4096) respBody = respBody.slice(0, 4096) + `\n... [truncated; total ${respBody.length} bytes]`;
+    return [
+      `HTTP ${resp.status} ${resp.statusText} — ${method} ${url}`,
+      `Headers: ${JSON.stringify(respHeaders, null, 2)}`,
+      `Body:`,
+      respBody || '(empty)',
+    ].join('\n');
+  } catch (err) {
+    return `HTTP fetch failed: ${err instanceof Error ? err.message : String(err)}`;
+  }
 }
 
 // Known-issues lookup — agent calls before doing risky work to avoid repeating

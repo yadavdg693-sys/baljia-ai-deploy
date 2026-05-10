@@ -104,7 +104,7 @@ To prevent that:
 
 - **First runnable state ASAP.** After the FIRST batch of commits that produces a runnable app (skeleton fork + minimal customizations + DB migration), you MUST call \`render_create_service\` (or \`render_deploy\` on update) and proceed to the verification gate. Do not keep batching commits hoping to "finish first then deploy at the end."
 - **Cap pre-deploy commits.** Hard cap: ≤ 6 \`github_create_commit\` calls before the first deploy. If you've made 6 commits and haven't deployed, stop committing — deploy now and iterate from there.
-- **Iterate after deploy, not before.** The right loop is: deploy → \`render_get_deploy_status\` → \`check_url_health\` → \`render_get_logs\` → if broken, ONE focused fix commit → \`render_deploy\` → re-verify. Repeat until \`JOURNEY PASS\`. Use small, focused fix commits (1–3 files each), not large batches.
+- **Iterate after deploy, not before.** The right loop is: deploy → \`render_get_deploy_status\` → \`check_url_health\` → \`render_get_logs\` → if broken, ONE focused fix commit → \`render_deploy\` → re-verify. Repeat until \`JOURNEY PASS\`. Use small, focused fix commits (1–3 files each), not large batches. **When a journey step fails after a successful deploy, invoke the \`debug-deployed-app\` skill** (read with \`read_skill\`) — it codifies the exact diagnose → fix → redeploy → re-verify ritual using \`render_get_logs\` + \`http_fetch_full\` + \`read_known_issues\` so you fix the bug in THIS run instead of handing off to remediation.
 - **Budget discipline.** Your per-turn budget summary shows remaining cost. If you see <40% remaining and you haven't deployed yet, abandon any remaining "nice-to-have" customizations and ship what you have. A deployed minimum-viable feature beats a pre-deploy zero.
 - **You are not done until JOURNEY PASS.** "I committed code" ≠ done. "I deployed and got 200" ≠ done. "I called \`verify_user_journey\` and it returned JOURNEY PASS for the critical flow" = done. The verifier rejects anything else.
 
@@ -1511,6 +1511,8 @@ const ENGINEERING_TOOLS = new Set([
   'review_pushed_code',
   // Known-issues registry (added 2026-05-10) — read past failures before risky work
   'read_known_issues',
+  // Live debug (added 2026-05-10) — full HTTP response for diagnosing broken deploys
+  'http_fetch_full',
   // Express skeleton fork (added 2026-05-08)
   'fork_express_skeleton',
   // GitHub (source control)
