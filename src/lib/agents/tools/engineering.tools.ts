@@ -306,6 +306,94 @@ export function getEngineeringTools(): EngineeringToolDefinition[] {
       },
     },
     {
+      name: 'read_codebase_map',
+      description: 'Read the company\'s codebase map — a structured summary of the deployed app: stack, schema, routes, auth pattern, shipped features. Call this at the START of any extend task (when the company already has a deployed app) so you do not have to rediscover the schema/routes via github_list_files. Returns "no codebase map yet" if this is the first build (in which case proceed from skeleton).',
+      input_schema: {
+        type: 'object' as const,
+        properties: {},
+      },
+    },
+    {
+      name: 'write_codebase_map',
+      description: 'Write or update the company\'s codebase map after a successful task. Required at the end of every successful engineering task. Pass the FULL map (stack + deploy + schema + routes + patterns + shipped_features). For first deploy: write the initial map. For extends: read the current map, append your new feature to shipped_features, update last_commit_sha + last_deployed_at + any new schema/routes, then write.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          schema_version: { type: 'integer' as const, enum: [1] },
+          stack: {
+            type: 'object' as const,
+            properties: {
+              framework: { type: 'string' as const },
+              runtime: { type: 'string' as const },
+              database: { type: 'string' as const },
+              hosting: { type: 'string' as const },
+              integrations: { type: 'array' as const, items: { type: 'string' as const } },
+            },
+            required: ['framework', 'runtime', 'database', 'hosting'],
+          },
+          deploy: {
+            type: 'object' as const,
+            properties: {
+              github_repo: { type: ['string', 'null'] as const },
+              render_service_id: { type: ['string', 'null'] as const },
+              app_url: { type: ['string', 'null'] as const },
+              last_commit_sha: { type: ['string', 'null'] as const },
+              last_deployed_at: { type: ['string', 'null'] as const },
+            },
+            required: ['github_repo', 'render_service_id', 'app_url', 'last_commit_sha', 'last_deployed_at'],
+          },
+          schema: {
+            type: 'array' as const,
+            items: {
+              type: 'object' as const,
+              properties: {
+                table: { type: 'string' as const },
+                columns: { type: 'array' as const, items: { type: 'string' as const } },
+                notes: { type: 'string' as const },
+              },
+              required: ['table', 'columns'],
+            },
+          },
+          routes: {
+            type: 'array' as const,
+            items: {
+              type: 'object' as const,
+              properties: {
+                path: { type: 'string' as const },
+                method: { type: 'string' as const },
+                auth: { type: 'string' as const, enum: ['public', 'session', 'admin'] },
+                notes: { type: 'string' as const },
+              },
+              required: ['path', 'method', 'auth'],
+            },
+          },
+          patterns: {
+            type: 'object' as const,
+            properties: {
+              auth: { type: 'string' as const },
+              query_layer: { type: 'string' as const },
+              error_handling: { type: 'string' as const },
+            },
+            required: ['auth', 'query_layer', 'error_handling'],
+          },
+          shipped_features: {
+            type: 'array' as const,
+            items: {
+              type: 'object' as const,
+              properties: {
+                feature: { type: 'string' as const },
+                task_id: { type: ['string', 'null'] as const },
+                shipped_at: { type: 'string' as const },
+              },
+              required: ['feature', 'task_id', 'shipped_at'],
+            },
+          },
+          notes: { type: ['string', 'null'] as const },
+        },
+        required: ['schema_version', 'stack', 'deploy', 'patterns'],
+      },
+    },
+    {
       name: 'http_fetch_full',
       description: 'Make a single HTTP request and return the FULL response: status, headers, and body (truncated to 4KB). Use this for live debugging when verify_user_journey or check_url_health surfaces a failure — check_url_health only returns 200/non-200, but http_fetch_full lets you inspect WHY a request is failing (which header is wrong, what error JSON the server returned, what redirect target). Always use this BEFORE assuming a fix; never patch blind.',
       input_schema: {
@@ -753,6 +841,10 @@ export async function handleEngineeringTool(
       return handleReadKnownIssues(input);
     case 'http_fetch_full':
       return handleHttpFetchFull(input);
+    case 'read_codebase_map':
+      return handleReadCodebaseMap(task.company_id);
+    case 'write_codebase_map':
+      return handleWriteCodebaseMap(input, task.company_id);
 
     // Ã¢â€â‚¬Ã¢â€â‚¬ Database Infrastructure Ã¢â€â‚¬Ã¢â€â‚¬
     case 'provision_database':
@@ -1485,6 +1577,35 @@ async function handleStaticCodeScan(companyId: string): Promise<string> {
 
   const findings = scanFiles(scanned);
   return summarizeFindings(findings);
+}
+
+// Codebase map — engineering agent's persistent technical memory of the
+// founder's deployed app. Read at the start of extends; written at the end.
+
+async function handleReadCodebaseMap(companyId: string): Promise<string> {
+  const { getCodebaseMap, formatCodebaseMapForPrompt } = await import('@/lib/services/codebase-map.service');
+  try {
+    const map = await getCodebaseMap(companyId);
+    if (!map) return 'No codebase map yet (this is the first build, or the prior task did not write one). Proceed from skeleton.';
+    return formatCodebaseMapForPrompt(map);
+  } catch (err) {
+    return `Codebase map read failed: ${err instanceof Error ? err.message : 'unknown'}. Proceed cautiously.`;
+  }
+}
+
+async function handleWriteCodebaseMap(input: Record<string, unknown>, companyId: string): Promise<string> {
+  const { writeCodebaseMap, codebaseMapSchema } = await import('@/lib/services/codebase-map.service');
+  const validated = codebaseMapSchema.safeParse(input);
+  if (!validated.success) {
+    const issues = validated.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
+    return `Codebase map validation failed: ${issues}. Re-call write_codebase_map with the corrected shape.`;
+  }
+  try {
+    await writeCodebaseMap(companyId, validated.data);
+    return `Codebase map saved (${validated.data.shipped_features.length} feature(s) tracked, ${validated.data.schema.length} table(s), ${validated.data.routes.length} route(s)).`;
+  } catch (err) {
+    return `Codebase map write failed: ${err instanceof Error ? err.message : 'unknown'}.`;
+  }
 }
 
 // Live debug helper — full HTTP response (status + headers + body) so the

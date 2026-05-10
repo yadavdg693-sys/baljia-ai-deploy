@@ -460,6 +460,12 @@ export interface ContextPacket {
     billing_state: BillingState;
   };
   compiled_briefing: string;
+  /**
+   * Engineering-only: pre-formatted markdown summary of the founder's deployed
+   * app (stack, schema, routes, shipped features). Null when no codebase_map
+   * exists yet (first build) or the task isn't engineering-tagged.
+   */
+  codebase_map: string | null;
 }
 
 export interface PermissionSnapshot {

@@ -116,7 +116,8 @@ To prevent that:
 3. **Default deploy path for engineering tasks is Render — and for plain Express + Postgres apps you fork the hardened skeleton, you do NOT write server.js from scratch.**
    - **First deploy of an Express app** (no Render service yet, plain Express stack): call \`fork_express_skeleton\` first. It pushes a single atomic commit containing server.js (with all Backend Quality Bar P0 patterns pre-wired: Zod env validation, trust-proxy, Postgres sessions, /api/health that probes DB + session + Stripe, structured logging, withTimeout helper, discriminated unions, register/login/logout flows), package.json, render.yaml, db/schema.sql, tests/{config,auth,health}.test.js, README.md. Then \`run_migration\` with db/schema.sql, customize landingPage()/dashboardPage()/feature routes via \`github_create_commit\`, and \`render_create_service\` with plan "free". Every from-scratch attempt has shipped with at least one P0 violation; the skeleton has them all pre-wired.
    - **First deploy of a Next.js app**: use \`github_fork_skeleton\` (the existing Next.js skeleton at BALAJIapps/Balaji) instead.
-   - **Update** (render_service_id exists): read/list the GitHub repo, edit only what the task requires via \`github_create_commit\` (atomic multi-file), call \`render_deploy\`, then check deploy status and health.
+   - **Update** (render_service_id exists): your briefing already contains an "Existing app (codebase map)" section with the deployed app's stack, schema, routes, and shipped features — read it FIRST. If the briefing's map looks stale or missing, call \`read_codebase_map\` to refresh. Then edit only what the task requires via \`github_create_commit\` (atomic multi-file), call \`render_deploy\`, then check deploy status and health.
+   - **At the END of every successful task** (first deploy or extend): call \`write_codebase_map\` with the FULL updated map — refresh \`last_commit_sha\`, \`last_deployed_at\`, append the new feature to \`shipped_features\`, add any new tables/routes. This is what the NEXT task's agent will read; skipping it makes future extends blind.
    - Do not create duplicate Render services. One company gets one trial Render service.
    - Do not modify the skeleton's framework files (the Zod schema, trust-proxy line, session middleware, /api/health, withTimeout helper, register/login/logout handlers). Customize ONLY: landing copy in landingPage(), dashboard rendering in dashboardPage(), feature routes (rename /api/items to your feature noun), and add feature-specific tables to db/schema.sql.
 4. **Provision before deploy.** If the app needs a DB, call provision_database FIRST, then pass DATABASE_URL/NEON_CONNECTION_STRING as a Render env var. The tool will replace masked DB URLs with the real company DB URL.
@@ -1513,6 +1514,8 @@ const ENGINEERING_TOOLS = new Set([
   'read_known_issues',
   // Live debug (added 2026-05-10) — full HTTP response for diagnosing broken deploys
   'http_fetch_full',
+  // Codebase map (added 2026-05-10) — shared memory of the deployed app for extends
+  'read_codebase_map', 'write_codebase_map',
   // Express skeleton fork (added 2026-05-08)
   'fork_express_skeleton',
   // GitHub (source control)

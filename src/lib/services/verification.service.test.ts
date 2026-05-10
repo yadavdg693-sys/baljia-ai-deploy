@@ -110,6 +110,9 @@ describe('deterministic verifier — user_journey_evidence (new hard gate)', () 
       { tool: 'render_create_service', result: 'Render service created!\nService ID: srv-1' },
       { tool: 'check_url_health',      result: '✅ https://x.com is UP — HTTP 200 in 50ms' },
       { tool: 'verify_user_journey',   result: 'JOURNEY PASS: "register flow" - all 3 steps passed.' },
+      // static_code_scan is HARD as of 2026-05-10; include a clean call so the
+      // db_state advisory behavior can be tested in isolation.
+      { tool: 'static_code_scan',      result: 'STATIC SCAN: 0 finding(s) — high=0 medium=0 low=0' },
     ]);
     const { verifyTask } = await import('@/lib/services/verification.service');
     const result = await verifyTask({ ...baseTask, verification_level: 'deterministic' } as never);
@@ -182,6 +185,9 @@ describe('Backend Quality Bar — repo hygiene checks (advisory)', () => {
     { tool: 'render_create_service', result: 'Render service created!\nService ID: srv-1' },
     { tool: 'check_url_health',      result: '✅ https://x.com is UP — HTTP 200 in 50ms' },
     { tool: 'verify_user_journey',   result: 'JOURNEY PASS: "x" - all 3 steps passed.' },
+    // static_code_scan is HARD as of 2026-05-10; the repo-hygiene tests focus
+    // on advisory checks so include a clean scan call to keep result.passed=true.
+    { tool: 'static_code_scan',      result: 'STATIC SCAN: 0 finding(s) — high=0 medium=0 low=0' },
   ];
 
   it('flags missing tests folder + missing README as failed (but advisory)', async () => {

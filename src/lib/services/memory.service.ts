@@ -2,7 +2,7 @@
 import { db, memoryLayers, learnings, tasks, companies, reports, failureFingerprints } from '@/lib/db';
 import { eq, and, desc, ilike, sql, gte } from 'drizzle-orm';
 import { createLogger } from '@/lib/logger';
-import type { MemoryLayerNumber, MemoryLayer, Learning, LearningConfidence, ContextPacket, CompanyStage, Lifecycle, BillingState } from '@/types';
+import type { MemoryLayerNumber, MemoryLayer, Learning, LearningConfidence, ContextPacket, Lifecycle, BillingState } from '@/types';
 
 const log = createLogger('Memory');
 
@@ -550,20 +550,32 @@ export async function buildContextPacket(
     }));
   } catch { /* non-blocking */ }
 
-  // 4. Company state
+  // 4. Company state — stage column deprecated 2026-05-02; only lifecycle + billing_state are read.
   const [company] = await db.select({
-    company_stage: companies.company_stage,
     lifecycle: companies.lifecycle,
     billing_state: companies.billing_state,
   }).from(companies)
     .where(eq(companies.id, companyId))
     .limit(1);
 
-  // 5. Compile briefing string from memory layers.
+  // 5. Codebase map (engineering tasks only) — gives the agent the existing
+  // app's stack, schema, routes, and shipped features so extends don't go
+  // blind on what's already there. Null on first build or non-engineering tasks.
+  let codebaseMapSection: string | null = null;
+  if (task.tag === 'engineering') {
+    try {
+      const { getCodebaseMap, formatCodebaseMapForPrompt } = await import('./codebase-map.service');
+      const map = await getCodebaseMap(companyId);
+      if (map) codebaseMapSection = formatCodebaseMapForPrompt(map);
+    } catch { /* non-blocking */ }
+  }
+
+  // 6. Compile briefing string from memory layers (and codebase map if present).
   // L3 is intentionally not appended — see Finding B6: no write path exists
   // and the schema is per-company. Returning the (empty) field on the typed
   // contract is fine; injecting an empty section header isn't.
   const briefingSections: string[] = [];
+  if (codebaseMapSection) briefingSections.push(codebaseMapSection); // Engineering: existing app context first
   if (layerMap[1]?.trim()) briefingSections.push(`### Domain Knowledge\n${evictToFit(layerMap[1], TOKEN_BUDGETS[1], 1)}`);
   if (layerMap[2]?.trim()) briefingSections.push(`### Founder Preferences\n${evictToFit(layerMap[2], TOKEN_BUDGETS[2], 2)}`);
   const compiledBriefing = briefingSections.join('\n\n');
@@ -582,10 +594,10 @@ export async function buildContextPacket(
     })),
     failure_fingerprints: fingerprints,
     company_state: {
-      stage: (company?.company_stage as CompanyStage) ?? 'early',
       lifecycle: (company?.lifecycle as Lifecycle) ?? 'trial_active',
       billing_state: (company?.billing_state as BillingState) ?? 'trial',
     },
     compiled_briefing: compiledBriefing,
+    codebase_map: codebaseMapSection,
   };
 }
