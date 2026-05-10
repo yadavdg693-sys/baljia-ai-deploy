@@ -563,6 +563,9 @@ function clampComplexity(value: unknown): number {
 }
 
 function normalizeTaskDescription(value: string): string {
+  // Whitespace-normalize only. The prompt + schema enforce 700 char target;
+  // if the LLM exceeds it, the right fix is the prompt, not chopping the
+  // string here (which produced "...before writing..." fragments).
   const normalized = value
     .replace(/\r\n/g, '\n')
     .split('\n')
@@ -571,14 +574,21 @@ function normalizeTaskDescription(value: string): string {
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 
-  if (normalized.length <= 700) return normalized;
-  return `${normalized.slice(0, 697).trimEnd()}...`;
+  if (normalized.length > 1200) {
+    log.warn('Task description exceeds soft limit (prompt should be tightened)', { chars: normalized.length });
+  }
+  return normalized;
 }
 
 function normalizeTaskTitle(value: string): string {
+  // Whitespace-normalize only. Title is supposed to be ≤72 chars per prompt
+  // schema; if the LLM produces longer, log and pass through (do not append
+  // "..." which truncates a meaningful title into a fragment).
   const normalized = value.replace(/\s+/g, ' ').trim();
-  if (normalized.length <= 72) return normalized;
-  return `${normalized.slice(0, 69).trimEnd()}...`;
+  if (normalized.length > 120) {
+    log.warn('Task title exceeds soft limit (prompt should be tightened)', { chars: normalized.length, title: normalized.slice(0, 50) });
+  }
+  return normalized;
 }
 
 function ensureSlot(
