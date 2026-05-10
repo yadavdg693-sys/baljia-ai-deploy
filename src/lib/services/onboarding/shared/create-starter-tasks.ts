@@ -12,6 +12,7 @@ import { createLogger } from '@/lib/logger';
 import { callSmallLLMJson } from './json-mode';
 import { StarterTasksSchema } from './schemas';
 import { emitActivity, recordOnboardingIssue } from '../stage-runner';
+import { stripInlineMarkdown } from './founder-doc-style';
 import type { PipelineContext } from '../types';
 
 const log = createLogger('OnboardingStarterTasks');
@@ -563,13 +564,14 @@ function clampComplexity(value: unknown): number {
 }
 
 function normalizeTaskDescription(value: string): string {
-  // Whitespace-normalize only. The prompt + schema enforce 700 char target;
-  // if the LLM exceeds it, the right fix is the prompt, not chopping the
-  // string here (which produced "...before writing..." fragments).
+  // Whitespace-normalize + strip inline-markdown artifacts (LLM sometimes
+  // emits **bold** or *italic* even when the consumer renders plain text,
+  // and those leak as literal characters). Per-line normalize, no chopping.
   const normalized = value
     .replace(/\r\n/g, '\n')
     .split('\n')
-    .map((line) => line.replace(/[ \t]+/g, ' ').trimEnd())
+    .map((line) => stripInlineMarkdown(line))
+    .filter((line, idx, arr) => line.length > 0 || (idx > 0 && arr[idx - 1].length > 0)) // collapse multi-blank
     .join('\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
@@ -581,10 +583,8 @@ function normalizeTaskDescription(value: string): string {
 }
 
 function normalizeTaskTitle(value: string): string {
-  // Whitespace-normalize only. Title is supposed to be ≤72 chars per prompt
-  // schema; if the LLM produces longer, log and pass through (do not append
-  // "..." which truncates a meaningful title into a fragment).
-  const normalized = value.replace(/\s+/g, ' ').trim();
+  // Whitespace + markdown-artifact strip. Title is plain text in cards.
+  const normalized = stripInlineMarkdown(value.replace(/\s+/g, ' ').trim());
   if (normalized.length > 120) {
     log.warn('Task title exceeds soft limit (prompt should be tightened)', { chars: normalized.length, title: normalized.slice(0, 50) });
   }

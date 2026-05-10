@@ -9,6 +9,7 @@ import { InventedIdeaSchema } from './schemas';
 import { saveOnboardingBrief } from './onboarding-brief';
 import { emitActivity, recordOnboardingIssue } from '../stage-runner';
 import { appendMemorySection } from './memory-sections';
+import { stripInlineMarkdown } from './founder-doc-style';
 import type { PipelineContext, InventedIdea } from '../types';
 import bucketRaw from '../../../../../data/business-ideas-bucket.json';
 
@@ -169,10 +170,11 @@ export async function inventIdea(ctx: PipelineContext): Promise<void> {
 
   // Trust the LLM's length — the prompt + JSON schema constrain this to one
   // sentence per field. Don't char-slice here; that produces mid-word
-  // fragments. If the LLM violates the contract, log and fix the prompt.
-  const invented_idea_clean = result.invented_idea.trim();
-  const changes_made_clean = (result.changes_made ?? '').trim();
-  const rationale_clean = (result.rationale ?? '').trim();
+  // fragments. Strip LLM-inline-markdown artifacts (**bold**, *italic*)
+  // since these fields render in plain-text contexts.
+  const invented_idea_clean = stripInlineMarkdown(result.invented_idea);
+  const changes_made_clean = stripInlineMarkdown(result.changes_made ?? '');
+  const rationale_clean = stripInlineMarkdown(result.rationale ?? '');
   if (invented_idea_clean.length > 600) {
     await recordOnboardingIssue(ctx, {
       stage: 'invent_idea',

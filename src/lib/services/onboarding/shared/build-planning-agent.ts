@@ -10,7 +10,7 @@ import { isSafeUrl, extractMetadata } from './fetch-business-url';
 import { trackedTavilySearch } from './tracked-calls';
 import { appendMemorySection } from './memory-sections';
 import { saveOnboardingBrief } from './onboarding-brief';
-import { compactLine, compactParagraphs } from './founder-doc-style';
+import { compactLine, compactParagraphs, stripInlineMarkdown } from './founder-doc-style';
 import { emitActivity, recordOnboardingIssue } from '../stage-runner';
 import type {
   BuildMarketResearch,
@@ -290,10 +290,11 @@ Rules:
 
   // Trust the LLM-imposed contract from the prompt + JSON schema. Don't
   // char-slice here — that produced "...before writing..." fragments.
-  // If the LLM violates the contract, log it and fix the prompt.
-  const refinedIdeaClean = artifacts.refined_idea.refined_idea.trim();
-  const changesMadeClean = artifacts.refined_idea.changes_made.trim();
-  const rationaleClean = artifacts.refined_idea.rationale.trim();
+  // Strip inline-markdown artifacts so **bold** and *italic* don't leak
+  // as literal characters into one-liners and other plain-text contexts.
+  const refinedIdeaClean = stripInlineMarkdown(artifacts.refined_idea.refined_idea);
+  const changesMadeClean = stripInlineMarkdown(artifacts.refined_idea.changes_made);
+  const rationaleClean = stripInlineMarkdown(artifacts.refined_idea.rationale);
   if (refinedIdeaClean.length > 600 || changesMadeClean.length > 500 || rationaleClean.length > 500) {
     await recordOnboardingIssue(ctx, {
       stage: 'refine_idea',
@@ -309,14 +310,14 @@ Rules:
   };
   ctx.strategy = ctx.refinedIdea.refined_idea;
   ctx.missionDoc = {
-    mission: compactLine(artifacts.mission_doc.mission, 220, 1),
-    what_were_building: compactParagraphs(artifacts.mission_doc.what_were_building, 1, 430, 2),
-    where_were_headed: compactParagraphs(artifacts.mission_doc.where_were_headed, 1, 620, 4),
+    mission: stripInlineMarkdown(compactLine(artifacts.mission_doc.mission, 220, 1)),
+    what_were_building: stripInlineMarkdown(compactParagraphs(artifacts.mission_doc.what_were_building, 1, 430, 2)),
+    where_were_headed: stripInlineMarkdown(compactParagraphs(artifacts.mission_doc.where_were_headed, 1, 620, 4)),
   };
   ctx.mission = ctx.missionDoc.mission;
   const firstMissionSentence = ctx.missionDoc.what_were_building.split(/[.!?]/)[0].trim();
   const words = firstMissionSentence.split(/\s+/).filter(Boolean);
-  ctx.oneLiner = words.slice(0, Math.min(words.length, 18)).join(' ');
+  ctx.oneLiner = stripInlineMarkdown(words.slice(0, Math.min(words.length, 18)).join(' '));
 
   await emitActivity(ctx, `Refined: "${ctx.refinedIdea.refined_idea.slice(0, 100)}"`, 'llm');
   await appendMemorySection(ctx.companyId, '## Idea (Refined)', [

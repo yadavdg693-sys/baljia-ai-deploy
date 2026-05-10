@@ -14,49 +14,71 @@ export function collapseSpaces(value: string | undefined | null): string {
   return (value ?? '').replace(/\s+/g, ' ').trim();
 }
 
-function splitSentences(value: string): string[] {
-  const matches = value.match(/[^.!?]+(?:[.!?]+|$)/g);
-  return (matches ?? [value])
-    .map(collapseSpaces)
-    .filter(Boolean);
+/**
+ * Strip LLM-generated inline markdown artifacts so they don't render as
+ * literal `**` / `*` / `_` characters in plain-text contexts (task titles,
+ * one-liners, plain prose fields). Keeps the actual content intact.
+ *
+ * Removes: **bold**, *italic*, _italic_, `code`, ~~strike~~, leading list
+ * markers (`- `, `* `, `+ `, `1. `).
+ *
+ * Does NOT touch URL chars, em dashes, or punctuation.
+ */
+export function stripInlineMarkdown(value: string | undefined | null): string {
+  if (!value) return '';
+  let s = String(value);
+  // Bold/italic/strike: remove the markers but keep the text inside.
+  s = s.replace(/\*\*([^*\n]+?)\*\*/g, '$1');     // **bold**
+  s = s.replace(/(?<!\w)\*([^*\n]+?)\*(?!\w)/g, '$1'); // *italic* (avoid touching e.g. "1.5*x")
+  s = s.replace(/(?<!\w)_([^_\n]+?)_(?!\w)/g, '$1');   // _italic_
+  s = s.replace(/~~([^~\n]+?)~~/g, '$1');         // ~~strike~~
+  s = s.replace(/`([^`\n]+?)`/g, '$1');           // `code`
+  // Leading list markers at the start of any line.
+  s = s.replace(/(^|\n)\s*[-*+]\s+/g, '$1');
+  s = s.replace(/(^|\n)\s*\d+[.)]\s+/g, '$1');
+  // Heading hashes.
+  s = s.replace(/(^|\n)#{1,6}\s+/g, '$1');
+  // Stray double-asterisk pairs that wrapped content with a space inside
+  // (LLMs sometimes emit `** lead. ** - bullet`).
+  s = s.replace(/\*\*\s*([^*\n]+?)\s*\*\*/g, '$1');
+  return s.replace(/\s+/g, ' ').trim();
 }
 
 /**
- * Collapse whitespace and optionally cap at maxSentences. Does NOT truncate
- * by character count — full sentence content always preserved. The maxChars
- * parameter is accepted for back-compat but ignored.
+ * Whitespace-only normalization. No char or sentence truncation — the LLM
+ * is constrained at the prompt layer; the renderer must not chop content
+ * (which produced "...before writing..." and "USD 1." fragments).
+ *
+ * The maxChars and maxSentences parameters are accepted for back-compat but
+ * ignored. Callers should use prompt-side constraints + summarization.
  */
 export function compactLine(
   value: string | undefined | null,
   _maxChars?: number,        // eslint-disable-line @typescript-eslint/no-unused-vars
-  maxSentences = 2,
+  _maxSentences?: number,    // eslint-disable-line @typescript-eslint/no-unused-vars
 ): string {
-  const cleaned = collapseSpaces(value);
-  if (!cleaned) return '';
-  const sentences = splitSentences(cleaned);
-  if (sentences.length <= Math.max(1, maxSentences)) return cleaned;
-  return sentences.slice(0, Math.max(1, maxSentences)).join(' ');
+  return collapseSpaces(value);
 }
 
 /**
- * Split into paragraphs (on \n\n), keep up to maxParagraphs, with up to
- * maxSentencesPerParagraph sentences each. No char truncation.
+ * Split into paragraphs on \n\n, keep up to maxParagraphs, whitespace-clean
+ * each. No char or sentence truncation.
  */
 export function compactParagraphs(
   value: string | undefined | null,
   maxParagraphs = 2,
-  _maxCharsPerParagraph?: number, // eslint-disable-line @typescript-eslint/no-unused-vars
-  maxSentencesPerParagraph = 2,
+  _maxCharsPerParagraph?: number,        // eslint-disable-line @typescript-eslint/no-unused-vars
+  _maxSentencesPerParagraph?: number,    // eslint-disable-line @typescript-eslint/no-unused-vars
 ): string {
   const raw = (value ?? '').replace(/\r/g, '').trim();
   if (!raw) return '';
 
   const paragraphs = raw
     .split(/\n{2,}/)
-    .map((part) => compactLine(part, undefined, maxSentencesPerParagraph))
+    .map((part) => collapseSpaces(part))
     .filter(Boolean);
 
-  if (paragraphs.length === 0) return compactLine(raw, undefined, maxSentencesPerParagraph);
+  if (paragraphs.length === 0) return collapseSpaces(raw);
   return paragraphs.slice(0, maxParagraphs).join('\n\n');
 }
 
@@ -131,7 +153,7 @@ export function compactMarkdown(
 export function compactList(items: string[], maxItems: number, _maxChars?: number): string[] { // eslint-disable-line @typescript-eslint/no-unused-vars
   return items
     .slice(0, maxItems)
-    .map((item) => compactLine(item, undefined, 2))
+    .map((item) => collapseSpaces(item))
     .filter(Boolean);
 }
 
@@ -140,5 +162,5 @@ export function compactList(items: string[], maxItems: number, _maxChars?: numbe
  * collapse handled by the caller (escapeCell). No char truncation.
  */
 export function compactTableCell(value: string | undefined | null, _maxChars?: number): string { // eslint-disable-line @typescript-eslint/no-unused-vars
-  return compactLine(value, undefined, 1);
+  return collapseSpaces(value);
 }
