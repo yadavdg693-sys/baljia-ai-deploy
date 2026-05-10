@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, Suspense } from 'react';
+import { useState, useEffect, useRef, Suspense, useCallback, useMemo } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import type { OnboardingJourney } from '@/types';
@@ -33,19 +33,69 @@ export interface ActivityLine {
   timestamp: number;
 }
 
-const STAGE_ORDER = [
-  'heartbeat',
-  'refine_idea',
-  'fetch_business_url',
-  'invent_idea',
-  'name_company',
-  'provision_infrastructure',
-  'generate_market_research',
-  'save_mission',
-  'create_starter_tasks',
-  'generate_landing_page',
-  'celebrate',
-];
+const STAGE_ORDER_BY_JOURNEY: Record<OnboardingJourney, string[]> = {
+  build_my_idea: [
+    'heartbeat',
+    'refine_idea',
+    'name_company',
+    'generate_market_research',
+    'provision_infrastructure',
+    'send_startup_email',
+    'post_launch_tweet',
+    'generate_landing_page',
+    'save_mission',
+    'create_starter_tasks',
+    'send_inbox_message',
+    'generate_magic_link',
+    'send_completion_email',
+    'celebrate',
+  ],
+  grow_my_company: [
+    'heartbeat',
+    'fetch_business_url',
+    'name_company',
+    'generate_market_research',
+    'provision_infrastructure',
+    'send_startup_email',
+    'post_launch_tweet',
+    'generate_landing_page',
+    'save_mission',
+    'create_starter_tasks',
+    'send_inbox_message',
+    'generate_magic_link',
+    'send_completion_email',
+    'celebrate',
+  ],
+  surprise_me: [
+    'heartbeat',
+    'enrich_geo',
+    'extract_founder_angle',
+    'persist_context',
+    'invent_idea',
+    'refine_idea',
+    'name_company',
+    'generate_market_research',
+    'provision_infrastructure',
+    'send_startup_email',
+    'post_launch_tweet',
+    'generate_landing_page',
+    'save_mission',
+    'create_starter_tasks',
+    'send_inbox_message',
+    'generate_magic_link',
+    'send_completion_email',
+    'celebrate',
+  ],
+};
+
+const GROW_STAGE_LABELS: Record<string, string> = {
+  fetch_business_url: 'Reading your company website',
+  name_company: 'Confirming your company name',
+  generate_market_research: 'Analyzing your growth market',
+  generate_landing_page: 'Creating your growth page',
+  save_mission: 'Sharpening your company mission',
+  create_starter_tasks: 'Creating growth tasks',
+};
 
 export default function OnboardingPage() {
   return (
@@ -68,6 +118,7 @@ function OnboardingPageInner() {
   const [idea, setIdea] = useState('');
   const [businessUrl, setBusinessUrl] = useState('');
   const [companyId, setCompanyId] = useState<string | null>(resumeCompanyId);
+  const [currentJourney, setCurrentJourney] = useState<OnboardingJourney>('surprise_me');
   const [stages, setStages] = useState<Record<string, 'running' | 'done' | 'error' | 'skipped'>>({});
   const [currentStageLabel, setCurrentStageLabel] = useState('Starting up...');
   const [activityLines, setActivityLines] = useState<ActivityLine[]>([]);
@@ -79,7 +130,25 @@ function OnboardingPageInner() {
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const dashboardRedirected = useRef(false);
   const resumeTriggered = useRef(false);
+  const visibleStages = useMemo(
+    () => STAGE_ORDER_BY_JOURNEY[currentJourney] ?? STAGE_ORDER_BY_JOURNEY.surprise_me,
+    [currentJourney],
+  );
+  const labelForStage = useCallback((stage: string) => {
+    if (currentJourney === 'grow_my_company' && GROW_STAGE_LABELS[stage]) {
+      return GROW_STAGE_LABELS[stage];
+    }
+    return ONBOARDING_STAGE_LABELS[stage] ?? stage.replace(/_/g, ' ');
+  }, [currentJourney]);
+
+  const handoffToDashboard = useCallback((id: string) => {
+    if (dashboardRedirected.current) return;
+    dashboardRedirected.current = true;
+    eventSourceRef.current?.close();
+    router.push(`/dashboard/${id}`);
+  }, [router]);
 
   useEffect(() => {
     if (!resumeCompanyId || resumeTriggered.current) return;
@@ -110,7 +179,11 @@ function OnboardingPageInner() {
       if (update.type === 'ping') return;
       if (update.type === 'stage' && update.stage) {
         setStages(prev => ({ ...prev, [update.stage!]: update.status ?? 'running' }));
-        if (update.status === 'running' && update.label) setCurrentStageLabel(update.label);
+        if (update.status === 'running') setCurrentStageLabel(labelForStage(update.stage));
+        if (update.stage === 'create_starter_tasks' && update.status === 'done') {
+          setLogDone(true);
+          setTimeout(() => handoffToDashboard(companyId), 700);
+        }
       }
       if (update.type === 'activity' && update.text) {
         setActivityLines(prev => [...prev, { id: ++activityIdRef.current, text: update.text!, tool: update.tool ?? null, stage: update.stage ?? null, timestamp: update.timestamp ?? Date.now() }]);
@@ -119,15 +192,29 @@ function OnboardingPageInner() {
       if (update.type === 'transformation' && update.original && update.refined) {
         setTransformation({ original: update.original, refined: update.refined, changes_made: update.changes_made ?? null });
       }
-      if (update.type === 'completed') { setLogDone(true); es.close(); setTimeout(() => router.push(`/dashboard/${companyId}`), 1200); }
+      if (update.type === 'completed') { setLogDone(true); es.close(); setTimeout(() => handoffToDashboard(companyId), 700); }
       if (update.type === 'failed') { setLogDone(true); es.close(); setError(update.error ?? 'Setup failed.'); setStep('level1'); }
-      if (update.type === 'timeout') { setLogDone(true); es.close(); setError('Setup is taking longer than expected.'); setStep('level1'); }
+      if (update.type === 'timeout') { setLogDone(true); es.close(); handoffToDashboard(companyId); }
     };
     es.onerror = () => { es.close(); setError('Connection lost during setup.'); setStep('level1'); };
     return () => es.close();
-  }, [companyId, router]);
+  }, [companyId, handoffToDashboard, labelForStage]);
+
+  useEffect(() => {
+    if (!companyId || step !== 'creating') return;
+    const timer = window.setTimeout(() => handoffToDashboard(companyId), 20_000);
+    return () => window.clearTimeout(timer);
+  }, [companyId, step, handoffToDashboard]);
 
   async function startOnboarding(journey: OnboardingJourney, input?: string) {
+    setCurrentJourney(journey);
+    setStages({});
+    setActivityLines([]);
+    setTransformation(null);
+    setLogDone(false);
+    setCurrentStageLabel('Starting up...');
+    activityIdRef.current = 0;
+    dashboardRedirected.current = false;
     setStep('creating'); setError(null);
     try {
       const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -148,8 +235,8 @@ function OnboardingPageInner() {
     } catch (err) { setError(err instanceof Error ? err.message : 'Something went wrong'); setStep('level1'); }
   }
 
-  const doneCount = Object.values(stages).filter(s => s === 'done').length;
-  const progress = Math.round((doneCount / STAGE_ORDER.length) * 100);
+  const doneCount = visibleStages.filter(s => stages[s] === 'done').length;
+  const progress = Math.round((doneCount / visibleStages.length) * 100);
 
   // ─── STYLES ───
   const pageStyle: React.CSSProperties = {
@@ -158,19 +245,27 @@ function OnboardingPageInner() {
     fontFamily: "'Inter', system-ui, sans-serif",
     transition: 'background .45s, color .45s',
   };
-  const containerStyle: React.CSSProperties = { width: '100%', maxWidth: 480 };
-  const logoWrapStyle: React.CSSProperties = { textAlign: 'center' as const, marginBottom: 36 };
+  const containerStyle: React.CSSProperties = { width: '100%', maxWidth: 520 };
+  const logoWrapStyle: React.CSSProperties = { textAlign: 'center' as const, marginBottom: 32 };
+  const logoMarkStyle: React.CSSProperties = {
+    width: 118,
+    height: 104,
+    margin: '0 auto 18px',
+    display: 'grid',
+    placeItems: 'center',
+    animation: 'bob 3s ease-in-out infinite alternate',
+  };
   const mascotStyle: React.CSSProperties = {
-    width: 64, height: 64, objectFit: 'contain' as const, margin: '0 auto 14px',
+    width: 94, height: 94, objectFit: 'contain' as const,
     display: 'block',
-    filter: 'drop-shadow(0 6px 16px rgba(217,119,6,0.35)) brightness(1.1) saturate(1.3)',
+    filter: 'drop-shadow(0 18px 34px rgba(217,119,6,0.22)) drop-shadow(0 0 22px rgba(252,211,77,0.16)) brightness(1.08) saturate(1.2)',
   };
   const titleStyle: React.CSSProperties = {
-    fontFamily: "'Newsreader', Georgia, serif", fontSize: 28, fontWeight: 500,
-    letterSpacing: '-.6px', marginBottom: 4, color: 'var(--ink)',
+    fontFamily: "'Newsreader', Georgia, serif", fontSize: 34, fontWeight: 500,
+    letterSpacing: '-.7px', marginBottom: 5, color: 'var(--ink)',
   };
   const subtitleStyle: React.CSSProperties = {
-    fontFamily: "'Newsreader', Georgia, serif", fontSize: 13, fontStyle: 'italic',
+    fontFamily: "'Newsreader', Georgia, serif", fontSize: 14, fontStyle: 'italic',
     color: '#D97706',
   };
   const headingStyle: React.CSSProperties = {
@@ -241,7 +336,9 @@ function OnboardingPageInner() {
       <div style={containerStyle}>
         {/* Logo */}
         <div style={logoWrapStyle}>
-          <img src="/mascot.png" alt="Baljia" style={mascotStyle} />
+          <div style={logoMarkStyle}>
+            <img src="/mascot.png" alt="Baljia" style={mascotStyle} />
+          </div>
           <h1 style={titleStyle}>
             <span style={{ color: '#A35F05' }}>Baljia</span>
           </h1>
@@ -253,15 +350,15 @@ function OnboardingPageInner() {
         {/* Step: Level 1 */}
         {step === 'level1' && (
           <div style={{ display: 'grid', gap: 12 }}>
-            <h2 style={headingStyle}>Let&apos;s get started.</h2>
+            <h2 style={headingStyle}>What are we starting with?</h2>
             <button
               style={cardBtnStyle}
               onClick={() => setStep('level2')}
               onMouseEnter={e => { (e.target as HTMLElement).style.borderColor = '#D97706'; (e.target as HTMLElement).style.transform = 'translateY(-2px)'; (e.target as HTMLElement).style.boxShadow = 'var(--shadow-md)'; }}
               onMouseLeave={e => { (e.target as HTMLElement).style.borderColor = 'var(--line)'; (e.target as HTMLElement).style.transform = 'none'; (e.target as HTMLElement).style.boxShadow = '0 1px 2px rgba(24,18,10,0.04)'; }}
             >
-              <div style={cardTitleStyle}>Create a new company</div>
-              <div style={cardDescStyle}>Start from scratch — we&apos;ll build everything for you</div>
+              <div style={cardTitleStyle}>Start a new company</div>
+              <div style={cardDescStyle}>We&apos;ll come up with the idea, build it, and run it for you.</div>
             </button>
             <button
               style={cardBtnStyle}
@@ -269,8 +366,8 @@ function OnboardingPageInner() {
               onMouseEnter={e => { (e.target as HTMLElement).style.borderColor = '#D97706'; (e.target as HTMLElement).style.transform = 'translateY(-2px)'; }}
               onMouseLeave={e => { (e.target as HTMLElement).style.borderColor = 'var(--line)'; (e.target as HTMLElement).style.transform = 'none'; }}
             >
-              <div style={cardTitleStyle}>Grow my company</div>
-              <div style={cardDescStyle}>I already have a business — help me scale it</div>
+              <div style={cardTitleStyle}>I already have a business</div>
+              <div style={cardDescStyle}>Share your website and we&apos;ll handle growth, marketing, and operations.</div>
             </button>
           </div>
         )}
@@ -279,20 +376,20 @@ function OnboardingPageInner() {
         {step === 'level2' && (
           <div style={{ display: 'grid', gap: 12 }}>
             <button style={backBtnStyle} onClick={() => setStep('level1')}>← Back</button>
-            <h2 style={headingStyle}>Let&apos;s build something.</h2>
+            <h2 style={headingStyle}>Do you have an idea?</h2>
             <button style={cardBtnStyle} onClick={() => startOnboarding('surprise_me')}
               onMouseEnter={e => { (e.target as HTMLElement).style.borderColor = '#D97706'; (e.target as HTMLElement).style.transform = 'translateY(-2px)'; }}
               onMouseLeave={e => { (e.target as HTMLElement).style.borderColor = 'var(--line)'; (e.target as HTMLElement).style.transform = 'none'; }}
             >
-              <div style={cardTitleStyle}>✨ Surprise me</div>
-              <div style={cardDescStyle}>We&apos;ll research you and find an idea that makes sense for you</div>
+              <div style={cardTitleStyle}>No, suggest one for me</div>
+              <div style={cardDescStyle}>We&apos;ll look at your background and pick an idea that fits you.</div>
             </button>
             <button style={cardBtnStyle} onClick={() => setStep('idea_input')}
               onMouseEnter={e => { (e.target as HTMLElement).style.borderColor = '#D97706'; (e.target as HTMLElement).style.transform = 'translateY(-2px)'; }}
               onMouseLeave={e => { (e.target as HTMLElement).style.borderColor = 'var(--line)'; (e.target as HTMLElement).style.transform = 'none'; }}
             >
-              <div style={cardTitleStyle}>💡 Build my idea</div>
-              <div style={cardDescStyle}>I have an idea — let&apos;s bring it to life</div>
+              <div style={cardTitleStyle}>Yes, I have one</div>
+              <div style={cardDescStyle}>Tell us the idea and we&apos;ll turn it into a working company.</div>
             </button>
           </div>
         )}
@@ -334,16 +431,11 @@ function OnboardingPageInner() {
         {/* Step: Creating */}
         {(step === 'creating') && (
           <div style={{ textAlign: 'center' as const }}>
-            <img src="/mascot.png" alt="" style={{
-              width: 72, height: 72, objectFit: 'contain' as const, margin: '0 auto 16px', display: 'block',
-              filter: 'drop-shadow(0 8px 20px rgba(217,119,6,0.35)) brightness(1.1) saturate(1.3)',
-              animation: 'bob 3s ease-in-out infinite alternate',
-            }} />
             <h2 style={{ fontSize: 20, fontWeight: 600, marginBottom: 6, color: 'var(--ink)' }}>
               Your AI Angel is setting up your company
             </h2>
             <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 24 }}>
-              This takes about 30–60 seconds
+              We&apos;ll move you to the dashboard in about 20 seconds while setup keeps building in the background.
             </p>
             <div style={progressBarBg}><div style={progressBarFill(progress)}></div></div>
             <p style={stageLabelStyle}>{currentStageLabel}</p>
@@ -364,25 +456,6 @@ function OnboardingPageInner() {
                 </p>
               </div>
             )}
-
-            <div style={stageListStyle}>
-              {STAGE_ORDER.map(s => {
-                const status = stages[s];
-                return (
-                  <div key={s} style={stageRowStyle}>
-                    <span style={{ width: 16, textAlign: 'center' as const }}>
-                      {status === 'done' ? <span style={{ color: '#22C55E' }}>✓</span> :
-                       status === 'running' ? <span style={{ color: '#E1B12C', animation: 'pulse-dot 1s infinite' }}>▶</span> :
-                       status === 'error' ? <span style={{ color: '#EF4444' }}>✗</span> :
-                       <span style={{ color: 'var(--text-dim)' }}>·</span>}
-                    </span>
-                    <span style={{ color: status === 'done' ? 'var(--text-muted)' : status === 'running' ? 'var(--ink)' : 'var(--text-dim)' }}>
-                      {ONBOARDING_STAGE_LABELS[s] ?? s.replace(/_/g, ' ')}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
 
             <div style={{ marginTop: 20 }}>
               <OnboardingLogStrip lines={activityLines} mood={mood} currentStageLabel={currentStageLabel} done={logDone} />

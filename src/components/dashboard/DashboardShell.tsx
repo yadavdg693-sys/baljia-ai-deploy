@@ -5,7 +5,7 @@
 
 'use client';
 
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import {
   DndContext,
@@ -31,23 +31,23 @@ import { DocumentDialog } from './DocumentDialog';
 import { PurchaseCreditsDialog } from './PurchaseCreditsDialog';
 import { UpgradeDialog } from './UpgradeDialog';
 import { DashboardMenu } from './DashboardMenu';
-import { LiveBanner } from './LiveBanner';
 import { CelebrationOverlay } from './CelebrationOverlay';
 import { DocumentSuggestionPanel } from './DocumentSuggestionPanel';
 import { NewTaskDialog } from './NewTaskDialog';
 import { RecurringTasksDialog } from './RecurringTasksDialog';
 import { AddLinkDialog } from './AddLinkDialog';
 import { FounderChatRail } from '@/components/chat/FounderChatRail';
-import { FOUNDER_AGENT_LABELS } from '@/lib/founder-labels';
+import { FOUNDER_AGENT_LABELS, ONBOARDING_STAGE_LABELS } from '@/lib/founder-labels';
 
 interface DocumentSuggestion { id: string; document_id: string; suggested_content: string; reason: string | null; status: string; created_at: string; }
 interface EmailRow { id: string; subject: string | null; to_address: string; from_address: string | null; direction: string | null; body: string | null; created_at: string; }
 interface DashboardLinkRow { id: string; label: string; url: string; }
+interface SetupEventRow { id: string; event_type: string; payload: Record<string, unknown>; created_at: string; }
 
 interface DashboardShellProps {
   company: Company; tasks: Task[]; documents: Document[]; reports: Report[];
   creditBalance: number; recentUsage: number[]; pendingSuggestions: DocumentSuggestion[];
-  emails: EmailRow[]; links?: DashboardLinkRow[]; user: User; liveCompanyCount: number;
+  emails: EmailRow[]; links?: DashboardLinkRow[]; setupEvents?: SetupEventRow[]; user: User;
 }
 
 function formatAge(iso: string | null | undefined): string {
@@ -65,19 +65,23 @@ function formatAge(iso: string | null | undefined): string {
 // ─── Inline style constants ───
 const S = {
   page: { minHeight: '100vh', background: 'var(--bg)', color: 'var(--text)', fontFamily: "'Inter', system-ui, sans-serif", transition: 'background .45s, color .45s' } as React.CSSProperties,
-  topbar: { position: 'sticky' as const, top: 0, zIndex: 20, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '12px 20px', minHeight: 60, borderBottom: '1px solid var(--line)', background: 'color-mix(in oklab, var(--bg) 92%, transparent)', backdropFilter: 'blur(14px)' } as React.CSSProperties,
+  topbar: { position: 'sticky' as const, top: 0, zIndex: 20, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '12px 20px', minHeight: 60, background: 'color-mix(in oklab, var(--bg) 92%, transparent)', backdropFilter: 'blur(14px)', boxShadow: '0 10px 30px rgba(24,18,10,0.04)' } as React.CSSProperties,
   topbarTitle: { fontFamily: "'Newsreader', Georgia, serif", fontSize: 22, fontWeight: 600, letterSpacing: '-.4px', color: 'var(--ink)' } as React.CSSProperties,
   topbarSubtitle: { fontSize: 12, color: 'var(--text-muted)', fontFamily: "'Newsreader', Georgia, serif", fontStyle: 'italic' } as React.CSSProperties,
   mascotSm: { width: 36, height: 36, objectFit: 'contain' as const, filter: 'drop-shadow(0 2px 8px rgba(225,177,44,0.3)) brightness(1.08) saturate(1.2)' } as React.CSSProperties,
   mascotMd: { width: 64, height: 64, objectFit: 'contain' as const, filter: 'drop-shadow(0 4px 12px rgba(225,177,44,0.3)) brightness(1.08) saturate(1.2)' } as React.CSSProperties,
   grid: { display: 'flex', minHeight: 'calc(100vh - 60px)' } as React.CSSProperties,
-  colLeft: { width: 260, flexShrink: 0, padding: '20px 18px', borderRight: '1px solid var(--line)', overflowY: 'auto' as const } as React.CSSProperties,
-  colMain: { flex: 1, minWidth: 0, padding: '20px 18px', overflowY: 'auto' as const } as React.CSSProperties,
-  colChannels: { width: 270, flexShrink: 0, padding: '20px 18px', borderLeft: '1px solid var(--line)', overflowY: 'auto' as const } as React.CSSProperties,
-  panelHeading: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingBottom: 10, marginBottom: 14, borderBottom: '1px solid var(--line)', fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase' as const, color: 'var(--text-dim)' } as React.CSSProperties,
+  colLeft: { width: 240, flexShrink: 0, padding: '22px 16px', overflowY: 'auto' as const } as React.CSSProperties,
+  colMain: { flex: 1, minWidth: 0, padding: '22px 16px', overflowY: 'auto' as const } as React.CSSProperties,
+  colChannels: { width: 220, flexShrink: 0, padding: '22px 12px 22px 8px', overflowY: 'auto' as const } as React.CSSProperties,
+  panelHeading: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingBottom: 6, marginBottom: 12, fontSize: 11, fontWeight: 750, letterSpacing: '1.1px', textTransform: 'uppercase' as const, color: 'var(--text-dim)' } as React.CSSProperties,
   section: { marginBottom: 28 } as React.CSSProperties,
-  card: { background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 14, padding: '16px 18px', boxShadow: '0 1px 2px rgba(24,18,10,0.04)', transition: 'all .25s', cursor: 'pointer', position: 'relative' as const, overflow: 'hidden' } as React.CSSProperties,
-  cardAccent: { position: 'absolute' as const, left: 0, top: 0, bottom: 0, width: 4, background: '#D97706', borderRadius: '4px 0 0 4px' } as React.CSSProperties,
+  workboardRow: { display: 'grid', gridTemplateColumns: 'minmax(420px, 560px) minmax(280px, 1fr)', gap: 18, alignItems: 'start' } as React.CSSProperties,
+  workboardColumn: { minWidth: 0 } as React.CSSProperties,
+  inboxColumn: { minWidth: 0 } as React.CSSProperties,
+  workboardSurface: { display: 'grid', gap: 10, padding: 0, background: 'transparent', boxShadow: 'none' } as React.CSSProperties,
+  card: { minHeight: 92, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 14, padding: '13px 15px', boxShadow: '0 1px 2px rgba(24,18,10,0.04)', transition: 'transform .2s ease, box-shadow .2s ease, background .2s ease', cursor: 'pointer', position: 'relative' as const, overflow: 'hidden' } as React.CSSProperties,
+  cardAccent: { position: 'absolute' as const, left: 0, top: 10, bottom: 10, width: 3, background: 'linear-gradient(180deg, #E1B12C, #D97706)', borderRadius: 999 } as React.CSSProperties,
   badge: (variant: string) => {
     const colors: Record<string, { bg: string; color: string; border: string }> = {
       success: { bg: 'rgba(34,197,94,0.1)', color: '#047857', border: 'rgba(34,197,94,0.2)' },
@@ -87,15 +91,16 @@ const S = {
       default: { bg: 'var(--bg-alt)', color: 'var(--text-muted)', border: 'var(--border)' },
     };
     const c = colors[variant] || colors.default;
-    return { display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 10px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: c.bg, color: c.color, border: `1px solid ${c.border}` } as React.CSSProperties;
+    return { display: 'inline-flex', alignItems: 'center', gap: 3, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 650, background: c.bg, color: c.color, whiteSpace: 'nowrap' as const } as React.CSSProperties;
   },
-  btn: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: '8px 14px', borderRadius: 8, border: '1px solid var(--line-strong)', background: 'var(--bg-card)', color: 'var(--ink)', fontSize: 12, fontWeight: 700, cursor: 'pointer', transition: 'all .2s', boxShadow: '0 1px 2px rgba(24,18,10,0.04)' } as React.CSSProperties,
+  btn: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: '8px 14px', borderRadius: 9, border: '1px solid transparent', background: 'var(--bg-card)', color: 'var(--ink)', fontSize: 12, fontWeight: 700, cursor: 'pointer', transition: 'all .2s', boxShadow: '0 5px 16px rgba(24,18,10,0.06)' } as React.CSSProperties,
   btnPrimary: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: '10px 18px', borderRadius: 8, border: 'none', background: 'linear-gradient(135deg, #E1B12C, #D97706)', color: '#fff', fontSize: 12, fontWeight: 700, cursor: 'pointer', boxShadow: '0 6px 18px rgba(217,119,6,0.28), inset 0 1px 0 rgba(255,255,255,0.3)' } as React.CSSProperties,
-  btnSm: { padding: '5px 11px', fontSize: 11 } as React.CSSProperties,
-  btnGhost: { background: 'transparent', border: 'none', boxShadow: 'none', color: 'var(--text-muted)', padding: '4px 8px', fontSize: 12, cursor: 'pointer' } as React.CSSProperties,
-  docRow: { display: 'grid', gridTemplateColumns: '20px 1fr auto', gap: 8, alignItems: 'center', padding: '10px 0', borderBottom: '1px solid var(--border)', fontSize: 13, cursor: 'pointer', transition: 'color .2s', background: 'transparent', border: 'none', width: '100%', textAlign: 'left' as const } as React.CSSProperties,
-  linkItem: { display: 'grid', gap: 3, fontSize: 13, padding: '8px 0', borderBottom: '1px solid var(--border)' } as React.CSSProperties,
-  trialCard: { background: 'var(--bg-alt)', border: '1px solid var(--border)', borderRadius: 12, padding: 20, marginBottom: 20, textAlign: 'center' as const, boxShadow: '0 1px 2px rgba(24,18,10,0.04)' } as React.CSSProperties,
+  btnSm: { padding: '4px 9px', fontSize: 11 } as React.CSSProperties,
+  btnGhost: { background: 'transparent', border: 'none', boxShadow: 'none', color: 'var(--text-muted)', padding: '3px 6px', fontSize: 12, cursor: 'pointer' } as React.CSSProperties,
+  docRow: { display: 'grid', gridTemplateColumns: '20px 1fr auto', gap: 8, alignItems: 'center', padding: '8px 0', fontSize: 13, cursor: 'pointer', transition: 'color .2s, background .2s', background: 'transparent', border: 'none', width: '100%', textAlign: 'left' as const } as React.CSSProperties,
+  linkItem: { display: 'grid', gap: 3, fontSize: 13, padding: '7px 0' } as React.CSSProperties,
+  softPanel: { padding: 12, borderRadius: 10, background: 'var(--bg-alt)', border: '1px solid var(--border)', boxShadow: '0 1px 2px rgba(24,18,10,0.04)' } as React.CSSProperties,
+  trialCard: { background: 'var(--bg-alt)', borderRadius: 12, padding: 20, marginBottom: 20, textAlign: 'center' as const, boxShadow: '0 4px 16px rgba(24,18,10,0.045)' } as React.CSSProperties,
   emailModal: { position: 'fixed' as const, inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(4px)', padding: 24 } as React.CSSProperties,
 };
 
@@ -124,8 +129,10 @@ function SortableTaskCard({
   });
   const cardStyle: React.CSSProperties = {
     ...S.card,
+    display: 'flex',
+    flexDirection: 'column',
     transform: CSS.Transform.toString(transform),
-    transition: transition ?? undefined,
+    transition: transition ?? S.card.transition,
     opacity: isDragging ? 0.6 : 1,
     zIndex: isDragging ? 10 : 'auto',
   };
@@ -142,16 +149,16 @@ function SortableTaskCard({
       {...dragProps}
     >
       <div style={S.cardAccent}></div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', gap: 8, marginLeft: 8 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', gap: 10, marginLeft: 8 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <h4 style={{ fontSize: 14, fontWeight: 700, color: 'var(--ink)', marginBottom: 4, lineHeight: 1.3, wordBreak: 'break-word' as const }}>{task.title}</h4>
-          {task.description && <p style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' as const, overflow: 'hidden' }}>{task.description}</p>}
+          <h4 style={{ fontSize: 14, fontWeight: 750, color: 'var(--ink)', marginBottom: 3, lineHeight: 1.22, wordBreak: 'break-word' as const }}>{task.title}</h4>
+          {task.description && <p style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.35, display: '-webkit-box', WebkitLineClamp: task.status === 'todo' && !task.authorized_by ? 1 : 2, WebkitBoxOrient: 'vertical' as const, overflow: 'hidden' }}>{task.description}</p>}
         </div>
         <span style={S.badge(statusBadge(task.status))}>{task.status.replace(/_/g, ' ')}</span>
       </div>
       {task.status === 'in_progress' && task.started_at && (
         <div style={{ marginTop: 8, marginLeft: 8 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--text-dim)', marginBottom: 4 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--text-dim)', marginBottom: 3 }}>
             <span>Turn {task.turn_count}/{task.max_turns}</span><span>Working...</span>
           </div>
           <div style={{ height: 3, background: 'var(--bg-alt)', borderRadius: 2 }}>
@@ -159,10 +166,9 @@ function SortableTaskCard({
           </div>
         </div>
       )}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' as const, marginTop: 8, marginLeft: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' as const, marginTop: 8, marginLeft: 8 }}>
         <span style={S.badge('default')}>{task.tag}</span>
         {agentName && <span style={S.badge('default')}>🤖 {agentName}</span>}
-        <span style={{ fontSize: 12, color: '#D97706', fontWeight: 600 }}>{task.estimated_credits} cr</span>
         <span style={{ flex: 1 }}></span>
         <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{formatAge(task.created_at)}</span>
       </div>
@@ -171,7 +177,7 @@ function SortableTaskCard({
           onClick={e => e.stopPropagation()}
           onPointerDown={e => e.stopPropagation()}
           className="dashboard-task-actions"
-          style={{ display: 'flex', gap: 6, flexWrap: 'wrap' as const, marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)', marginLeft: 8 }}
+          style={{ display: 'flex', gap: 6, flexWrap: 'wrap' as const, marginTop: 9, paddingTop: 0, marginLeft: 8 }}
         >
           <button style={{ ...S.btnGhost, color: '#DC2626' }} onClick={e => { e.stopPropagation(); onReject(task.id); }}>✗ Reject</button>
           <span style={{ flex: 1 }}></span>
@@ -186,7 +192,8 @@ function SortableTaskCard({
   );
 }
 
-export function DashboardShell({ company, tasks: initialTasks, documents, reports: _reports, creditBalance: initialCreditBalance, recentUsage: _recentUsage, pendingSuggestions: _pendingSuggestions, emails: initialEmails, links: initialLinks, user, liveCompanyCount }: DashboardShellProps) {
+export function DashboardShell({ company: initialCompany, tasks: initialTasks, documents, reports: _reports, creditBalance: initialCreditBalance, recentUsage: _recentUsage, pendingSuggestions: _pendingSuggestions, emails: initialEmails, links: initialLinks, setupEvents: initialSetupEvents, user }: DashboardShellProps) {
+  const [company, setCompany] = useState(initialCompany);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [selectedDoc, setSelectedDoc] = useState<Document | null>(null);
   const [selectedEmail, setSelectedEmail] = useState<EmailRow | null>(null);
@@ -194,9 +201,11 @@ export function DashboardShell({ company, tasks: initialTasks, documents, report
   const [upgradeOpen, setUpgradeOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [tasks, setTasks] = useState(initialTasks);
+  const [docs, setDocs] = useState(documents);
   const [emails, setEmails] = useState(initialEmails);
   const [creditBalance, setCreditBalance] = useState(initialCreditBalance);
   const [links, setLinks] = useState<DashboardLinkRow[]>(initialLinks ?? []);
+  const [setupEvents, setSetupEvents] = useState<SetupEventRow[]>(initialSetupEvents ?? []);
   const [celebrateTask, setCelebrateTask] = useState<{ id: string; title: string } | null>(null);
   const [newTaskOpen, setNewTaskOpen] = useState(false);
   const [recurringOpen, setRecurringOpen] = useState(false);
@@ -213,10 +222,13 @@ export function DashboardShell({ company, tasks: initialTasks, documents, report
       const res = await fetch(`/api/dashboard?company_id=${company.id}`);
       if (!res.ok) return;
       const data = await res.json();
+      if (data.company) setCompany(prev => ({ ...prev, ...data.company }));
       if (data.tasks) setTasks(data.tasks);
+      if (data.documents) setDocs(data.documents);
       if (data.emails) setEmails(data.emails);
       if (data.credits?.balance !== undefined) setCreditBalance(data.credits.balance);
       if (Array.isArray(data.links)) setLinks(data.links);
+      if (Array.isArray(data.setup_events)) setSetupEvents(data.setup_events);
     } catch { /* silent */ }
   }, [company.id]);
 
@@ -228,7 +240,34 @@ export function DashboardShell({ company, tasks: initialTasks, documents, report
     try { const res = await fetch(`/api/tasks/${taskId}/approve`, { method: 'POST' }); if (res.ok || res.status === 409) { setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: 'in_progress' as const } : t)); await refreshDashboard(); } } catch {}
   }, [refreshDashboard]);
 
-  useEffect(() => { const i = setInterval(refreshDashboard, 30000); return () => clearInterval(i); }, [refreshDashboard]);
+  const onboardingActive = company.onboarding_status === 'initializing' || company.onboarding_status === 'running';
+
+  useEffect(() => {
+    const i = setInterval(refreshDashboard, onboardingActive ? 3000 : 30000);
+    return () => clearInterval(i);
+  }, [refreshDashboard, onboardingActive]);
+
+  // Live setup-log SSE stream (only while onboarding is running). Same source
+  // the waitlist terminal uses — events are pushed the instant they happen.
+  useEffect(() => {
+    if (!onboardingActive) return;
+    const es = new EventSource(`/api/events/stream?companyId=${company.id}`);
+    es.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data);
+        const incoming = msg.type === 'snapshot' || msg.type === 'events' ? msg.events : null;
+        if (!incoming || !Array.isArray(incoming)) return;
+        setSetupEvents(prev => {
+          const seen = new Set(prev.map(p => p.id));
+          const merged = [...prev];
+          for (const ev of incoming) if (!seen.has(ev.id)) merged.push(ev);
+          return merged.slice(-50);
+        });
+      } catch { /* ignore malformed frame */ }
+    };
+    es.onerror = () => { /* browser auto-reconnects */ };
+    return () => { es.close(); };
+  }, [onboardingActive, company.id]);
 
   const handleChatAction = useCallback((action: ChatAction) => {
     if (action.type === 'task_proposal' || action.type === 'task_approved' || action.type === 'document_updated' || action.type === 'credit_quote') refreshDashboard();
@@ -249,11 +288,11 @@ export function DashboardShell({ company, tasks: initialTasks, documents, report
     const w: string[] = [];
     if (creditBalance <= 0 && company.plan_tier !== 'trial') w.push("You're out of task credits.");
     else if (creditBalance > 0 && creditBalance <= 3) w.push(`Only ${creditBalance} credit${creditBalance === 1 ? '' : 's'} left.`);
-    if (company.onboarding_status === 'initializing' || company.onboarding_status === 'running') w.push('Still setting up — research, landing, and inbox in flight.');
+    if (onboardingActive) w.push('Still setting up — research, landing, and inbox in flight.');
     if (company.onboarding_status === 'failed') w.push('Setup paused. Resume from the banner above.');
     if (company.hosting_state === 'suspended') w.push('App suspended — resolve billing.');
     return w;
-  }, [creditBalance, company.plan_tier, company.onboarding_status, company.hosting_state]);
+  }, [creditBalance, company.plan_tier, onboardingActive, company.onboarding_status, company.hosting_state]);
 
   const handleApprove = useCallback(async (taskId: string) => {
     try { const res = await fetch(`/api/tasks/${taskId}/approve`, { method: 'POST' }); if (res.ok || res.status === 409) { setTasks(prev => prev.map(t => t.id === taskId ? { ...t, authorized_by: 'founder' } : t)); setTimeout(() => { void refreshDashboard(); }, 1500); } } catch {}
@@ -302,11 +341,66 @@ export function DashboardShell({ company, tasks: initialTasks, documents, report
     )).then(() => { void refreshDashboard(); });
   }, [previewTasks, refreshDashboard]);
 
-  const docsSorted = useMemo(() => [...documents].filter(d => !d.is_empty || (d.content && d.content.trim().length > 0)).sort((a, b) => new Date(b.updated_at ?? b.created_at ?? 0).getTime() - new Date(a.updated_at ?? a.created_at ?? 0).getTime()), [documents]);
+  const setupLines = useMemo(() => setupEvents.map((event) => {
+    const payload = event.payload ?? {};
+    if (event.event_type === 'onboarding_activity' && typeof payload.text === 'string') {
+      return { id: event.id, text: payload.text, at: event.created_at };
+    }
+    if (event.event_type === 'onboarding_stage' && typeof payload.stage === 'string') {
+      const label = ONBOARDING_STAGE_LABELS[payload.stage] ?? payload.stage.replace(/_/g, ' ');
+      const status = typeof payload.status === 'string' ? payload.status : 'running';
+      return { id: event.id, text: `${label} ${status === 'done' ? 'done' : status === 'error' ? 'needs attention' : 'in progress'}`, at: event.created_at };
+    }
+    return null;
+  }).filter(Boolean).slice(-30) as Array<{ id: string; text: string; at: string }>, [setupEvents]);
+
+  // Auto-scroll the setup-log strip to bottom whenever a new line lands —
+  // matches OnboardingLogStrip behavior so the dashboard terminal "moves".
+  const setupLogRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (setupLogRef.current) setupLogRef.current.scrollTop = setupLogRef.current.scrollHeight;
+  }, [setupLines.length]);
+
+  const liveSetupLabel = useMemo(() => {
+    for (let i = setupEvents.length - 1; i >= 0; i--) {
+      const payload = setupEvents[i].payload ?? {};
+      if (setupEvents[i].event_type === 'onboarding_stage' && payload.status === 'running' && typeof payload.stage === 'string') {
+        return ONBOARDING_STAGE_LABELS[payload.stage] ?? payload.stage.replace(/_/g, ' ');
+      }
+    }
+    return 'Building your dashboard';
+  }, [setupEvents]);
+
+  const docsSorted = useMemo(() => [...docs].filter(d => !d.is_empty || (d.content && d.content.trim().length > 0)).sort((a, b) => new Date(b.updated_at ?? b.created_at ?? 0).getTime() - new Date(a.updated_at ?? a.created_at ?? 0).getTime()), [docs]);
 
   return (
     <div style={S.page}>
-      <LiveBanner liveCount={liveCompanyCount} />
+      {onboardingActive && (
+        <div style={{ margin: '12px 16px 0', padding: '14px 18px', border: '1px solid rgba(225,177,44,0.35)', background: 'rgba(225,177,44,0.08)', borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' as const }}>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <strong style={{ fontFamily: "'Newsreader', Georgia, serif", fontSize: 15, display: 'block', marginBottom: 4, color: 'var(--ink)' }}>Setup is still running</strong>
+            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>You can stay here while market research, landing, inbox, and infrastructure finish in the background.</span>
+          </div>
+          <span style={S.badge('running')}>Live setup: {liveSetupLabel}</span>
+          {setupLines.length > 0 && (
+            <div
+              ref={setupLogRef}
+              style={{ flexBasis: '100%', display: 'grid', gap: 6, paddingTop: 8, marginTop: 2, maxHeight: 180, overflowY: 'auto', scrollBehavior: 'smooth' }}
+            >
+              {setupLines.map((line) => (
+                <div
+                  key={line.id}
+                  className="animate-fade-up"
+                  style={{ display: 'grid', gridTemplateColumns: '72px 1fr', gap: 10, fontSize: 11, color: 'var(--text-muted)', fontFamily: "'JetBrains Mono', monospace" }}
+                >
+                  <span style={{ color: '#D97706' }}>{formatAge(line.at) || 'now'}</span>
+                  <span>{line.text}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {onboardingFailed && (
         <div style={{ margin: '12px 16px 0', padding: '14px 18px', border: '1px solid #D97706', background: 'rgba(225,177,44,0.08)', borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' as const }}>
@@ -319,7 +413,7 @@ export function DashboardShell({ company, tasks: initialTasks, documents, report
       )}
 
       {/* Topbar */}
-      <header style={S.topbar}>
+      <header style={{ ...S.topbar, animationDelay: '0ms' }} className="dashboard-reveal">
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <img src="/mascot.png" alt="Baljia" style={S.mascotSm} />
           <div>
@@ -337,16 +431,15 @@ export function DashboardShell({ company, tasks: initialTasks, documents, report
       {/* Main grid */}
       <div style={S.grid} className="dashboard-grid">
         {/* ── Left column ── */}
-        <div style={S.colLeft} className="dashboard-col-left">
+        <div style={{ ...S.colLeft, animationDelay: '180ms' }} className="dashboard-col-left dashboard-reveal">
           <div style={S.panelHeading}><span style={{ fontFamily: "'Newsreader', Georgia, serif" }}>Baljia</span></div>
           <div style={{ marginBottom: 20 }}>
             <img src="/mascot.png" alt="Baljia" style={S.mascotMd} />
           </div>
 
-          {company.plan_tier === 'trial' && (
+          {false && (
             <div style={S.trialCard}>
-              <h3 style={{ fontFamily: "'Newsreader', Georgia, serif", fontSize: 17, fontWeight: 600, marginBottom: 6 }}>Hire Your AI Employee</h3>
-              <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>$1.63/day · Works while you sleep</p>
+              <h3 style={{ fontFamily: "'Newsreader', Georgia, serif", fontSize: 17, fontWeight: 600, marginBottom: 12 }}>Build your team</h3>
               <button style={{ ...S.btnPrimary, width: '100%' }} onClick={() => setUpgradeOpen(true)}>Start free trial</button>
               <p style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 8 }}>3-day trial · $49/mo</p>
             </div>
@@ -354,7 +447,7 @@ export function DashboardShell({ company, tasks: initialTasks, documents, report
 
           <div style={S.panelHeading}><span style={{ fontFamily: "'Newsreader', Georgia, serif" }}>Business</span></div>
           <div style={{ display: 'grid', gap: 8, fontSize: 13, marginBottom: 14 }}>
-            {[['Revenue', '$0.00'], ['Lifetime', '$0.00'], ['Credits', String(creditBalance)], ['Stage', company.company_stage?.replace(/_/g, ' ') ?? 'pre-launch']].map(([k, v]) => (
+            {[['Revenue', '$0.00'], ['Lifetime', '$0.00']].map(([k, v]) => (
               <div key={k} style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <span style={{ color: 'var(--text-muted)' }}>{k}</span>
                 <strong style={{ color: 'var(--ink)' }}>{v}</strong>
@@ -364,72 +457,116 @@ export function DashboardShell({ company, tasks: initialTasks, documents, report
           <button style={{ ...S.btn, width: '100%', fontSize: 11, color: '#D97706' }} onClick={() => setPurchaseOpen(true)}>
             Complete verification to accept payments
           </button>
+
         </div>
 
         {/* ── Main column ── */}
         <div style={S.colMain} className="dashboard-col-main">
-          <div style={S.section}>
-            <div style={S.panelHeading}>
-              <span style={{ fontFamily: "'Newsreader', Georgia, serif" }}>Tasks</span>
-              <span style={{ display: 'flex', gap: 6 }}>
-                <button style={{ ...S.btn, ...S.btnSm }} onClick={() => setRecurringOpen(true)}>↻ Recurring</button>
-                <button style={{ ...S.btnPrimary, ...S.btnSm }} onClick={() => setNewTaskOpen(true)}>+ New Task</button>
-              </span>
+          <div style={S.workboardRow} className="dashboard-workboard-row">
+            <div style={{ ...S.section, ...S.workboardColumn, animationDelay: '360ms' }} className="dashboard-reveal">
+              <div style={S.panelHeading}>
+                <span style={{ fontFamily: "'Newsreader', Georgia, serif" }}>Workboard</span>
+                <span style={{ display: 'flex', gap: 6 }}>
+                  <button style={{ ...S.btn, ...S.btnSm }} onClick={() => setRecurringOpen(true)}>↻ Recurring</button>
+                  <button style={{ ...S.btnPrimary, ...S.btnSm }} onClick={() => setNewTaskOpen(true)}>+ New Task</button>
+                </span>
+              </div>
+              <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+                <SortableContext items={previewTasks.map(t => t.id)} strategy={verticalListSortingStrategy}>
+                  <div style={S.workboardSurface}>
+                    {previewTasks.length === 0 ? (
+                      <p style={{ fontSize: 12, color: 'var(--text-dim)', padding: '10px 0' }}>
+                        {onboardingActive ? 'Your first tasks are being prepared. They will appear here as soon as setup reaches the task step.' : 'Message Baljia to set up your first company.'}
+                      </p>
+                    ) : previewTasks.map(task => {
+                      const agentName = task.assigned_to_agent_id !== null ? FOUNDER_AGENT_LABELS[task.assigned_to_agent_id] ?? 'AI Team' : null;
+                      const draggable = task.status === 'todo' && !task.authorized_by;
+                      return (
+                        <SortableTaskCard
+                          key={task.id}
+                          task={task}
+                          agentName={agentName}
+                          draggable={draggable}
+                          onSelect={() => setSelectedTask(task)}
+                          onApprove={handleApprove}
+                          onReject={handleReject}
+                          onRunNow={handleRunNow}
+                        />
+                      );
+                    })}
+                  </div>
+                </SortableContext>
+              </DndContext>
+              {tasks.length > previewTasks.length && (
+                <Link href={`/dashboard/${company.id}/tasks`} style={{ display: 'inline-block', marginTop: 10, fontSize: 13, fontWeight: 700, color: '#D97706', textDecoration: 'none' }}>
+                  Manage all {tasks.length} tasks →
+                </Link>
+              )}
             </div>
-            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-              <SortableContext items={previewTasks.map(t => t.id)} strategy={verticalListSortingStrategy}>
-                <div style={{ display: 'grid', gap: 10 }}>
-                  {previewTasks.length === 0 ? (
-                    <p style={{ fontSize: 12, color: 'var(--text-dim)', padding: '10px 0' }}>Message Baljia to set up your first company.</p>
-                  ) : previewTasks.map(task => {
-                    const agentName = task.assigned_to_agent_id !== null ? FOUNDER_AGENT_LABELS[task.assigned_to_agent_id] ?? 'AI Team' : null;
-                    const draggable = task.status === 'todo' && !task.authorized_by;
-                    return (
-                      <SortableTaskCard
-                        key={task.id}
-                        task={task}
-                        agentName={agentName}
-                        draggable={draggable}
-                        onSelect={() => setSelectedTask(task)}
-                        onApprove={handleApprove}
-                        onReject={handleReject}
-                        onRunNow={handleRunNow}
-                      />
-                    );
-                  })}
+
+            <div style={S.inboxColumn}>
+              <div style={{ ...S.section, animationDelay: '540ms' }} className="dashboard-reveal">
+                <div style={S.panelHeading}><span style={{ fontFamily: "'Newsreader', Georgia, serif" }}>Inbox</span></div>
+                <p style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 8 }}>{inboxAddress || '—'}</p>
+                {emails.length === 0 ? (
+                  <div>
+                    <p style={{ fontSize: 12, color: 'var(--text-dim)' }}>No emails yet.</p>
+                    <p style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>Ask Baljia to run outreach to start sending.</p>
+                  </div>
+                ) : emails.slice(0, 3).map(e => (
+                  <button key={e.id} style={{ ...S.docRow, gridTemplateColumns: '1fr auto' }} onClick={() => setSelectedEmail(e)}>
+                    <div><strong style={{ fontSize: 12, color: 'var(--ink)' }}>{e.subject ?? '(no subject)'}</strong><br /><span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{e.direction === 'outbound' ? `To: ${e.to_address}` : `From: ${e.from_address ?? e.to_address}`}</span></div>
+                    <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{formatAge(e.created_at)}</span>
+                  </button>
+                ))}
+                <button style={{ ...S.btn, ...S.btnSm, opacity: 0.5, cursor: 'not-allowed', marginTop: 8 }} disabled>Cold Outreach</button>
+              </div>
+              <div style={{ ...S.section, animationDelay: '720ms' }} className="dashboard-reveal">
+                <div style={S.panelHeading}><span style={{ fontFamily: "'Newsreader', Georgia, serif" }}>Campaigns</span></div>
+                <button style={{ ...S.btn, ...S.btnSm, opacity: 0.5, cursor: 'not-allowed' }} disabled>Run Ads</button>
+                <p style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 8 }}>No campaigns. Spend: $0.00</p>
+              </div>
+              <div style={{ ...S.section, animationDelay: '900ms' }} className="dashboard-reveal">
+                <div style={S.panelHeading}><span style={{ fontFamily: "'Newsreader', Georgia, serif" }}>Social</span></div>
+                <div style={S.softPanel}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
+                    <div style={{ minWidth: 0 }}>
+                      <strong style={{ display: 'block', fontSize: 13, color: 'var(--ink)', wordBreak: 'break-word' as const }}>@{company.slug ?? 'baljia'}</strong>
+                      <p style={{ fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.45, marginTop: 4 }}>No tweets yet. Run a Twitter task when you want to announce progress.</p>
+                    </div>
+                    <button style={{ ...S.btn, ...S.btnSm, opacity: 0.5, cursor: 'not-allowed', flexShrink: 0 }} disabled>Tweet</button>
+                  </div>
                 </div>
-              </SortableContext>
-            </DndContext>
-            {tasks.length > previewTasks.length && (
-              <Link href={`/dashboard/${company.id}/tasks`} style={{ display: 'inline-block', marginTop: 10, fontSize: 13, fontWeight: 700, color: '#D97706', textDecoration: 'none' }}>
-                Manage all {tasks.length} tasks →
-              </Link>
-            )}
+              </div>
+            </div>
           </div>
 
           <DocumentSuggestionPanel companyId={company.id} />
 
-          <div style={S.section}>
-            <div style={S.panelHeading}><span style={{ fontFamily: "'Newsreader', Georgia, serif" }}>Documents</span></div>
+          <div style={{ ...S.section, animationDelay: '1080ms' }} className="dashboard-reveal">
+            <div style={S.panelHeading}><span style={{ fontFamily: "'Newsreader', Georgia, serif" }}>Files</span></div>
             {docsSorted.length === 0 ? (
-              <p style={{ fontSize: 12, color: 'var(--text-dim)' }}>No documents yet.</p>
+              <p style={{ fontSize: 12, color: 'var(--text-dim)' }}>
+                {onboardingActive ? 'Market research and mission docs are being written. They will appear here automatically.' : 'No documents yet.'}
+              </p>
             ) : docsSorted.slice(0, 5).map(doc => (
-              <button key={doc.id} style={S.docRow} onClick={() => setSelectedDoc(doc)}>
+              <button key={doc.id} style={{ ...S.docRow, gridTemplateColumns: '20px 1fr' }} onClick={() => setSelectedDoc(doc)}>
                 <span style={{ color: '#D97706', fontSize: 14 }}>≡</span>
-                <strong style={{ fontSize: 13, color: 'var(--ink)' }}>{doc.title ?? doc.doc_type}</strong>
-                <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{formatAge(doc.updated_at ?? doc.created_at ?? null)}</span>
+                <span style={{ minWidth: 0 }}>
+                  <strong style={{ display: 'block', fontSize: 13, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{doc.title ?? doc.doc_type}</strong>
+                  <span style={{ display: 'block', fontSize: 11, color: 'var(--text-dim)', marginTop: 2 }}>{formatAge(doc.updated_at ?? doc.created_at ?? null)}</span>
+                </span>
               </button>
             ))}
           </div>
 
-          <div style={S.section}>
+          <div style={{ ...S.section, animationDelay: '1260ms' }} className="dashboard-reveal">
             <div style={S.panelHeading}>
-              <span style={{ fontFamily: "'Newsreader', Georgia, serif" }}>Links</span>
+              <span style={{ fontFamily: "'Newsreader', Georgia, serif" }}>Quick links</span>
               <button style={{ ...S.btn, ...S.btnSm }} onClick={() => { setEditingLink(null); setAddLinkOpen(true); }}>+ Add</button>
             </div>
             <div style={{ display: 'grid', gap: 4 }}>
               {sitePath && <a href={sitePath} target="_blank" rel="noopener noreferrer" style={{ ...S.linkItem, textDecoration: 'none', color: 'var(--ink)' }}><strong>{company.name}</strong><span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{sitePath.replace(/^https?:\/\//, '')} ↗</span></a>}
-              {inboxAddress && <div style={S.linkItem}><strong style={{ color: 'var(--ink)' }}>Company Inbox</strong><span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{inboxAddress}</span></div>}
               {links.map(link => (
                 <button key={link.id} style={{ ...S.linkItem, background: 'transparent', border: 'none', cursor: 'pointer', textAlign: 'left' as const }} onClick={() => { setEditingLink(link); setAddLinkOpen(true); }}>
                   <strong style={{ color: 'var(--ink)' }}>{link.label}</strong>
@@ -437,39 +574,6 @@ export function DashboardShell({ company, tasks: initialTasks, documents, report
                 </button>
               ))}
             </div>
-          </div>
-        </div>
-
-        {/* ── Channels column ── */}
-        <div style={S.colChannels} className="dashboard-col-channels">
-          <div style={S.section}>
-            <div style={S.panelHeading}><span style={{ fontFamily: "'Newsreader', Georgia, serif" }}>Twitter</span></div>
-            <p style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 8 }}>@{company.slug ?? 'baljia'}</p>
-            <div style={{ padding: 14, border: '1px solid var(--border)', borderRadius: 10, background: 'var(--bg-alt)', marginBottom: 8 }}>
-              <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>No tweets yet — run a Twitter task.</p>
-            </div>
-            <button style={{ ...S.btn, ...S.btnSm, opacity: 0.5, cursor: 'not-allowed' }} disabled>Tweet</button>
-          </div>
-          <div style={S.section}>
-            <div style={S.panelHeading}><span style={{ fontFamily: "'Newsreader', Georgia, serif" }}>Email</span></div>
-            <p style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 8 }}>{inboxAddress || '—'}</p>
-            {emails.length === 0 ? (
-              <div>
-                <p style={{ fontSize: 12, color: 'var(--text-dim)' }}>No emails yet.</p>
-                <p style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>Ask Baljia to run outreach to start sending.</p>
-              </div>
-            ) : emails.slice(0, 3).map(e => (
-              <button key={e.id} style={{ ...S.docRow, gridTemplateColumns: '1fr auto' }} onClick={() => setSelectedEmail(e)}>
-                <div><strong style={{ fontSize: 12, color: 'var(--ink)' }}>{e.subject ?? '(no subject)'}</strong><br /><span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{e.direction === 'outbound' ? `To: ${e.to_address}` : `From: ${e.from_address ?? e.to_address}`}</span></div>
-                <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{formatAge(e.created_at)}</span>
-              </button>
-            ))}
-            <button style={{ ...S.btn, ...S.btnSm, opacity: 0.5, cursor: 'not-allowed', marginTop: 8 }} disabled>Cold Outreach</button>
-          </div>
-          <div style={S.section}>
-            <div style={S.panelHeading}><span style={{ fontFamily: "'Newsreader', Georgia, serif" }}>Ads</span></div>
-            <button style={{ ...S.btn, ...S.btnSm, opacity: 0.5, cursor: 'not-allowed' }} disabled>Run Ads</button>
-            <p style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 8 }}>No campaigns. Spend: $0.00</p>
           </div>
         </div>
 

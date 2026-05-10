@@ -148,6 +148,17 @@ body.dark {
 .animate-fade-up { animation: fade-up 0.6s cubic-bezier(0.16, 1, 0.3, 1) both; }
 .animate-fade-in { animation: fade-in 0.2s ease-out; }
 
+/* Dashboard staggered reveal — each panel fades in sequentially on mount.
+   Use with inline animation-delay (e.g. style={{ animationDelay: '300ms' }}).
+   `both` fill-mode keeps the from-state during the delay so panels are
+   invisible until their turn (creates curiosity, not blank-states). */
+.dashboard-reveal {
+  animation: fade-up 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .dashboard-reveal { animation: none; opacity: 1; transform: none; }
+}
+
 /* ═══ Scrollbar ═══ */
 @layer utilities {
   .scrollbar-thin::-webkit-scrollbar { width: 6px; }
@@ -190,7 +201,7 @@ body.dark {
  * applies .dashboard-grid + .dashboard-col-{left,main,channels} on the root.
  */
 
-@media (max-width: 1100px) {
+@media (max-width: 960px) {
   /* Tablet — drop the right channels column inline; stack it under main */
   .dashboard-grid { flex-direction: column !important; height: auto !important; min-height: calc(100vh - 60px); }
   .dashboard-col-left,
@@ -204,6 +215,7 @@ body.dark {
   }
   .dashboard-col-channels { border-bottom: none; }
   .dashboard-task-actions { flex-wrap: wrap !important; gap: 8px !important; }
+  .dashboard-workboard-row { grid-template-columns: 1fr !important; }
 }
 
 @media (max-width: 720px) {
@@ -222,7 +234,16 @@ body.dark {
 }
 
 /* Drag handle visual affordance */
-.dashboard-task-card { user-select: none; }
+.dashboard-task-card {
+  user-select: none;
+  will-change: transform, box-shadow, border-color, background;
+}
+.dashboard-task-card:not(.is-dragging):hover {
+  transform: translateY(-2px);
+  border-color: transparent !important;
+  background: color-mix(in oklab, var(--bg-card) 90%, var(--gold-bg)) !important;
+  box-shadow: 0 16px 34px rgba(24, 18, 10, 0.12), 0 1px 0 rgba(255,255,255,0.65) inset !important;
+}
 .dashboard-task-card.is-dragging {
   opacity: 0.5;
   cursor: grabbing !important;
