@@ -51,7 +51,7 @@ export function computeCostUsd(inputTokens: number, outputTokens: number, model:
 const AGENT_COST_CEILINGS_USD: Record<number, number> = {
   0:  0.20,  // CEO/chat (Opus, 5 turns reactive)
   29: 0.50,  // Research
-  30: 1.50,  // Engineering
+  30: 1.50,  // Engineering — base; scaled by task complexity, see below
   32: 0.30,  // Support
   33: 0.50,  // Data
   40: 0.30,  // Twitter
@@ -62,6 +62,30 @@ const AGENT_COST_CEILINGS_USD: Record<number, number> = {
 
 const DEFAULT_AGENT_COST_CEILING_USD = 0.50;
 
-export function getCostCeilingForAgent(agentId: number): number {
+// Engineering tasks at high complexity need budget for the full
+// commit → deploy → check_url_health → render_get_logs → fix → redeploy
+// iteration loop. The flat $1.50 ceiling fits a "Hello World deploy" but
+// truncates real MVP work mid-iteration. Scale per task complexity (1-10).
+const ENGINEERING_CEILING_BY_COMPLEXITY: Record<number, number> = {
+  1: 1.00, 2: 1.00, 3: 1.25, 4: 1.50, 5: 1.50,
+  6: 2.50, 7: 4.00, 8: 5.50, 9: 7.00, 10: 8.00,
+};
+
+/**
+ * Returns the per-agent USD cost ceiling, OR `null` to disable the ceiling
+ * entirely. The Watchdog treats `null` as "no ceiling, no kill, no warning" —
+ * the run still tracks tokens and persists `task_executions.token_usage`,
+ * but the agent isn't killed when spend exceeds anything.
+ *
+ * Set `DISABLE_COST_CEILING=true` (or `=1`) in env to disable for testing.
+ * The agent still sees its turn count in the BUDGET summary; just no $-cap.
+ */
+export function getCostCeilingForAgent(agentId: number, complexity?: number | null): number | null {
+  if (process.env.DISABLE_COST_CEILING === 'true' || process.env.DISABLE_COST_CEILING === '1') {
+    return null;
+  }
+  if (agentId === 30 && typeof complexity === 'number' && complexity >= 1 && complexity <= 10) {
+    return ENGINEERING_CEILING_BY_COMPLEXITY[Math.round(complexity)] ?? AGENT_COST_CEILINGS_USD[30];
+  }
   return AGENT_COST_CEILINGS_USD[agentId] ?? DEFAULT_AGENT_COST_CEILING_USD;
 }

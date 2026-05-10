@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { Watchdog } from './watchdog';
-import { computeCostUsd } from './cost-ceilings';
+import { computeCostUsd, getCostCeilingForAgent } from './cost-ceilings';
 
 const TASK_ID = 'task_test_cost';
 const COMPANY_ID = 'co_test_cost';
@@ -84,6 +84,32 @@ describe('Watchdog cost tracking', () => {
     wd.recordTurn(null);
     wd.recordTokens(10_000, 5_000, MODEL);
 
+    const summary = wd.getBudgetSummary();
+    expect(summary).toContain('turn 1/200');
+    expect(summary).not.toContain('$');
+  });
+
+  it('DISABLE_COST_CEILING env var → getCostCeilingForAgent returns null for every agent', () => {
+    const orig = process.env.DISABLE_COST_CEILING;
+    try {
+      process.env.DISABLE_COST_CEILING = 'true';
+      expect(getCostCeilingForAgent(30, 3)).toBeNull();
+      expect(getCostCeilingForAgent(30, 10)).toBeNull();
+      expect(getCostCeilingForAgent(42)).toBeNull();
+      expect(getCostCeilingForAgent(0)).toBeNull();
+    } finally {
+      if (orig === undefined) delete process.env.DISABLE_COST_CEILING;
+      else process.env.DISABLE_COST_CEILING = orig;
+    }
+  });
+
+  it('null ceiling → recordTokens never kills, getBudgetSummary omits cost', () => {
+    const wd = new Watchdog(TASK_ID, 200, COMPANY_ID, null);
+    // Spend $$$ — should never trip
+    const v = wd.recordTokens(10_000_000, 5_000_000, MODEL); // ~$105
+    expect(v).toBe('continue');
+    expect(wd.wasKilled()).toBe(false);
+    wd.recordTurn(null);
     const summary = wd.getBudgetSummary();
     expect(summary).toContain('turn 1/200');
     expect(summary).not.toContain('$');
