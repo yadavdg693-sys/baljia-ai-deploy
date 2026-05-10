@@ -41,11 +41,26 @@ describe('founder document style helpers', () => {
   });
 
   it('stripInlineMarkdown removes LLM markdown artifacts but keeps content', () => {
-    expect(stripInlineMarkdown('**Bold** lead - normal text.')).toBe('Bold lead - normal text.');
     expect(stripInlineMarkdown('*italic* and _also italic_ and `code` here')).toBe('italic and also italic and code here');
     expect(stripInlineMarkdown('- a bullet line\n- another')).toBe('a bullet line another');
     expect(stripInlineMarkdown('## Heading')).toBe('Heading');
     expect(stripInlineMarkdown('USD $1.97 billion market')).toBe('USD $1.97 billion market');  // dollar amounts intact
     expect(stripInlineMarkdown('e.g. one example')).toBe('e.g. one example');                  // abbrevs intact
+  });
+
+  it('stripInlineMarkdown removes "Lead.** - Detail" separator artifacts after bold strip', () => {
+    // Real LLM output pattern: bold lead + literal " - " separator + detail.
+    expect(stripInlineMarkdown('**Demand exists, but it needs proof.** - First useful signal here.'))
+      .toBe('Demand exists, but it needs proof. First useful signal here.');
+    expect(stripInlineMarkdown('**Position the wedge.** — The buyer should understand the job.'))
+      .toBe('Position the wedge. The buyer should understand the job.');
+  });
+
+  it('stripInlineMarkdown preserves legitimate hyphens and em-dashes', () => {
+    // Compound words and intra-word hyphens stay.
+    expect(stripInlineMarkdown('Asia-Pacific no-show reduction')).toBe('Asia-Pacific no-show reduction');
+    // Mid-sentence em-dash (no leading sentence-ending punctuation) stays.
+    expect(stripInlineMarkdown('This platform — and only this platform — works.'))
+      .toBe('This platform — and only this platform — works.');
   });
 });

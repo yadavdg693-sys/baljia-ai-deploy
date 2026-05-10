@@ -16,32 +16,57 @@ export function collapseSpaces(value: string | undefined | null): string {
 
 /**
  * Strip LLM-generated inline markdown artifacts so they don't render as
- * literal `**` / `*` / `_` characters in plain-text contexts (task titles,
- * one-liners, plain prose fields). Keeps the actual content intact.
+ * literal `**` / `*` / `_` / ` - ` characters in plain-text contexts.
  *
- * Removes: **bold**, *italic*, _italic_, `code`, ~~strike~~, leading list
- * markers (`- `, `* `, `+ `, `1. `).
+ * Removes: **bold**, *italic*, _italic_, `code`, ~~strike~~, headings,
+ * leading list markers (default), and leftover "Lead. - Detail" separators.
  *
- * Does NOT touch URL chars, em dashes, or punctuation.
+ * @param opts.keepLineStructure - when true, preserves leading `- ` / `* `
+ *   bullets and numbered list markers. Use this for content that flows into
+ *   a markdown renderer that will turn those markers into proper <ul>/<ol>.
  */
-export function stripInlineMarkdown(value: string | undefined | null): string {
+export function stripInlineMarkdown(
+  value: string | undefined | null,
+  opts: { keepLineStructure?: boolean } = {},
+): string {
   if (!value) return '';
   let s = String(value);
+
   // Bold/italic/strike: remove the markers but keep the text inside.
   s = s.replace(/\*\*([^*\n]+?)\*\*/g, '$1');     // **bold**
   s = s.replace(/(?<!\w)\*([^*\n]+?)\*(?!\w)/g, '$1'); // *italic* (avoid touching e.g. "1.5*x")
   s = s.replace(/(?<!\w)_([^_\n]+?)_(?!\w)/g, '$1');   // _italic_
   s = s.replace(/~~([^~\n]+?)~~/g, '$1');         // ~~strike~~
   s = s.replace(/`([^`\n]+?)`/g, '$1');           // `code`
-  // Leading list markers at the start of any line.
-  s = s.replace(/(^|\n)\s*[-*+]\s+/g, '$1');
-  s = s.replace(/(^|\n)\s*\d+[.)]\s+/g, '$1');
-  // Heading hashes.
-  s = s.replace(/(^|\n)#{1,6}\s+/g, '$1');
   // Stray double-asterisk pairs that wrapped content with a space inside
   // (LLMs sometimes emit `** lead. ** - bullet`).
   s = s.replace(/\*\*\s*([^*\n]+?)\s*\*\*/g, '$1');
-  return s.replace(/\s+/g, ' ').trim();
+
+  if (!opts.keepLineStructure) {
+    // Strip line-structure markers — content goes to plain text.
+    s = s.replace(/(^|\n)\s*[-*+]\s+/g, '$1');
+    s = s.replace(/(^|\n)\s*\d+[.)]\s+/g, '$1');
+    s = s.replace(/(^|\n)#{1,6}\s+/g, '$1');
+  }
+
+  // Clean leftover "lead — detail" separators. After stripping the bold
+  // markers from `**Lead.** - Detail` or `**Lead.** — Detail`, we're left
+  // with `Lead. - Detail` / `Lead. — Detail` — the dash was a structural
+  // separator the LLM used, not punctuation. Remove when after sentence-
+  // ending punctuation (preserves legitimate mid-sentence em-dash usage
+  // like "this — and only this — works").
+  s = s.replace(/([.!?])[ \t]+[-–—][ \t]+/g, '$1 ');
+
+  if (!opts.keepLineStructure) {
+    // Strip a leading dash separator at the start of the string (covers
+    // "- Detail" lines that were demoted from bold-led bullets).
+    s = s.replace(/^\s*[-–—]\s+/, '');
+    s = s.replace(/\s+[-–—]\s*$/, ''); // trailing dash artifact
+    return s.replace(/\s+/g, ' ').trim();
+  }
+
+  // Preserve newlines (line structure) but collapse intra-line whitespace.
+  return s.split('\n').map((line) => line.replace(/[ \t]+/g, ' ').trim()).join('\n').trim();
 }
 
 /**

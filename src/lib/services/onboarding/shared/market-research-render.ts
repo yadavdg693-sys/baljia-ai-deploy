@@ -1,37 +1,46 @@
-// Shared utilities for market research: Tavily search + persistence + markdown rendering
+// Shared utilities for market research persistence and markdown rendering.
 
 import { db, documents } from '@/lib/db';
 import * as documentService from '@/lib/services/document.service';
 import { sanitizeForFounder } from '@/lib/founder-safety/sanitize';
+import {
+  compactLine,
+  compactList,
+  compactMarkdown,
+  compactParagraphs,
+  compactTableCell,
+  stripInlineMarkdown,
+} from './founder-doc-style';
+
+// Helpers to clean LLM artifacts before the renderer outputs them.
+const stripPlain = (s: string | undefined | null): string => stripInlineMarkdown(s);
+const stripStructured = (s: string | undefined | null): string =>
+  stripInlineMarkdown(s, { keepLineStructure: true });
 import type {
   BuildMarketResearch,
   GrowMarketResearch,
-  SurpriseMarketResearch,
   MarketResearchResult,
   PipelineContext,
   TaggedStat,
 } from '../types';
 
-/** Render a confidence-tagged stat. High-confidence items render clean;
- *  medium/low tag visibly so founders know when to take things with a grain
- *  of salt. Keeps the tag OUT of sanitizer-scanned prose — it's a narrow
- *  rendering concern, not founder-facing copywriting. */
 function renderTaggedStat(t: TaggedStat): string {
-  if (t.confidence === 'low') return `${t.stat} *(estimated — verify manually)*`;
+  if (t.confidence === 'low') return `${t.stat} *(estimated - verify manually)*`;
   if (t.confidence === 'medium') return `${t.stat} *(inferred from related data)*`;
   return t.stat;
 }
 
-function renderDataGapsSection(gaps: string[] | undefined): string[] {
-  if (!gaps || gaps.length === 0) return [];
-  const out: string[] = [];
-  out.push('');
-  out.push('## Data Gaps');
-  out.push('');
-  out.push('*Items the search data did not cover — flag these for manual follow-up.*');
-  out.push('');
-  for (const g of gaps) out.push(`- ${g}`);
-  return out;
+function renderPriority(item: string): string {
+  const cleaned = item.trim().replace(/\*\*/g, '');
+  const match = cleaned.match(/^(.{2,80}?)(?:\s+[-–—]\s+|:\s+)(.+)$/);
+  if (!match) return compactLine(cleaned, 190, 2);
+  return `**${compactLine(match[1], 72, 1)}** - ${compactLine(match[2], 170, 2)}`;
+}
+
+function pushNumberedList(lines: string[], items: string[]): void {
+  items.forEach((item, index) => {
+    lines.push(`${index + 1}. ${renderPriority(item)}`);
+  });
 }
 
 export async function persistMarketResearch(
@@ -42,10 +51,6 @@ export async function persistMarketResearch(
   ctx.marketResearchJson = jsonResult;
   ctx.marketResearch = markdown;
 
-  // Founder-safety: market research legitimately names competitors like
-  // Cloudflare/Neon/Postgres — audit mode logs infra-phrase violations
-  // without mutating the markdown. If a real leak shows up, we investigate
-  // at the source (the JSON-mode screen should have caught it upstream).
   sanitizeForFounder(markdown, {
     mode: 'audit',
     context: { callsite: 'persistMarketResearch', companyId: ctx.companyId },
@@ -70,44 +75,47 @@ export function renderBuildMarkdown(data: BuildMarketResearch, companyName: stri
   const lines: string[] = [];
   lines.push(`# Market Research Report: ${companyName}`);
   lines.push('');
-  lines.push('## Market Overview');
+  lines.push('## Idea Overview');
   lines.push('');
-  lines.push(data.overview);
+  lines.push(compactParagraphs(stripPlain(data.overview), 2, 420, 2));
   lines.push('');
-  if (data.market_size && data.market_size.length > 0) {
-    lines.push('### Key Market Stats');
-    lines.push('');
-    for (const s of data.market_size) lines.push(`- ${renderTaggedStat(s)}`);
-    lines.push('');
-  }
+  lines.push('## Market Validation');
+  lines.push('');
+  // keepLineStructure preserves bullet markers so compactMarkdown can render
+  // them as proper bullets, while inline ** / * / leftover "Lead. - " gets stripped.
+  lines.push(compactMarkdown(stripStructured(data.market_validation), {
+    maxBullets: 5,
+    maxParagraphs: 2,
+    maxLines: 8,
+    maxCharsPerLine: 210,
+  }));
+  lines.push('');
   lines.push('## Competitive Landscape');
   lines.push('');
-  lines.push('| Competitor | What They Do | Pricing | Gap |');
+  lines.push('| Competitor | Focus | Entry Price | Weakness |');
   lines.push('|---|---|---|---|');
   for (const c of data.competitors) {
-    lines.push(`| ${escapeCell(c.name)} | ${escapeCell(c.what_they_do)} | ${escapeCell(c.pricing)} | ${escapeCell(c.gap)} |`);
+    lines.push(`| ${escapeCell(stripPlain(c.name), 80)} | ${escapeCell(stripPlain(c.what_they_do))} | ${escapeCell(stripPlain(c.pricing), 110)} | ${escapeCell(stripPlain(c.gap))} |`);
   }
   lines.push('');
-  if (data.demand_signals && data.demand_signals.length > 0) {
-    lines.push('## Demand Signals');
-    lines.push('');
-    for (const d of data.demand_signals) lines.push(`- ${d}`);
-    lines.push('');
-  }
-  lines.push('## The Opportunity');
+  lines.push(`**The gap ${companyName} fills:** ${compactLine(stripPlain(data.opportunity), 320, 2)}`);
   lines.push('');
-  lines.push(data.opportunity);
+  lines.push('## Market Positioning');
+  lines.push('');
+  lines.push(compactMarkdown(stripStructured(data.market_positioning), {
+    maxBullets: 5,
+    maxParagraphs: 2,
+    maxLines: 7,
+    maxCharsPerLine: 210,
+  }));
   lines.push('');
   lines.push('## Why This Fits You');
   lines.push('');
-  lines.push(data.why_this_fits_you);
+  lines.push(compactParagraphs(stripPlain(data.why_this_fits_you), 1, 420, 2));
   lines.push('');
   lines.push('## First Priorities');
   lines.push('');
-  data.first_priorities.forEach((p, i) => {
-    lines.push(`${i + 1}. **${p.title}** — ${p.rationale}`);
-  });
-  lines.push(...renderDataGapsSection(data.data_gaps));
+  pushNumberedList(lines, data.first_priorities.map(stripPlain));
   return lines.join('\n');
 }
 
@@ -117,132 +125,90 @@ export function renderGrowMarkdown(data: GrowMarketResearch, companyName: string
   lines.push('');
   lines.push('## Business Overview');
   lines.push('');
-  lines.push(data.business_overview);
+  lines.push(compactParagraphs(stripPlain(data.business_overview), 3, 360, 2));
   lines.push('');
-  lines.push(`**Revenue model:** ${data.revenue_model}`);
+  lines.push(`**Revenue model:** ${compactLine(stripPlain(data.revenue_model), 280, 2)}`);
   if (data.notable_validation) {
     lines.push('');
-    lines.push(`**Notable validation:** ${data.notable_validation}`);
+    lines.push(`**Notable validation:** ${compactLine(stripPlain(data.notable_validation), 280, 2)}`);
   }
+  lines.push('');
+  lines.push('## Strategy Spine');
+  lines.push('');
+  lines.push(`**Business type:** ${compactLine(stripPlain(data.business_type), 140, 1)}`);
+  lines.push('');
+  lines.push(`**Main bottleneck:** ${compactLine(stripPlain(data.main_growth_bottleneck), 220, 1)}`);
+  lines.push('');
+  lines.push(`**Customer wedge:** ${compactLine(stripPlain(data.customer_wedge), 220, 1)}`);
+  lines.push('');
+  lines.push(`**Offer / packaging direction:** ${compactLine(stripPlain(data.offer_packaging_direction), 240, 1)}`);
+  lines.push('');
+  lines.push(`**Market tension:** ${compactLine(stripPlain(data.market_tension), 220, 1)}`);
   lines.push('');
   lines.push('## Market Analysis');
   lines.push('');
-  lines.push(`*Industry Landscape:* ${data.market_analysis.industry_landscape}`);
-  lines.push('');
-  lines.push('*Key Trends:*');
-  for (const t of data.market_analysis.key_trends) lines.push(`- ${t}`);
-  lines.push('');
-  lines.push(`*Market Timing:* ${data.market_analysis.market_timing}`);
+  lines.push(compactParagraphs(stripPlain(data.market_analysis.industry_landscape), 1, 420, 3));
   lines.push('');
   if (data.market_size && data.market_size.length > 0) {
-    lines.push('### Key Market Stats');
-    lines.push('');
-    for (const s of data.market_size) lines.push(`- ${renderTaggedStat(s)}`);
-    lines.push('');
-  }
-  if (data.retention_check && data.retention_check.signal !== 'unknown') {
-    const label = data.retention_check.signal === 'warning' ? '⚠ Warning' : '✓ Healthy';
-    lines.push(`## Retention Check — ${label}`);
-    lines.push('');
-    lines.push(data.retention_check.rationale);
-    lines.push('');
-    lines.push(`**Recommendation:** ${data.retention_check.priority.replace(/_/g, ' ')}`);
+    lines.push('**Market signals:**');
+    for (const s of data.market_size.slice(0, 3)) lines.push(`- ${compactLine(stripPlain(renderTaggedStat(s)), 210, 1)}`);
     lines.push('');
   }
-  if (data.funnel_diagnosis) {
-    lines.push('## Funnel Diagnosis');
-    lines.push('');
-    lines.push(`**Likely bottleneck:** ${data.funnel_diagnosis.likely_bottleneck}`);
-    lines.push('');
-    lines.push(data.funnel_diagnosis.rationale);
-    lines.push('');
-  }
+  lines.push('**Key trends shaping the market:**');
+  for (const t of compactList(data.market_analysis.key_trends, 5, 190)) lines.push(`- ${stripPlain(t)}`);
+  lines.push('');
+  lines.push(`**Market timing:** ${compactLine(stripPlain(data.market_analysis.market_timing), 220, 1)}`);
+  lines.push('');
+  lines.push(`**Opportunity:** ${compactLine(stripPlain(data.growth_opportunity), 320, 2)}`);
+  lines.push('');
   lines.push('## Competitive Landscape');
   lines.push('');
-  lines.push('| Competitor | Focus | Positioning / Size | Gap |');
+  lines.push('| Competitor | Focus | Strength / Positioning | Weakness / Gap |');
   lines.push('|---|---|---|---|');
-  for (const c of data.competitors) {
-    lines.push(`| ${escapeCell(c.name)} | ${escapeCell(c.focus_area)} | ${escapeCell(c.positioning_or_size)} | ${escapeCell(c.gap)} |`);
+  for (const c of data.competitors.slice(0, 5)) {
+    lines.push(`| ${escapeCell(stripPlain(c.name), 80)} | ${escapeCell(stripPlain(c.focus_area))} | ${escapeCell(stripPlain(c.positioning_or_size))} | ${escapeCell(stripPlain(c.gap))} |`);
   }
   lines.push('');
-  lines.push('## Competitive Advantages');
+  lines.push(`**${companyName}'s edge:** ${compactLine(stripPlain(data.business_edge), 260, 1)}`);
   lines.push('');
-  for (const a of data.competitive_advantages) lines.push(`- ${a}`);
+  lines.push(`**${companyName}'s gap:** ${compactLine(stripPlain(data.business_gap), 260, 1)}`);
   lines.push('');
-  lines.push('## Gaps to Exploit');
-  lines.push('');
-  for (const g of data.gaps_to_exploit) lines.push(`- ${g}`);
+  if (data.competitive_advantages.length > 0) {
+    lines.push('**Competitive advantages:**');
+    for (const a of compactList(data.competitive_advantages, 5, 190)) lines.push(`- ${stripPlain(a)}`);
+    lines.push('');
+  }
+  if (data.gaps_to_exploit.length > 0) {
+    lines.push('**Gaps to exploit:**');
+    for (const g of compactList(data.gaps_to_exploit, 5, 190)) lines.push(`- ${stripPlain(g)}`);
+    lines.push('');
+  }
+  if (data.threats.length > 0) {
+    lines.push('**Threats:**');
+    for (const t of compactList(data.threats, 3, 190)) lines.push(`- ${stripPlain(t)}`);
+    lines.push('');
+  }
+  lines.push(`**What not to do yet:** ${compactLine(stripPlain(data.what_not_to_do_yet), 240, 1)}`);
   lines.push('');
   lines.push('## Why This Fits You');
   lines.push('');
-  lines.push(data.why_this_fits_you);
+  lines.push(compactParagraphs(stripPlain(data.why_this_fits_you), 1, 420, 2));
   lines.push('');
   lines.push('## AI Leverage Points');
   lines.push('');
-  for (const p of data.ai_leverage_points) lines.push(`- ${p}`);
+  if (data.ai_leverage_points.length > 0) {
+    pushNumberedList(lines, data.ai_leverage_points.slice(0, 3).map(stripPlain));
+  } else {
+    lines.push('1. No clear AI leverage point surfaced from the website or research.');
+  }
   lines.push('');
   lines.push('## First Priorities');
   lines.push('');
-  data.first_priorities.forEach((p, i) => {
-    lines.push(`${i + 1}. **${p.title}** — ${p.rationale}`);
-  });
-  lines.push(...renderDataGapsSection(data.data_gaps));
+  pushNumberedList(lines, data.first_priorities.map(stripPlain));
   return lines.join('\n');
 }
 
-export function renderSurpriseMarkdown(data: SurpriseMarketResearch, companyName: string): string {
-  const lines: string[] = [];
-  lines.push(`# Market Research Report: ${companyName}`);
-  lines.push('');
-  lines.push('## Idea Overview');
-  lines.push('');
-  lines.push(data.idea_overview);
-  lines.push('');
-  lines.push('## Market Validation');
-  lines.push('');
-  if (data.market_validation.size_and_growth.length > 0) {
-    lines.push('*Size and growth:*');
-    for (const s of data.market_validation.size_and_growth) lines.push(`- ${renderTaggedStat(s)}`);
-    lines.push('');
-  }
-  if (data.market_validation.why_now.length > 0) {
-    lines.push('*Why now:*');
-    for (const w of data.market_validation.why_now) lines.push(`- ${w}`);
-    lines.push('');
-  }
-  if (data.market_validation.demand_signals && data.market_validation.demand_signals.length > 0) {
-    lines.push('*Demand signals:*');
-    for (const d of data.market_validation.demand_signals) lines.push(`- ${d}`);
-    lines.push('');
-  }
-  lines.push('## Competitive Landscape');
-  lines.push('');
-  lines.push('| Competitor | What They Do | Pricing | Gap |');
-  lines.push('|---|---|---|---|');
-  for (const c of data.competitors) {
-    lines.push(`| ${escapeCell(c.name)} | ${escapeCell(c.what_they_do)} | ${escapeCell(c.pricing)} | ${escapeCell(c.gap)} |`);
-  }
-  lines.push('');
-  lines.push('## Why This Fits You');
-  lines.push('');
-  lines.push(data.why_this_fits_you);
-  lines.push('');
-  lines.push('## Idea Refinements');
-  lines.push('');
-  data.idea_refinements.forEach((r, i) => {
-    lines.push(`${i + 1}. **${r.title}** — ${r.rationale}`);
-  });
-  lines.push('');
-  lines.push('## First Priorities');
-  lines.push('');
-  data.first_priorities.forEach((p, i) => {
-    lines.push(`${i + 1}. **${p.title}** — ${p.rationale}`);
-  });
-  lines.push(...renderDataGapsSection(data.data_gaps));
-  return lines.join('\n');
-}
-
-function escapeCell(value: string | undefined): string {
+function escapeCell(value: string | undefined, maxChars = 130): string {
   if (!value) return '';
-  return value.replace(/\|/g, '\\|').replace(/\n/g, ' ');
+  return compactTableCell(value, maxChars).replace(/\|/g, '\\|').replace(/\n/g, ' ');
 }
