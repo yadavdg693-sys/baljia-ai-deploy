@@ -54,6 +54,22 @@ const SEED: SeedRow[] = [
     affected_agents: [30],
     affected_tools: ['github_create_repo', 'github_push_file', 'github_create_commit'],
   },
+  {
+    fingerprint: 'render-hobby-custom-domain-quota-2026-05',
+    category: 'external_block',
+    description: 'attach_custom_domain failed with HTTP 400 "Hobby Tier is limited to 2 custom domains" — agent then spent multiple turns trying to recover and was killed by the watchdog loop detector.',
+    fix_notes: 'Render Hobby tier caps at 2 custom domains per account. When attach_custom_domain returns this error, DO NOT loop trying to fix it. Proceed with the .onrender.com URL: call render_get_service to get the service hostname, then run verify_user_journey against that URL. The custom domain attachment is nice-to-have, not blocking. If the founder really needs the custom domain, write a report explaining the account limit and let the operator handle quota changes.',
+    affected_agents: [30],
+    affected_tools: ['attach_custom_domain'],
+  },
+  {
+    fingerprint: 'agent-modifies-skeleton-health-2026-05',
+    category: 'verification_reject',
+    description: 'Engineering agent modified the skeleton\'s /api/health handler and removed the DB probe → static_code_scan flagged health-without-db-probe HIGH → task failed.',
+    fix_notes: 'Per the engineering prompt rule 3: do NOT modify the skeleton\'s framework files (the Zod schema, trust-proxy, session middleware, /api/health, withTimeout, register/login/logout). Customize ONLY landing copy, dashboard rendering, and feature routes. /api/health probes DB + integrations on purpose — Render uses its return code for routing decisions. If you find yourself rewriting /api/health, stop and re-read the prompt.',
+    affected_agents: [30],
+    affected_tools: ['github_push_file', 'github_create_commit'],
+  },
 ];
 
 async function main() {

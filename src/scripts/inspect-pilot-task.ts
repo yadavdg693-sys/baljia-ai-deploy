@@ -2,7 +2,7 @@
 import { db, taskExecutions, tasks } from '@/lib/db';
 import { eq, desc } from 'drizzle-orm';
 
-const TASK_ID = '9b000b79-a6bf-421e-a089-40fd2da7cddb';
+const TASK_ID = process.argv[2] ?? '9b000b79-a6bf-421e-a089-40fd2da7cddb';
 
 void (async () => {
   const [task] = await db.select().from(tasks).where(eq(tasks.id, TASK_ID)).limit(1);

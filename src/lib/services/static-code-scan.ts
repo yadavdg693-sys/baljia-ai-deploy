@@ -200,19 +200,24 @@ function ruleAuthRouteWithoutRateLimit(content: string, path: string): Array<Omi
 
 function ruleHealthWithoutDbProbe(content: string, path: string): Array<Omit<Finding, 'file'>> {
   if (!isMainEntryFile(path) || !looksLikeExpressApp(content)) return [];
-  // Locate the /api/health handler (regex over its body to catch the most common shape).
-  const healthRouteMatch = content.match(/app\.get\s*\(\s*['"]\/api\/health['"][^}]+\}/s);
-  if (!healthRouteMatch) return [];
-  const handlerBody = healthRouteMatch[0];
-  // Probe-shaped: a SELECT or .query/.execute call inside the handler.
-  const hasDbProbe = /pool\.query|client\.query|db\.execute|SELECT/i.test(handlerBody);
+  // Locate the /api/health handler. Regex-based body extraction is brittle
+  // against nested braces ({}, {} inside try blocks etc.), so use a window
+  // approach: take ~50 lines after the route declaration and check for DB
+  // probe patterns. A real handler that DOES probe the DB will have a
+  // pool.query / client.query / db.execute / SELECT call within that window.
+  const decl = content.match(/app\.(get|post|use)\s*\(\s*['"]\/api\/health['"]/);
+  if (!decl || decl.index === undefined) return [];
+  const lines = content.split('\n');
+  const declLine = content.slice(0, decl.index).split('\n').length - 1;
+  // Look ahead 50 lines (handler bodies rarely longer; stops naturally at file end).
+  const window = lines.slice(declLine, Math.min(declLine + 50, lines.length)).join('\n');
+  const hasDbProbe = /pool\.query|client\.query|db\.execute|SELECT\s+1|SELECT\s+/i.test(window);
   if (hasDbProbe) return [];
-  const lineHint = content.slice(0, healthRouteMatch.index ?? 0).split('\n').length;
   return [{
     severity: 'high',
-    lineHint,
+    lineHint: declLine + 1,
     rule: 'health-without-db-probe',
-    message: '/api/health handler exists but does not probe the database. Render uses /api/health for routing decisions; without a real probe, /api/health returns 200 even when the DB is unreachable, hiding broken deploys behind a "healthy" status.',
+    message: '/api/health handler exists but does not probe the database (no pool.query / SELECT in the next 50 lines). Render uses /api/health for routing decisions; without a real probe, /api/health returns 200 even when the DB is unreachable, hiding broken deploys behind a "healthy" status.',
   }];
 }
 
