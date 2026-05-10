@@ -168,16 +168,23 @@ async function renderAddCustomDomain(serviceId: string, domain: string, retryAft
         }
       }
 
-      // Hobby tier 2-domain quota: try to auto-free a slot, then retry once.
-      const isQuotaError = /Hobby Tier is limited|custom domains?/i.test(errBody);
-      if (isQuotaError && retryAfterCleanup) {
-        log.warn('Render custom domain quota hit; attempting auto-cleanup', { serviceId, domain });
+      // Hobby tier 2-domain quota: optionally try to auto-free a slot.
+      // OPT-IN: requires RENDER_AUTO_FREE_CUSTOM_DOMAIN_SLOT=true in env.
+      // Default behavior is to surface the quota error to the operator
+      // rather than silently delete anything — even a "safe" candidate.
+      // Tight regex match on the exact Hobby tier message; no loose matches.
+      const isQuotaError = /Hobby Tier is limited to \d+ custom domains?/i.test(errBody);
+      const autoFreeEnabled = process.env.RENDER_AUTO_FREE_CUSTOM_DOMAIN_SLOT === 'true';
+      if (isQuotaError && retryAfterCleanup && autoFreeEnabled) {
+        log.warn('Render custom domain quota hit; auto-cleanup ENABLED, attempting', { serviceId, domain });
         const freed = await freeUpRenderCustomDomainSlot();
         if (freed) {
           log.info('Slot freed; retrying attach', { freed, domain });
           return renderAddCustomDomain(serviceId, domain, false); // retryAfterCleanup=false to prevent loop
         }
         log.error('Render custom domain quota hit; no safe slot to free', { serviceId, domain });
+      } else if (isQuotaError) {
+        log.error('Render custom domain quota hit; auto-cleanup disabled (set RENDER_AUTO_FREE_CUSTOM_DOMAIN_SLOT=true to enable)', { serviceId, domain });
       }
 
       log.error('Render custom domain failed', { serviceId, domain, status: response.status, body: errBody.slice(0, 200) });
