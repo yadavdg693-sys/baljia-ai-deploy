@@ -1761,6 +1761,72 @@ function pushLog(logs: Record<string, unknown>[], entry: Record<string, unknown>
 
 // ── Claude execution ──
 
+// Anthropic prompt-caching helpers. The worker agent loop accumulates large
+// static context (system prompt + 30-tool definitions + read_skill results
+// that stay in conversation history). Without caching, every turn re-pays
+// full input-token cost on all of it — by turn 10 each call processes 50K+
+// input tokens. With ephemeral cache markers, Claude charges full price on
+// the first occurrence and ~10% on subsequent hits within the 5-min window.
+//
+// We use up to 3 of Anthropic's 4 allowed cache breakpoints:
+//   1. End of system prompt   (large, static across turns)
+//   2. End of tool definitions (large, static across turns)
+//   3. End of most recent tool_result block (extends as the conversation grows)
+
+type CachedSystem = Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }>;
+
+function buildCachedSystem(systemPrompt: string, isOAuth: boolean): CachedSystem {
+  if (isOAuth) {
+    // OAuth requires CLAUDE_CODE_IDENTITY as the first system text block.
+    // Cache breakpoint goes on the (much larger) main prompt block.
+    return [
+      { type: 'text', text: "You are Claude Code, Anthropic's official CLI for Claude." },
+      { type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } },
+    ];
+  }
+  return [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }];
+}
+
+function buildCachedTools(
+  tools: ReturnType<typeof getAgentTools>,
+): Anthropic.MessageCreateParams['tools'] {
+  if (tools.length === 0) return [];
+  return tools.map((t, i) => ({
+    name: t.name,
+    description: t.description,
+    input_schema: t.input_schema,
+    ...(i === tools.length - 1 ? { cache_control: { type: 'ephemeral' as const } } : {}),
+  })) as Anthropic.MessageCreateParams['tools'];
+}
+
+// Marks the last tool_result content block in the conversation as a cache
+// breakpoint. Returns a SHALLOW-cloned messages array so the caller's
+// reference is not mutated. Each turn the cache window extends to include
+// one more turn of tool results.
+function withTrailingToolResultCache(
+  messages: Anthropic.MessageParam[],
+): Anthropic.MessageParam[] {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (typeof m.content === 'string' || !Array.isArray(m.content)) continue;
+    let lastIdx = -1;
+    for (let j = m.content.length - 1; j >= 0; j--) {
+      const block = m.content[j] as { type?: string };
+      if (block.type === 'tool_result') { lastIdx = j; break; }
+    }
+    if (lastIdx === -1) continue;
+    const cloned = [...messages];
+    const newContent = m.content.map((b, idx) =>
+      idx === lastIdx
+        ? { ...(b as unknown as Record<string, unknown>), cache_control: { type: 'ephemeral' as const } }
+        : b,
+    ) as Anthropic.MessageParam['content'];
+    cloned[i] = { ...m, content: newContent };
+    return cloned;
+  }
+  return messages;
+}
+
 async function runWithClaude(
   systemPrompt: string,
   tools: ReturnType<typeof getAgentTools>,
@@ -1830,16 +1896,18 @@ async function runWithClaude(
     }
 
     // G-LLM-001: Timeout + retry on Claude API calls
+    // Prompt caching: system prompt + tool defs are static across turns and
+    // marked as ephemeral cache breakpoints. The trailing tool_result is also
+    // marked so accumulated read_skill / tool output gets cached after its
+    // first turn instead of being re-charged on every subsequent call.
     const response = await callAnthropicWithTimeout(
       anthropic,
       {
         model: modelId,
         max_tokens: getAgentMaxTokens(agentId),
-        // OAuth path requires the Claude Code identity prefix as the first
-        // system text block; non-OAuth path passes the prompt as-is.
-        system: withClaudeCodeIdentity(systemPrompt, isOAuth) as Anthropic.MessageCreateParams['system'],
-        tools: tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.input_schema })),
-        messages,
+        system: buildCachedSystem(systemPrompt, isOAuth) as Anthropic.MessageCreateParams['system'],
+        tools: buildCachedTools(tools),
+        messages: withTrailingToolResultCache(messages),
       },
       { label: `agent_turn_${turnCount + 1}`, timeoutMs: getAgentCallTimeoutMs(agentId) }
     ) as Anthropic.Message;
@@ -1853,10 +1921,28 @@ async function runWithClaude(
       break;
     }
 
-    // Cost tracking — record this turn's token spend
+    // Cost tracking — record this turn's token spend.
+    // Anthropic bills cache_creation at ~1.25× and cache_read at ~0.10× the
+    // normal input rate. Convert to "effective input tokens" so the watchdog
+    // ceiling reflects true cost, not raw token count.
+    const usage = response.usage;
+    const cacheCreate = (usage as { cache_creation_input_tokens?: number } | undefined)?.cache_creation_input_tokens ?? 0;
+    const cacheRead = (usage as { cache_read_input_tokens?: number } | undefined)?.cache_read_input_tokens ?? 0;
+    const rawInput = usage?.input_tokens ?? 0;
+    const effectiveInput = rawInput + Math.round(cacheCreate * 1.25) + Math.round(cacheRead * 0.10);
+    if (cacheRead > 0 || cacheCreate > 0) {
+      pushLog(log_entries, {
+        turn: turnCount,
+        event: 'cache',
+        cache_read_tokens: cacheRead,
+        cache_create_tokens: cacheCreate,
+        input_tokens: rawInput,
+        output_tokens: usage?.output_tokens ?? 0,
+      });
+    }
     const costVerdict = watchdog.recordTokens(
-      response.usage?.input_tokens ?? 0,
-      response.usage?.output_tokens ?? 0,
+      effectiveInput,
+      usage?.output_tokens ?? 0,
       modelId,
     );
     if (costVerdict === 'kill') {
