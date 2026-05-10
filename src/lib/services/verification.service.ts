@@ -496,7 +496,14 @@ async function verifyDeterministic(task: Task): Promise<VerificationResult> {
       !!t.result &&
       !FAILED_TOOL_RESULT_RE.test(t.result),
     );
-    const deployPassed = deployCalls.length > 0 || githubCommits.length > 0;
+    // Third evidence path: a successful agent-driven journey passes against
+    // the company's deployed URL. The journey CAN'T pass without a working
+    // deploy — so if the agent ran one and it returned JOURNEY PASS, deploy
+    // is provably live, even if THIS task didn't push or call render_deploy
+    // (e.g., agent decided no redeploy was needed because existing deploy
+    // already serves the requested feature).
+    const successfulJourneys = toolCalls.filter(isSuccessfulJourneyCall);
+    const deployPassed = deployCalls.length > 0 || githubCommits.length > 0 || successfulJourneys.length > 0;
     checks.push({
       name: 'deploy_evidence',
       passed: deployPassed,
@@ -504,7 +511,9 @@ async function verifyDeterministic(task: Task): Promise<VerificationResult> {
         ? `${deployCalls.length} successful deploy tool call(s): ${[...new Set(deployCalls.map((t) => t.tool))].join(', ')}`
         : githubCommits.length > 0
           ? `${githubCommits.length} successful GitHub commit(s); explicit deploy tools failed but auto-deploy on push proves shipping. Journey check below validates the deployed app actually works.`
-          : `Tag "${task.tag}" requires either a successful deploy tool call OR a successful github commit (auto-deploy on push). Attempts: deploy=${attemptedDeployTools.length ? [...new Set(attemptedDeployTools)].join(', ') : 'none'}; github=${toolCalls.filter((t) => t.tool === 'github_push_file' || t.tool === 'github_create_commit').length}. Tools used: ${[...new Set(toolCalls.map((t) => t.tool).filter(Boolean))].slice(0, 8).join(', ') || 'none'}`,
+          : successfulJourneys.length > 0
+            ? `No new deploy in this task, but ${successfulJourneys.length} successful verify_user_journey call(s) prove the existing deploy is live and serves the requested feature.`
+            : `Tag "${task.tag}" requires either a successful deploy tool call, a successful github commit (auto-deploy on push), OR a successful verify_user_journey against the existing deploy. Attempts: deploy=${attemptedDeployTools.length ? [...new Set(attemptedDeployTools)].join(', ') : 'none'}; github=${toolCalls.filter((t) => t.tool === 'github_push_file' || t.tool === 'github_create_commit').length}; journey=${toolCalls.filter((t) => JOURNEY_TOOL_NAMES.has(t.tool)).length}. Tools used: ${[...new Set(toolCalls.map((t) => t.tool).filter(Boolean))].slice(0, 8).join(', ') || 'none'}`,
     });
 
     // Stricter than before: previously we passed if ANY check_url_health
@@ -589,14 +598,22 @@ async function verifyDeterministic(task: Task): Promise<VerificationResult> {
     // template-SQL injection). Encouraged but advisory.
     const staticScanAttempts = toolCalls.filter((t) => STATIC_SCAN_TOOL_NAMES.has(t.tool));
     const cleanStaticScans = staticScanAttempts.filter(isCleanStaticScanCall);
+    // Only require static_code_scan when the agent actually pushed/committed
+    // code in this task. A "verify the existing deploy" task with zero commits
+    // has no new code to scan — skipping the scan is correct, not a violation.
+    const codeWasPushed = githubCommits.length > 0;
     checks.push({
       name: 'static_code_scan',
-      passed: staticScanAttempts.length > 0 && cleanStaticScans.length === staticScanAttempts.length,
-      detail: staticScanAttempts.length === 0
-        ? `Advisory: no static_code_scan calls. The scanner catches silent-catch blocks, secret-in-log, template-SQL, missing trust-proxy — issues runtime journey verification cannot see.`
-        : cleanStaticScans.length === staticScanAttempts.length
-          ? `${cleanStaticScans.length} static scan(s) clean.`
-          : `${staticScanAttempts.length - cleanStaticScans.length} of ${staticScanAttempts.length} static scan(s) found high-severity findings. Address them via github_create_commit before declaring complete.`,
+      passed: !codeWasPushed
+        ? true
+        : staticScanAttempts.length > 0 && cleanStaticScans.length === staticScanAttempts.length,
+      detail: !codeWasPushed
+        ? `No new code pushed in this task — static scan not required.`
+        : staticScanAttempts.length === 0
+          ? `Code was pushed but no static_code_scan call. The scanner catches silent-catch blocks, secret-in-log, template-SQL, missing trust-proxy — issues runtime journey verification cannot see. Run static_code_scan after every github_create_commit.`
+          : cleanStaticScans.length === staticScanAttempts.length
+            ? `${cleanStaticScans.length} static scan(s) clean.`
+            : `${staticScanAttempts.length - cleanStaticScans.length} of ${staticScanAttempts.length} static scan(s) found high-severity findings. Address them via github_create_commit before declaring complete.`,
     });
 
     // ADVISORY: LLM code review — semantic check over the diff. Catches
