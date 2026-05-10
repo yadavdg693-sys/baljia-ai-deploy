@@ -27,7 +27,10 @@ const ADVISORY_CHECK_NAMES = new Set<string>([
   'db_state_evidence',     // not all deploys need DB checks (static sites, marketing pages)
   'tests_folder_present',  // Backend Quality Bar — surface in reports, soft until adoption
   'readme_present',        // Backend Quality Bar — surface in reports, soft until adoption
-  'static_code_scan',      // Quality Bar — surface in reports, soft until adoption
+  // 'static_code_scan' — promoted to HARD for engineering tasks. Catches the
+  //   skeleton-removed-hardening shapes (missing helmet, missing rate-limit,
+  //   /api/health without DB probe, etc.) that the runtime journey can't see.
+  //   Skipping the scan or shipping with high-severity findings now fails the task.
   'llm_code_review',       // Quality Bar — LLM diff review, surface in reports
 ]);
 
