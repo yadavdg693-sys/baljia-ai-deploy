@@ -121,7 +121,7 @@ async function runOne(companyId: string, sample: SampleTask): Promise<RunResult>
     title: sample.title,
     description: sample.description,
     tag: 'engineering',
-    priority: 'normal',
+    priority: 50,           // mid-priority integer
     estimated_credits: 1,
     complexity: sample.complexity,
     source: 'system',

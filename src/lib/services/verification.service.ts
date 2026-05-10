@@ -486,12 +486,25 @@ async function verifyDeterministic(task: Task): Promise<VerificationResult> {
     const attemptedDeployTools = toolCalls
       .filter((t) => DEPLOY_TOOL_NAMES.has(t.tool))
       .map((t) => t.tool);
+    // Render auto-deploys on git push when the service has GitHub auto-deploy
+    // enabled, so an explicit render_deploy can fail (e.g., "deploy already in
+    // progress") while the actual deployment succeeds. Accept successful
+    // github commits as alternate deploy evidence — the journey check below
+    // is the truer source of "did this actually ship and work" gating.
+    const githubCommits = toolCalls.filter((t) =>
+      (t.tool === 'github_push_file' || t.tool === 'github_create_commit') &&
+      !!t.result &&
+      !FAILED_TOOL_RESULT_RE.test(t.result),
+    );
+    const deployPassed = deployCalls.length > 0 || githubCommits.length > 0;
     checks.push({
       name: 'deploy_evidence',
-      passed: deployCalls.length > 0,
+      passed: deployPassed,
       detail: deployCalls.length > 0
         ? `${deployCalls.length} successful deploy tool call(s): ${[...new Set(deployCalls.map((t) => t.tool))].join(', ')}`
-        : `Tag "${task.tag}" requires a successful deploy. Deploy attempts: ${attemptedDeployTools.length ? [...new Set(attemptedDeployTools)].join(', ') : 'none'}. Tools used: ${[...new Set(toolCalls.map((t) => t.tool).filter(Boolean))].slice(0, 8).join(', ') || 'none'}`,
+        : githubCommits.length > 0
+          ? `${githubCommits.length} successful GitHub commit(s); explicit deploy tools failed but auto-deploy on push proves shipping. Journey check below validates the deployed app actually works.`
+          : `Tag "${task.tag}" requires either a successful deploy tool call OR a successful github commit (auto-deploy on push). Attempts: deploy=${attemptedDeployTools.length ? [...new Set(attemptedDeployTools)].join(', ') : 'none'}; github=${toolCalls.filter((t) => t.tool === 'github_push_file' || t.tool === 'github_create_commit').length}. Tools used: ${[...new Set(toolCalls.map((t) => t.tool).filter(Boolean))].slice(0, 8).join(', ') || 'none'}`,
     });
 
     // Stricter than before: previously we passed if ANY check_url_health
@@ -527,11 +540,11 @@ async function verifyDeterministic(task: Task): Promise<VerificationResult> {
         passed: true,
         detail: `${journeyCalls.length} passing user journey verification(s).`,
       });
-    } else if (deployCalls.length > 0) {
-      // Agent skipped verify_user_journey but deploy succeeded. Run the
-      // verifier-side fallback for diagnostic visibility, but DO NOT let it
-      // substitute for the mandatory agent journey call — skipping is a hard
-      // fail regardless of fallback outcome. Fallback only proves "/" and
+    } else if (deployCalls.length > 0 || githubCommits.length > 0) {
+      // Agent skipped verify_user_journey but a deploy or push happened. Run
+      // the verifier-side fallback for diagnostic visibility, but DO NOT let
+      // it substitute for the mandatory agent journey call — skipping is a
+      // hard fail regardless of fallback outcome. Fallback only proves "/" and
       // "/api/health" respond; that's not the same as proving the requested
       // feature actually works for a real user.
       const fallback = await runFallbackJourney(task.company_id);
