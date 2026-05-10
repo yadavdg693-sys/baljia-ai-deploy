@@ -254,78 +254,37 @@ Hard rules:
     - The closing tech line is required and is the LAST line.
     - Still describes exactly ONE user-facing feature (the one-feature self-test below applies).
 
-  Adapt Input/Output/Core flow content to what the feature ACTUALLY does. The slots are fixed; the wording inside must be specific to this product, never generic.
+  Adapt Input/Output/Core flow content to what THIS specific product actually does. The slots are fixed; the wording inside must be derived from the company's refined_idea, market_research (especially competitors and overview), and mission_doc — NEVER copied from a template. Different companies must produce different Input/Output/Core flow content, even if their categories are similar.
 
-  Derivation method (apply this for ANY application — works regardless of vertical, industry, or whether the idea fits a familiar category):
-    1. Input  = What does the user provide to start the feature? (Could be: a brief, a profile, a file upload, a query, a parameter set, a piece of data, a connection, a payment, an event, a triggering action.)
-    2. Output = What does the user receive when the feature succeeds? (Could be: a generated artifact, a match, a booking, a report, a notification, a state change confirmation, a delivered service step, a payment receipt.)
-    3. Core flow = The discrete steps the system performs between Input and Output, joined with → arrows. Pick the 4-7 steps that ACTUALLY happen, named in the product's domain language. Avoid generic verbs like "process" or "handle".
-    4. Tech line = State the stack (Express + PostgreSQL by default for the skeleton) and the primary stored entity.
+  Derivation method (apply for ANY application — works regardless of vertical or industry):
+    1. Input  = What does THIS product's user provide to start the feature? Read the refined_idea + mission_doc to identify the actual triggering data, file, profile, query, or action.
+    2. Output = What does THIS product's user receive when the feature succeeds? Read the mission's "what we're building" to identify the actual deliverable artifact, match, transaction, or state change the founder promised.
+    3. Core flow = The 4-7 discrete steps THIS specific system performs between Input and Output, joined with → arrows. Use the product's actual domain language (verbs and nouns from the refined_idea and market_research overview). Avoid generic verbs like "process", "handle", "manage".
+    4. Tech line = "Use Express.js + PostgreSQL. Store <primary entity from THIS product> in the database." Replace <primary entity> with the actual noun this product stores (the thing the founder is building around).
 
-  Reference patterns (NOT a closed list — derive from the method above for anything outside these):
+  Hard rules for content derivation:
+    - Pull entity names, user roles, and verbs from refined_idea + market_research + mission_doc — do NOT invent generic SaaS jargon.
+    - Two different companies in the same category must produce DIFFERENT Input/Output/Core flow content (because their actual products differ).
+    - If you can't articulate concrete Input/Output/Core flow from the provided context, use the fallback below instead of producing vague slot-fills.
 
-    - Content-generation (book/blog/video/deck/copy):
-        Input = brief/topic + parameters (style, audience, length)
-        Output = generated artifact in a usable format (PDF, doc, video, image)
-        Core flow = brief intake → research → outline → generation → review → export
+  Broad shape anchors (use ONLY to identify roughly what kind of Input/Output/Core flow makes sense — the actual content must still come from THIS company's refined_idea + market_research, never from these anchors):
 
-    - Sales / outreach / CRM:
-        Input = ideal customer profile or prospect list (segments, criteria)
-        Output = booked meetings / replies / qualified leads
-        Core flow = prospect intake → segmentation → message generation → sending → tracking → reply handling
+    - Content-generation (book/blog/video/deck/copy)         — Input: a brief; Output: a generated artifact; Flow: intake → generate → review → export
+    - Sales / outreach / CRM                                  — Input: a target list; Output: replies or meetings; Flow: import → personalize → send → track → reply
+    - Client / SMB management                                 — Input: client profile + assets; Output: approved deliverable; Flow: onboard → draft → review → schedule
+    - Marketplace / matching                                  — Input: listing or seeker profile; Output: matched connection; Flow: profile → match → message → book
+    - Internal tool / data app                                — Input: data import or form; Output: filtered view or report; Flow: ingest → store → query → display
+    - Education / training                                    — Input: learner goal; Output: progress + recommendation; Flow: enroll → deliver → assess → recommend
+    - Health / fitness / wellness                             — Input: log entry vs goal; Output: trend insight; Flow: log → analyze → display → suggest
+    - Finance / budgeting / investment                        — Input: account or transaction; Output: insight or alert; Flow: import → categorize → analyze → report
+    - Booking / appointment / scheduling                      — Input: service + slot + customer; Output: confirmed booking; Flow: select → book → pay → notify
+    - Community / discussion / Q&A                            — Input: post or question; Output: ranked feed + replies; Flow: post → tag → rank → notify
+    - Productivity / task / project                           — Input: item to track; Output: state visible to team; Flow: create → assign → update → display
+    - Subscription / e-commerce / digital storefront          — Input: product + payment; Output: order + delivery; Flow: browse → cart → pay → fulfil
 
-    - Client / SMB management (content calendar, social posts, reports):
-        Input = client/business profile + assets (handles, brand, schedule)
-        Output = approved scheduled deliverables
-        Core flow = onboard → load assets → generate drafts → review/approve → schedule
+  These are SHAPE anchors only. The actual nouns (what the user provides), the actual verbs (what the system does), and the actual entities (what gets stored) must all be derived from THIS company's refined_idea, market_research, and mission_doc.
 
-    - Marketplace / matching (jobs, dating, freelance, rentals, services):
-        Input = listing or seeker profile (preferences, requirements)
-        Output = matched connection + transaction confirmation
-        Core flow = profile creation → matching → messaging → booking → payment
-
-    - Internal tool / data app (analytics, ops dashboards, workflow tools):
-        Input = data import or form submission
-        Output = filtered/aggregated view or report
-        Core flow = ingest → store → query/filter → display → export
-
-    - Education / training (courses, micro-learning, tutoring, assessments):
-        Input = learner profile + topic/skill goal
-        Output = completion record + skill progress + next-step recommendation
-        Core flow = enroll → deliver content → quiz/assess → grade → progress update → recommend next
-
-    - Health / fitness / wellness tracking:
-        Input = user goal + measurement/log entry (workout, meal, vitals, sleep)
-        Output = trend insight + plan adjustment + streak/milestone
-        Core flow = log entry → store → analyze trend → compare to goal → display insight → suggest next action
-
-    - Finance / budgeting / investment tools:
-        Input = account/asset connection or transaction entry
-        Output = categorized view + insight + suggested action
-        Core flow = connect/import → categorize → reconcile → analyze → report → alert
-
-    - Booking / appointment / scheduling apps:
-        Input = service/offering + availability + customer details
-        Output = confirmed booking + reminder + calendar entry
-        Core flow = browse → select slot → enter details → pay/confirm → notify → reminder
-
-    - Community / discussion / Q&A platforms:
-        Input = user post (question, answer, content) + tags
-        Output = ranked feed + reputation + notifications
-        Core flow = post → moderate → tag/index → display ranked → vote/comment → notify
-
-    - Productivity / task / project apps:
-        Input = item to track (task, note, doc, deadline) + assignment
-        Output = updated state visible to the user/team
-        Core flow = create → assign → track state → notify on change → display in views → export/report
-
-    - Subscription / e-commerce / digital storefront:
-        Input = product browse + customer details + payment method
-        Output = order confirmation + delivery/access + receipt
-        Core flow = browse → cart → checkout → pay → fulfil → confirm
-
-  Fallback (use ONLY when the idea genuinely does not fit any reference pattern AND you cannot articulate concrete domain-specific Input / Output / Core flow content):
-
+  Fallback (use ONLY when the context is too thin to articulate concrete Input/Output/Core flow):
     Line 1: One opening sentence ≤ 14 words ending with ":". Names the ONE feature.
     Line 2: blank
     Line 3-5: 2 to 3 bullet lines using "- " (bullets allowed ONLY in fallback). Each bullet ≤ 16 words. ONE concrete piece of the feature per bullet (a data field set, a save flow, a screen, a visible state). NO prose, NO compound sentences with "and... and...".
@@ -335,22 +294,15 @@ Hard rules:
 
     NEVER: markdown headings, numbered lists, dense paragraphs, vague verbs ("manage", "handle", "process").
 
-  Crisp fallback example (DO NOT copy verbatim):
-    "Build the claim entry form:
+  Use the fallback as a last resort, not as a default. If the refined_idea + market_research give you enough signal to articulate specific Input/Output/Core flow, ALWAYS prefer the primary shape. The fallback exists only when forcing the Input/Output/Core flow shape would produce vague slot-fills.
 
-    - Form fields: claimant name, policy number, incident date, description, photo upload.
-    - Save flow: validate fields, store row in claims table, redirect to claim detail page.
-    - One screen, no list view yet."
+  Shape template (DO NOT fill these placeholders with generic words — derive every angle-bracketed value from THIS company's context):
+    "Build the MVP <one-feature noun derived from THIS product's mission>:
 
-  Use the fallback as a last resort, not as a default. If the idea matches any reference pattern even loosely, use the Input/Output/Core flow shape — do not force generic "form → save → display" content into it; pick a smaller, more concrete feature you can describe specifically. The fallback exists for genuinely novel ideas (a niche B2B vertical tool, an AI agent for a specific workflow, a creator-economy primitive) where forcing the Input/Output/Core flow shape would produce vague slot-fills.
-
-  Concrete example of the correct shape (DO NOT copy verbatim — just match the structure and adapt to category):
-    "Build the MVP book generation pipeline:
-
-    Input: user provides a topic/brief (title, genre, target audience, tone)
-    Output: a structured manuscript with chapters, formatted as downloadable PDF
-    Core flow: brief intake form → AI research phase → outline generation → chapter-by-chapter writing → basic editing pass → PDF export
-    Use Express.js + PostgreSQL. Store book projects and generation status in the database."
+    Input: <what THIS product's user provides — pull noun + qualifiers from refined_idea>
+    Output: <what THIS product's user receives — pull from mission's what-we're-building>
+    Core flow: <step in this product's domain> → <step> → <step> → <step> → <step>
+    Use Express.js + PostgreSQL. Store <primary entity for THIS product> in the database."
 
 ★ One-feature self-test before you return JSON:
   - Engineering task title and description must describe exactly ONE user-facing feature.
@@ -369,10 +321,43 @@ Field rules:
 - engineering.reasoning: string, max 260 characters. Explain why this feature proves the core promise.
 - engineering.complexity: integer from 5 to 9.
 - research.title: string, max 72 characters.
-- research.description: string, max 700 characters. Intro sentence + 2-3 bullets describing pieces of the same one research deliverable.
+- research.description: string, max 700 characters. Must follow this EXACT crisp shape — no variations:
+
+    Line 1: Opening sentence stating the research scope (what kind of analysis, how many targets), ending with ":".
+    Line 2: blank
+    Line 3: Comma-separated list of 3-5 specific NAMED targets. Pull these FROM THE PROVIDED CONTEXT — the market_research.competitors array already lists real competitors; otherwise use specific names found in the refined idea or market context. Targets are real company names, real customer segments, real pricing pages, or real communities — never generic labels.
+    Line 4: "For each:" or "Document:" + 4-6 concrete data points to capture per target, comma-separated. Pick fields that make sense for the kind of target (e.g. for SaaS competitors: pricing tiers, key features, positioning, weakness; for service providers: packages, onboarding, platforms served; for customer segments: pain point, current workaround, willingness to pay, decision-maker).
+    Line 5: "Identify <this company's name>'s <gap, differentiation angle, or strategic insight>" — names the strategic question this research answers, in the company's specific positioning language. Use the actual company name from the context, not a placeholder.
+    Line 6 (optional): One short closing sentence describing the deliverable format (e.g. comparison report, positioning recommendation, customer profile doc).
+
+  Hard rules:
+    - Line 3 MUST list 3-5 specific real names DERIVED FROM THE CONTEXT (market_research.competitors, refined_idea references, named entities in the research_context). NEVER use placeholders like "top 5 competitors" or "leading agencies". If the context doesn't surface specific names, instruct what KIND of names to find ("5 directly comparable workflow tools that target small accounting firms") rather than inventing them.
+    - Line 4 MUST be 4-6 concrete data points appropriate to the target type, not vague verbs like "research" or "analyze".
+    - Line 5 MUST use the actual company name from the context and state the gap/angle in the company's specific positioning — derived from the refined idea + market research, not a generic frame.
+    - NEVER use "- " bullet markers, markdown headings, numbered lists, or dense paragraphs.
+    - NEVER write "do market research", "research competitors", "study the space" — must be specific.
+    - Use plain language. No filler like "deep-dive into the landscape", "comprehensive analysis", "thorough understanding".
+
+  Pick the right kind of research target for the company shape (SOFTWARE → competitor SaaS products; SERVICE BUSINESS → competing agencies/consultancies; MARKETPLACE → both market sides; LOCAL → competing local providers; CUSTOMER-VALIDATION → named segments or prospect personas). All target names and fields must come from the provided context, not invented.
 - research.reasoning: string, max 260 characters. Explain why this reduces risk.
 - outreach.title: string, max 72 characters.
-- outreach.description: string, max 700 characters. Intro sentence + 2-3 bullets describing pieces of the same one outreach motion.
+- outreach.description: string, max 700 characters. Must follow this EXACT crisp shape — no variations:
+
+    Line 1: Opening sentence stating the outreach scope (count + audience description), ending with ":". Action-oriented and specific to THIS company's audience. Pull the audience descriptor from refined_idea + market_research, never generic ("potential customers", "early adopters").
+    Line 2: blank
+    Line 3: Where to find them — specific channels appropriate to the audience (e.g. LinkedIn for B2B, Twitter/X for creators and indie founders, niche forums or communities for technical or vertical audiences, local listings for local businesses). Pick channels that match where THIS audience actually is.
+    Line 4: Who specifically to target — concrete qualifying signals (industry + role + behavior, OR profession + experience-level + pain signal, OR business-type + geography + visible problem). Make it specific enough that the agent can recognize a qualified target.
+    Line 5: What to send — short description of the message (e.g. "brief, personalized cold emails introducing <product>'s value prop" or "DM with a one-line value statement and ask one question"). Reference the actual product or angle from mission_doc.
+    Line 6 (optional): The angle, hook, or goal — ONE short sentence. Can be a quoted message angle (e.g. "What if your next book took hours instead of months?"), or a goal statement (e.g. "validate willingness to pay"). Pull from the company's positioning + mission.
+
+  Hard rules:
+    - Count must be small (5-15 contacts) so the campaign fits a 4-hour run.
+    - Audience descriptor MUST come from refined_idea + market_research — never generic "early users" or "potential customers".
+    - Channels MUST match where this specific audience lives (don't default to "LinkedIn" if the audience is on Twitter/forums/local listings).
+    - Targeting criteria MUST include concrete qualifying signals, not vague "interested founders" or "active users".
+    - The hook/angle line MUST be specific to THIS company's positioning — if quoted, it should be a real one-line value statement the founder could actually send.
+    - NEVER use "- " bullet markers, markdown headings, numbered lists, or dense paragraphs.
+    - Use plain language. No filler ("comprehensive outreach campaign", "robust pipeline", "strategic engagement").
 - outreach.reasoning: string, max 260 characters. Explain why this gets useful signal.`;
 
   await emitActivity(ctx, 'Generating 3 starter tasks', 'llm');
