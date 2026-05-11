@@ -585,10 +585,11 @@ function applyTaskShapeLineBreaks(s: string): string {
   out = out.replace(/\s+Document:\s+/g, '\nDocument: ');
   out = out.replace(/([.!?])\s+Identify\s+/g, '$1\nIdentify ');
 
-  // Outreach shape: opening: \n\n Find / Identify them on... \n Target ... \n Send ... \n Goal/angle
-  // The outreach format uses informal labels (no fixed prefix), so the
-  // LLM's own newlines (if any) are preserved by the per-line normalize.
-  // We don't force-split outreach because it doesn't have explicit labels.
+  // Outreach shape: opening line ending with ":" then 3-5 sentences each
+  // starting with a verb (Find / Identify / Target / Send / Focus / Goal /
+  // Reach / Search / Track). The LLM doesn't emit labels for this shape,
+  // so split on those verb-starts when they follow a period or colon.
+  out = out.replace(/([.!?:])\s+(Find|Identify|Target|Send|Focus|Goal|Reach|Search|Track)\b/g, '$1\n$2');
 
   return out;
 }

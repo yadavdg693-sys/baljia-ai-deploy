@@ -14,6 +14,7 @@ function applyTaskShapeLineBreaks(s: string): string {
   out = out.replace(/\s+For each:\s+/g, '\nFor each: ');
   out = out.replace(/\s+Document:\s+/g, '\nDocument: ');
   out = out.replace(/([.!?])\s+Identify\s+/g, '$1\nIdentify ');
+  out = out.replace(/([.!?:])\s+(Find|Identify|Target|Send|Focus|Goal|Reach|Search|Track)\b/g, '$1\n$2');
   return out;
 }
 
