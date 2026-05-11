@@ -315,9 +315,11 @@ Rules:
     where_were_headed: stripInlineMarkdown(compactParagraphs(artifacts.mission_doc.where_were_headed, 1, 620, 4)),
   };
   ctx.mission = ctx.missionDoc.mission;
+  // Use the FULL first sentence as the one-liner. The first sentence is
+  // already bounded by its period — capping at 18 words produced mid-clause
+  // fragments like "...answers covering" that read as broken UI.
   const firstMissionSentence = ctx.missionDoc.what_were_building.split(/[.!?]/)[0].trim();
-  const words = firstMissionSentence.split(/\s+/).filter(Boolean);
-  ctx.oneLiner = stripInlineMarkdown(words.slice(0, Math.min(words.length, 18)).join(' '));
+  ctx.oneLiner = stripInlineMarkdown(firstMissionSentence);
 
   await emitActivity(ctx, `Refined: "${ctx.refinedIdea.refined_idea.slice(0, 100)}"`, 'llm');
   await appendMemorySection(ctx.companyId, '## Idea (Refined)', [

@@ -71,7 +71,12 @@ const CONFIGS: Record<OnboardingJourney, JourneyConfig> = {
   },
   build_my_idea: {
     email: 'e2e-build@baljia.test',
-    input: 'A scheduling tool for solo dental clinics that auto-confirms appointments by SMS and reschedules no-shows.',
+    // Reuses the exact founder input from the EquityMind audit — to verify
+    // the "clone-intent" prompt fix: the refined_idea should preserve all
+    // 5 multibagg feature categories, NOT pre-decide a differentiation
+    // angle ("serve markets X doesn't cover", "better than X", etc.).
+    input: process.env.BALJIA_E2E_BUILD_INPUT
+      || 'I want to build platfom like https://www.multibagg.ai/. What you can do on the Multibagg AI platform\nAsk questions like an analyst and get structured answers on companies, sectors, results, valuations, risks, and key drivers. This saves you time versus reading multiple long reports and news links yourself.\nTrack market context (indices, sector moves, macro events) and understand what changed and why it matters, instead of only seeing price moves.\nCompany deep-dives such as business model, revenue mix, margin drivers, balance-sheet strength, cash flows, and peer comparisons—so you can judge quality and sustainability.\nEarnings/results understanding where the platform helps you interpret quarterly performance, management commentary themes, and what to watch next.\nPortfolio-style thinking by helping you evaluate concentration risk, diversification, and how different holdings may behave across market cycles.',
     ip: '103.99.0.1',
     timezone: 'Asia/Kolkata',
   },
@@ -177,7 +182,7 @@ async function dumpAndCheck(companyId: string, journey: OnboardingJourney): Prom
   ]);
 
   console.log(`\n────── DB state for ${journey} (${companyId}) ──────`);
-  console.log(`  Company: name="${c?.name}" slug="${c?.slug}" status=${c?.onboarding_status} subdomain=${c?.subdomain ?? '-'} stage=${c?.company_stage}`);
+  console.log(`  Company: name="${c?.name}" slug="${c?.slug}" status=${c?.onboarding_status} subdomain=${c?.subdomain ?? '-'}`);
   console.log(`  one_liner: ${c?.one_liner ?? '-'}`);
   console.log(`  Tasks (${taskRows.length}):`);
   for (const t of taskRows) console.log(`    - [${t.status}] ${t.title} (tag=${t.tag}, agent=${t.agent_id ?? '-'})`);
