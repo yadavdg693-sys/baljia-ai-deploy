@@ -2,6 +2,7 @@
 import { db, documents, documentSuggestions } from '@/lib/db';
 import { eq, and, asc, sql } from 'drizzle-orm';
 import { sanitizeForFounder } from '@/lib/founder-safety/sanitize';
+import { stripLlmArtifacts } from '@/lib/text/llm-artifacts';
 import type { Document, DocumentSuggestion } from '@/types';
 
 export async function getDocuments(companyId: string): Promise<Document[]> {
@@ -53,10 +54,19 @@ export async function updateDocument(documentId: string, content: string): Promi
     context: { callsite: 'documentService.updateDocument', documentId },
   });
 
+  // Defense in depth: documents are rendered as markdown (mission, market
+  // research), so **bold**, *italic*, headings, and lists must survive —
+  // they're intentional formatting. Only em/en-dashes (always an AI tell)
+  // get stripped here.
+  const cleaned = stripLlmArtifacts(content, {
+    keepLineStructure: true,
+    preserveMarkdown: true,
+  });
+
   const [doc] = await db.update(documents)
     .set({
-      content,
-      is_empty: content.trim().length === 0,
+      content: cleaned,
+      is_empty: cleaned.trim().length === 0,
       version: sql`${documents.version} + 1`,
       updated_at: new Date(),
     })

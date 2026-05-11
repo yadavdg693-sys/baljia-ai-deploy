@@ -14,67 +14,9 @@ export function collapseSpaces(value: string | undefined | null): string {
   return (value ?? '').replace(/\s+/g, ' ').trim();
 }
 
-/**
- * Strip LLM-generated inline markdown artifacts so they don't render as
- * literal `**` / `*` / `_` / ` - ` characters in plain-text contexts.
- *
- * Removes: **bold**, *italic*, _italic_, `code`, ~~strike~~, headings,
- * leading list markers (default), and leftover "Lead. - Detail" separators.
- *
- * @param opts.keepLineStructure - when true, preserves leading `- ` / `* `
- *   bullets and numbered list markers. Use this for content that flows into
- *   a markdown renderer that will turn those markers into proper <ul>/<ol>.
- */
-export function stripInlineMarkdown(
-  value: string | undefined | null,
-  opts: { keepLineStructure?: boolean } = {},
-): string {
-  if (!value) return '';
-  let s = String(value);
-
-  // Bold/italic/strike: remove the markers but keep the text inside.
-  s = s.replace(/\*\*([^*\n]+?)\*\*/g, '$1');     // **bold**
-  s = s.replace(/(?<!\w)\*([^*\n]+?)\*(?!\w)/g, '$1'); // *italic* (avoid touching e.g. "1.5*x")
-  s = s.replace(/(?<!\w)_([^_\n]+?)_(?!\w)/g, '$1');   // _italic_
-  s = s.replace(/~~([^~\n]+?)~~/g, '$1');         // ~~strike~~
-  s = s.replace(/`([^`\n]+?)`/g, '$1');           // `code`
-  // Stray double-asterisk pairs that wrapped content with a space inside
-  // (LLMs sometimes emit `** lead. ** - bullet`).
-  s = s.replace(/\*\*\s*([^*\n]+?)\s*\*\*/g, '$1');
-
-  if (!opts.keepLineStructure) {
-    // Strip line-structure markers — content goes to plain text.
-    s = s.replace(/(^|\n)\s*[-*+]\s+/g, '$1');
-    s = s.replace(/(^|\n)\s*\d+[.)]\s+/g, '$1');
-    s = s.replace(/(^|\n)#{1,6}\s+/g, '$1');
-  }
-
-  // Clean leftover "lead — detail" separators after sentence-ending
-  // punctuation (artifact of stripped bold markers).
-  s = s.replace(/([.!?])[ \t]+[-–—][ \t]+/g, '$1 ');
-
-  // Strip em-dashes / en-dashes globally — they're a strong AI tell and
-  // the LLM uses them frequently in stylistic positions. Replace with a
-  // comma so prose still reads correctly.
-  //   word—word     → word, word         (no-space em-dash between words)
-  //   word — word   → word, word         (spaced em-dash mid-sentence)
-  //   word– word    → word, word         (en-dash, both shapes)
-  // NOTE: regular hyphens "-" are intentionally preserved because they
-  // appear in compound words ("no-show", "Asia-Pacific") and ranges
-  // ("5-10"). Only em-dash (—) and en-dash (–) get this treatment.
-  s = s.replace(/[ \t]*[—–][ \t]*/g, ', ');
-
-  if (!opts.keepLineStructure) {
-    // Strip a leading dash separator at the start of the string (covers
-    // "- Detail" lines that were demoted from bold-led bullets).
-    s = s.replace(/^\s*[-–—]\s+/, '');
-    s = s.replace(/\s+[-–—]\s*$/, ''); // trailing dash artifact
-    return s.replace(/\s+/g, ' ').trim();
-  }
-
-  // Preserve newlines (line structure) but collapse intra-line whitespace.
-  return s.split('\n').map((line) => line.replace(/[ \t]+/g, ' ').trim()).join('\n').trim();
-}
+// stripInlineMarkdown moved to `@/lib/text/llm-artifacts` as `stripLlmArtifacts`.
+// Re-exported here under the old name for back-compat with existing imports.
+export { stripLlmArtifacts as stripInlineMarkdown } from '@/lib/text/llm-artifacts';
 
 /**
  * Whitespace-only normalization. No char or sentence truncation — the LLM

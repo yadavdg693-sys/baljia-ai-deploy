@@ -13,9 +13,15 @@ import {
 } from './founder-doc-style';
 
 // Helpers to clean LLM artifacts before the renderer outputs them.
-const stripPlain = (s: string | undefined | null): string => stripInlineMarkdown(s);
+//
+// Market research is rendered as MARKDOWN (the dashboard's MarkdownBody
+// turns `**bold**` into <strong> etc). So we preserve markdown structure
+// (bold, italic, headings, bullets) and only strip em/en-dashes — the AI
+// tell that always reads as machine-written prose.
+const stripPlain = (s: string | undefined | null): string =>
+  stripInlineMarkdown(s, { preserveMarkdown: true });
 const stripStructured = (s: string | undefined | null): string =>
-  stripInlineMarkdown(s, { keepLineStructure: true });
+  stripInlineMarkdown(s, { keepLineStructure: true, preserveMarkdown: true });
 import type {
   BuildMarketResearch,
   GrowMarketResearch,
@@ -31,10 +37,14 @@ function renderTaggedStat(t: TaggedStat): string {
 }
 
 function renderPriority(item: string): string {
+  // Detect the "lead — detail" / "lead: detail" structural pattern BEFORE
+  // stripping em-dashes (otherwise the strip turns the em-dash into a comma
+  // and the bold-lead formatting is lost). Then strip artifacts from each
+  // part so the comma-replacement still catches em-dashes inside lead/detail.
   const cleaned = item.trim().replace(/\*\*/g, '');
   const match = cleaned.match(/^(.{2,80}?)(?:\s+[-–—]\s+|:\s+)(.+)$/);
-  if (!match) return compactLine(cleaned, 190, 2);
-  return `**${compactLine(match[1], 72, 1)}** - ${compactLine(match[2], 170, 2)}`;
+  if (!match) return compactLine(stripPlain(cleaned), 190, 2);
+  return `**${compactLine(stripPlain(match[1]), 72, 1)}** - ${compactLine(stripPlain(match[2]), 170, 2)}`;
 }
 
 function pushNumberedList(lines: string[], items: string[]): void {
@@ -115,7 +125,7 @@ export function renderBuildMarkdown(data: BuildMarketResearch, companyName: stri
   lines.push('');
   lines.push('## First Priorities');
   lines.push('');
-  pushNumberedList(lines, data.first_priorities.map(stripPlain));
+  pushNumberedList(lines, data.first_priorities);
   return lines.join('\n');
 }
 
@@ -197,14 +207,14 @@ export function renderGrowMarkdown(data: GrowMarketResearch, companyName: string
   lines.push('## AI Leverage Points');
   lines.push('');
   if (data.ai_leverage_points.length > 0) {
-    pushNumberedList(lines, data.ai_leverage_points.slice(0, 3).map(stripPlain));
+    pushNumberedList(lines, data.ai_leverage_points.slice(0, 3));
   } else {
     lines.push('1. No clear AI leverage point surfaced from the website or research.');
   }
   lines.push('');
   lines.push('## First Priorities');
   lines.push('');
-  pushNumberedList(lines, data.first_priorities.map(stripPlain));
+  pushNumberedList(lines, data.first_priorities);
   return lines.join('\n');
 }
 

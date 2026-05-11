@@ -2,6 +2,7 @@
 import { db, tasks } from '@/lib/db';
 import { eq, and, asc, desc, sql } from 'drizzle-orm';
 import { sanitizeForFounder } from '@/lib/founder-safety/sanitize';
+import { stripLlmArtifacts } from '@/lib/text/llm-artifacts';
 import type { Task, TaskSource, ExecutionMode, VerificationLevel } from '@/types';
 
 interface CreateTaskInput {
@@ -49,21 +50,27 @@ export async function createTask(input: CreateTaskInput): Promise<Task> {
   // — any match is almost certainly a real implementation leak (e.g. "build
   // the product using our Neon DB" instead of "build the product"). Log +
   // redact keeps the leak off the founder's screen while we fix the source.
-  const safeTitle = sanitizeForFounder(input.title, {
+  //
+  // Defense in depth: strip LLM artifacts (**bold**, em-dashes, etc.) AFTER
+  // sanitizeForFounder. Most task writes are LLM-sourced (onboarding starter
+  // tasks, CEO-proposed tasks, night-shift tasks, recurring tasks). Even
+  // founder-typed tasks rarely contain genuine markdown — copy-paste from
+  // ChatGPT does. The strip is safe to apply unconditionally here.
+  const safeTitle = stripLlmArtifacts(sanitizeForFounder(input.title, {
     mode: 'soft',
     context: { callsite: 'createTask.title', companyId: input.company_id, source: input.source ?? null },
-  }).clean;
+  }).clean);
   const safeDescription = input.description
-    ? sanitizeForFounder(input.description, {
+    ? stripLlmArtifacts(sanitizeForFounder(input.description, {
         mode: 'soft',
         context: { callsite: 'createTask.description', companyId: input.company_id, source: input.source ?? null },
-      }).clean
+      }).clean, { keepLineStructure: true })
     : null;
   const safeReasoning = input.suggestion_reasoning
-    ? sanitizeForFounder(input.suggestion_reasoning, {
+    ? stripLlmArtifacts(sanitizeForFounder(input.suggestion_reasoning, {
         mode: 'soft',
         context: { callsite: 'createTask.suggestion_reasoning', companyId: input.company_id, source: input.source ?? null },
-      }).clean
+      }).clean)
     : null;
 
   const result = await db.execute(sql`
@@ -134,6 +141,15 @@ export async function updateTask(taskId: string, updates: UpdateTaskFields): Pro
   if (typeof drizzleUpdates.started_at === 'string') drizzleUpdates.started_at = new Date(drizzleUpdates.started_at);
   if (typeof drizzleUpdates.completed_at === 'string') drizzleUpdates.completed_at = new Date(drizzleUpdates.completed_at);
 
+  // Defense in depth: same artifact-strip as createTask. Edits via CEO
+  // edit_task tool come in here too.
+  if (typeof drizzleUpdates.title === 'string') {
+    drizzleUpdates.title = stripLlmArtifacts(drizzleUpdates.title as string);
+  }
+  if (typeof drizzleUpdates.description === 'string') {
+    drizzleUpdates.description = stripLlmArtifacts(drizzleUpdates.description as string, { keepLineStructure: true });
+  }
+
   const [task] = await db.update(tasks)
     .set(drizzleUpdates as typeof tasks.$inferInsert)
     .where(eq(tasks.id, taskId))
@@ -172,7 +188,15 @@ export async function retryTask(taskId: string): Promise<Task> {
     throw new Error(`Cannot retry task in "${task.status}" status`);
   }
 
-  return updateTask(taskId, { status: 'todo' });
+  return updateTask(taskId, {
+    status: 'todo',
+    failure_class: null,
+    started_at: null,
+    completed_at: null,
+    turn_count: 0,
+    actual_credits_charged: 0,
+    repair_attempt_count: (task.repair_attempt_count ?? 0) + 1,
+  });
 }
 
 /**
