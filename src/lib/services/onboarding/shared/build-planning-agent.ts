@@ -211,9 +211,9 @@ ${rawResearch}
 
 How to think:
 - Start from the founder's actual idea, not from a generic category.
-- If the founder references an existing company, product, website, or phrase like "something like X", treat it as a clue for the intended problem, audience, workflow, tone, or business model.
-- Clarify the idea without changing its core direction.
-- Use research context to identify the market, competitors, demand signals, and positioning gap.
+- ★ "Build like X" defaults to CLONE intent, not differentiated-competitor intent. When the founder references an existing company, product, or website (e.g. "I want to build something like X", "platform like multibagg.ai"), the default refinement is to PRESERVE THE SAME PRODUCT — same audience, same value prop, same feature set as X. Do NOT pre-decide a differentiation angle ("serve the markets X doesn't cover", "better than X at Y", "X-style but for a different region") unless the founder's input explicitly asks for it. If they paste features or capabilities from X, those are the features they want — keep them in the refined_idea verbatim in spirit. Use research and market_positioning sections to surface the competitive landscape — but the refined_idea itself stays close to what they asked for.
+- Clarify the idea without changing its core direction or pre-introducing competitive differentiation.
+- Use research context to identify the market, competitors, demand signals, and positioning gap. Reference companies (the "like X" target) belong in the competitor table.
 - Use founder context only when it is actually available and relevant.
 - Do not invent founder background, traction, market numbers, competitors, pricing, or customer behavior.
 - If evidence is weak, write carefully instead of pretending certainty.
