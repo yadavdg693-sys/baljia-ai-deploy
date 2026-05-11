@@ -501,11 +501,14 @@ export async function persistStarterTasks(
   validateTask(result.outreach, 'outreach');
 
   const starterAuthReason = `Day-0 onboarding (auto-authorized at ${new Date().toISOString()})`;
+  // Strip every LLM artifact (em/en-dashes, **bold**, *italic*, leftover
+  // separators) from title + description + reasoning BEFORE writing to the
+  // DB. The renderer cannot un-pollute persisted text.
   await Promise.all([
     taskService.createTask({
       company_id: ctx.companyId,
-      title: result.engineering.title,
-      description: result.engineering.description,
+      title: normalizeTaskTitle(result.engineering.title),
+      description: normalizeTaskDescription(result.engineering.description),
       tag: 'engineering',
       source: 'onboarding',
       status: 'todo',
@@ -514,14 +517,14 @@ export async function persistStarterTasks(
       complexity: clampComplexity(result.engineering.complexity ?? 6),
       estimated_hours: '4',
       estimated_credits: 1,
-      suggestion_reasoning: result.engineering.reasoning || ENGINEERING_FALLBACK_REASONING,
+      suggestion_reasoning: stripInlineMarkdown(result.engineering.reasoning || ENGINEERING_FALLBACK_REASONING),
       authorized_by: 'system',
       authorization_reason: starterAuthReason,
     }),
     taskService.createTask({
       company_id: ctx.companyId,
-      title: result.research.title,
-      description: result.research.description,
+      title: normalizeTaskTitle(result.research.title),
+      description: normalizeTaskDescription(result.research.description),
       tag: 'research',
       source: 'onboarding',
       status: 'todo',
@@ -530,14 +533,14 @@ export async function persistStarterTasks(
       complexity: 3,
       estimated_hours: '4',
       estimated_credits: 1,
-      suggestion_reasoning: result.research.reasoning || RESEARCH_FALLBACK_REASONING,
+      suggestion_reasoning: stripInlineMarkdown(result.research.reasoning || RESEARCH_FALLBACK_REASONING),
       authorized_by: 'system',
       authorization_reason: starterAuthReason,
     }),
     taskService.createTask({
       company_id: ctx.companyId,
-      title: result.outreach.title,
-      description: result.outreach.description,
+      title: normalizeTaskTitle(result.outreach.title),
+      description: normalizeTaskDescription(result.outreach.description),
       tag: 'outreach',
       source: 'onboarding',
       status: 'todo',
@@ -546,7 +549,7 @@ export async function persistStarterTasks(
       complexity: 4,
       estimated_hours: '4',
       estimated_credits: 1,
-      suggestion_reasoning: result.outreach.reasoning || OUTREACH_FALLBACK_REASONING,
+      suggestion_reasoning: stripInlineMarkdown(result.outreach.reasoning || OUTREACH_FALLBACK_REASONING),
       authorized_by: 'system',
       authorization_reason: starterAuthReason,
     }),

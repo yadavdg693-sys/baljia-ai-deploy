@@ -51,6 +51,7 @@ import { provisionWildcardSubdomain } from '@/lib/services/domain.service';
 import { callSmallLLM } from '../llm/small-llm';
 import { callSmallLLMJson } from './json-mode';
 import { LandingContentSchema } from './schemas';
+import { stripInlineMarkdown } from './founder-doc-style';
 import { emitActivity } from '../stage-runner';
 import {
   resolveDesignTokens,
@@ -99,13 +100,26 @@ interface MarketFacts {
   competitors: Array<{ name: string; gap: string }>;
   demandSignals: string[];
   marketStats: string[];
-  dataGaps: string[];
   topCompetitor: string | null;
+}
+
+function extractMarkdownBullets(value: unknown): string[] {
+  if (typeof value !== 'string') return [];
+  return value
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => /^[-*]\s+/.test(line) || /^\d+\.\s+/.test(line))
+    .map((line) => line.replace(/^[-*]\s+/, '').replace(/^\d+\.\s+/, '').trim())
+    .filter(Boolean);
+}
+
+function looksLikeStat(value: string): boolean {
+  return /(?:\d|%|\$|rs\.?|inr|million|billion|trillion|crore|lakh|projected|spend|market|growth)/i.test(value);
 }
 
 function extractMarketFacts(mr: MarketResearchResult | undefined): MarketFacts {
   if (!mr) {
-    return { competitors: [], demandSignals: [], marketStats: [], dataGaps: [], topCompetitor: null };
+    return { competitors: [], demandSignals: [], marketStats: [], topCompetitor: null };
   }
   const anyMr = mr as unknown as Record<string, unknown>;
   const rawCompetitors = Array.isArray(anyMr.competitors) ? anyMr.competitors as Array<Record<string, unknown>> : [];
@@ -116,19 +130,22 @@ function extractMarketFacts(mr: MarketResearchResult | undefined): MarketFacts {
 
   const topCompetitor = competitors[0]?.name ?? null;
 
-  const demandRaw = (anyMr.demand_signals ?? (anyMr.market_validation as Record<string, unknown> | undefined)?.demand_signals) as string[] | undefined;
-  const whyNowRaw = (anyMr.market_validation as Record<string, unknown> | undefined)?.why_now as string[] | undefined;
-  const demandSignals = [...(demandRaw ?? []), ...(whyNowRaw ?? [])].slice(0, 4);
+  const marketValidation = anyMr.market_validation;
+  const demandRaw = (anyMr.demand_signals ?? (marketValidation as Record<string, unknown> | undefined)?.demand_signals) as string[] | undefined;
+  const whyNowRaw = (marketValidation as Record<string, unknown> | undefined)?.why_now as string[] | undefined;
+  const validationBullets = extractMarkdownBullets(marketValidation);
+  const demandSignals = [...(demandRaw ?? []), ...(whyNowRaw ?? []), ...validationBullets].slice(0, 4);
 
-  const sizeRaw = (anyMr.market_size ?? (anyMr.market_validation as Record<string, unknown> | undefined)?.size_and_growth) as Array<Record<string, unknown> | string> | undefined;
-  const marketStats = (sizeRaw ?? []).slice(0, 3).map((s) => {
-    if (typeof s === 'string') return s;
-    return String(s.stat ?? '');
-  }).filter(Boolean);
+  const sizeRaw = (anyMr.market_size ?? (marketValidation as Record<string, unknown> | undefined)?.size_and_growth) as Array<Record<string, unknown> | string> | undefined;
+  const marketStats = [
+    ...(sizeRaw ?? []).map((s) => {
+      if (typeof s === 'string') return s;
+      return String(s.stat ?? '');
+    }),
+    ...validationBullets.filter(looksLikeStat),
+  ].filter(Boolean).slice(0, 3);
 
-  const dataGaps = Array.isArray(anyMr.data_gaps) ? (anyMr.data_gaps as string[]).slice(0, 3) : [];
-
-  return { competitors, demandSignals, marketStats, dataGaps, topCompetitor };
+  return { competitors, demandSignals, marketStats, topCompetitor };
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -502,7 +519,7 @@ ${country ? `- Founder country: ${country} (provenance signal only — see GEOGR
 
 GEOGRAPHY (strict — distinguish provenance from market scope)
 ${country
-    ? `- Country "${country}" may appear EXACTLY ONCE in closing.body OR brand.tagline as a PROVENANCE signal. Examples: "Built in ${country}", "Made in ${country}". Optional — omit if it doesn't fit.
+    ? `- Country "${country}" may appear EXACTLY ONCE in closing.body OR brand.tagline as a provenance signal. Optional - omit if it does not fit.
 - NEVER use the country in hero, what_it_does, how_it_works, what_makes_different. Product is GLOBAL.
 - BANNED: "${country}'s leading X", "for ${country} businesses", "Built specifically for ${country}".`
     : '- Founder country unknown. Do NOT mention any country, city, or region.'}
@@ -514,8 +531,6 @@ ${competitorBlock}
 ${demandBlock}
 
 ${statsBlock}
-${facts.dataGaps.length ? `\nKnown gaps in the research (be honest, don't pretend we have the data):\n${facts.dataGaps.map((g) => `  - ${g}`).join('\n')}` : ''}
-
 ${antiBlock}
 
 WHAT YOU DO NOT HAVE (DO NOT FABRICATE — each violation is a hard failure)
@@ -525,45 +540,31 @@ WHAT YOU DO NOT HAVE (DO NOT FABRICATE — each violation is a hard failure)
 - Real product screenshots, photos, before/after images
 - Pricing numbers, launch date, funding amount
 
-The page is CREDIBLY PRE-LAUNCH. Gaps don't need placeholders.
+The page is CREDIBLY PRE-LAUNCH. Omit unavailable proof instead of filling gaps.
 
 This page is INFORMATIONAL only — NO call-to-action button, NO email capture, NO waitlist.
 
-OUTPUT — return a JSON object with EXACTLY this 7-section shape:
-{
-  "brand": {
-    "name": "${ctx.companyName}",
-    "tagline": "<6-10 words. A single punchy descriptor of what the company is. Not a feature list.>"
-  },
-  "hero": {
-    "headline": "<≤8 words. From mission.mission. Specific, concrete. NO 'never sleeps', 'runs itself', 'while you sleep', NO 'modern', 'streamlined', 'innovative', 'intelligent', 'next-generation', 'transform', 'empower', 'leverage', 'accelerate'.>",
-    "subhead": "<2 sentences, 20-35 words. Sentence 1 = what this is + who for. Sentence 2 = the core reason it matters. DO NOT use the shape '[Product] is an AI [agent] that [verb1], [verb2], and [verb3]'.>"
-  },
-  "what_it_does": {
-    "heading": "What it does",
-    "capabilities": [
-      { "title": "<3-4 words>", "description": "<1-2 sentences, concrete capability not vague benefit>" }
-    ]
-  },
-  "how_it_works": {
-    "heading": "How it works",
-    "steps": [
-      { "number": 1, "title": "<3-5 words>", "description": "<1 sentence, concrete action>" },
-      { "number": 2, "title": "...", "description": "..." },
-      { "number": 3, "title": "...", "description": "..." }
-    ]
-  },
-  "what_makes_different": {
-    "heading": "What makes this different",
-    "points": [
-      "<1 line. Reference a specific competitor gap from the research, or a positioning choice from the idea. Avoid generic 'better UX' claims.>"
-    ]
-  },
-  "closing": {
-    "headline": "<1 aspirational sentence. Derive from mission.where_were_headed — but tighten. No grandiose 'revolutionize' language.>",
-    "body": "<1-2 sentences. Standalone closing thought — do NOT reference a CTA, sign-up, waitlist, or 'join us'.>"
-  }
-}
+OUTPUT - return one JSON object with exactly these top-level keys:
+- brand
+- hero
+- what_it_does
+- how_it_works
+- what_makes_different
+- closing
+
+Field rules:
+- brand.name: string. Must exactly match "${ctx.companyName}".
+- brand.tagline: string, 6-10 words. A single punchy descriptor of what the company is; not a feature list.
+- hero.headline: string, 8 words or fewer. Derive from mission.mission. Specific and concrete. Do not use sleep/runs-itself phrasing or generic AI/startup phrasing.
+- hero.subhead: string, 2 sentences, 20-35 words total. Sentence 1 says what this is and who it is for. Sentence 2 says why it matters. Do not use a three-verb AI-agent formula.
+- what_it_does.heading: string. Must be "What it does" or a short variant with 4 words or fewer.
+- what_it_does.capabilities: array with exactly 3 objects. Each object needs title and description strings. Title is 3-4 words. Description is 1-2 sentences and must describe a concrete capability.
+- how_it_works.heading: string. Must be "How it works" or a short variant.
+- how_it_works.steps: array with exactly 3 objects. Each object needs number, title, and description. Number must be 1, 2, then 3. Title is 3-5 words. Description is one concrete action sentence.
+- what_makes_different.heading: string. Must be "What makes this different" or a short variant.
+- what_makes_different.points: array with exactly 3 strings. Each string is one line grounded in a competitor gap, market fact, or positioning choice.
+- closing.headline: string. One aspirational but grounded sentence derived from mission.where_were_headed.
+- closing.body: string. 1-2 standalone sentences. Do not reference a CTA, sign-up, waitlist, or "join us".
 
 what_it_does.capabilities MUST have exactly 3 items.
 what_it_does.heading MUST be "What it does" (or a short variant ≤4 words).
@@ -580,6 +581,135 @@ HARD RULES (violations fail the generation)
 // ──────────────────────────────────────────────────────────────────────────
 // AI-feel hero validator — cheap one-shot screen for hollow phrasing
 // ──────────────────────────────────────────────────────────────────────────
+
+function buildGrowLandingPrompt(ctx: PipelineContext, facts: MarketFacts, industryRow: { name: string; considerations: string }, antiPatterns: string[]): string {
+  const profile = ctx.businessProfile;
+  const md = ctx.missionDoc;
+  const mission = md?.mission ?? ctx.mission ?? '';
+  const whatWereBuilding = md?.what_were_building ?? '';
+  const whereWereHeaded = md?.where_were_headed ?? '';
+  const mr = ctx.marketResearchJson as Record<string, unknown> | undefined;
+
+  const validation = profile?.existing_validation || (mr?.notable_validation as string | undefined) || null;
+  const advantages = Array.isArray(mr?.competitive_advantages) ? mr.competitive_advantages as string[] : [];
+  const gaps = Array.isArray(mr?.gaps_to_exploit) ? mr.gaps_to_exploit as string[] : [];
+  const aiLevers = Array.isArray(mr?.ai_leverage_points) ? mr.ai_leverage_points as string[] : [];
+  const competitorBlock = facts.competitors.length
+    ? `Named competitors or alternatives from research:
+${facts.competitors.map((c) => `  - ${c.name}: gap - ${c.gap}`).join('\n')}`
+    : 'No named competitors surfaced in market research. Use category positioning, not invented competitors.';
+
+  const marketStatsBlock = facts.marketStats.length
+    ? `Market stats you may reference if useful (do not invent new numbers):
+${facts.marketStats.map((s) => `  - ${s}`).join('\n')}`
+    : 'No market stats available. Do not invent numbers.';
+
+  const advantagesBlock = advantages.length
+    ? `Business advantages to use:
+${advantages.slice(0, 5).map((a) => `  - ${a}`).join('\n')}`
+    : 'No explicit advantages available. Infer carefully only from the website and research.';
+
+  const gapsBlock = gaps.length
+    ? `Growth gaps/opportunities to reflect:
+${gaps.slice(0, 5).map((g) => `  - ${g}`).join('\n')}`
+    : 'No explicit growth gaps available.';
+
+  const aiBlock = aiLevers.length
+    ? `AI/automation levers to mention only if they fit the business:
+${aiLevers.slice(0, 4).map((p) => `  - ${p}`).join('\n')}`
+    : '';
+
+  const antiBlock = antiPatterns.length
+    ? `INDUSTRY ANTI-PATTERNS (do NOT echo these vibes in your copy):
+${antiPatterns.map((a) => `  - ${a}`).join('\n')}`
+    : '';
+
+  return `You are generating a public growth landing page for ${ctx.companyName}, an EXISTING business.
+
+This is not a new startup launch page. It should feel like a sharper public website or focused offer page for the current business.
+
+INDUSTRY CLASSIFICATION (assigned by the system, not for you to override): ${industryRow.name}
+Industry-specific considerations: ${industryRow.considerations}
+
+SOURCE OF TRUTH - EXISTING BUSINESS
+- Business name: ${profile?.business_name ?? ctx.companyName}
+- Submitted URL: ${ctx.input ?? '(none)'}
+- Description: ${profile?.description ?? '(unavailable)'}
+- Revenue model: ${profile?.revenue_model ?? 'unclear'}
+- Target customer: ${profile?.target_customer ?? 'unclear'}
+- Business type: ${profile?.business_type ?? 'unclear'}
+- Services/products: ${(profile?.services_or_products ?? []).join(', ') || 'unclear'}
+- Location/market: ${profile?.location_or_market ?? 'unclear'}
+- Visible offer: ${profile?.visible_offer ?? 'unclear'}
+- Main CTA: ${profile?.main_cta ?? 'unclear'}
+- Visible validation: ${validation ?? 'none visible'}
+- Proof signals: ${(profile?.proof_signals ?? []).join(', ') || 'none visible'}
+- Website title: ${profile?.extracted_metadata.title ?? '(none)'}
+- Website meta: ${profile?.extracted_metadata.meta ?? '(none)'}
+- Website excerpt: ${(profile?.extracted_metadata.body ?? '').slice(0, 1400) || '(none)'}
+
+MISSION CONTEXT
+- Mission: ${mission}
+${whatWereBuilding ? `- What we're building / providing: ${whatWereBuilding}` : ''}
+${whereWereHeaded ? `- Where we're headed: ${whereWereHeaded}` : ''}
+- Company one-liner: ${ctx.oneLiner}
+
+MARKET CONTEXT
+${competitorBlock}
+
+${marketStatsBlock}
+
+${advantagesBlock}
+
+${gapsBlock}
+
+${aiBlock}
+${antiBlock}
+
+HOW THIS PAGE SHOULD THINK
+- Preserve the existing company identity. Do not rename it or turn it into an "OS", "AI platform", or new SaaS unless the website clearly says that.
+- Write for a real prospect who could buy from this business now.
+- Use the actual services/products and audience from the website.
+- If this is a service business, the page should sell the service offer: outcomes, core services, client process, proof, and why choose them.
+- If this is a product business, the page should explain the product workflow, outcome, proof, and buyer fit.
+- It may mention the business's real local market only if the website/research supports it. Do not use founder location as market scope.
+- Do not make it pre-launch. Do not say early access, waitlist, built by Baljia, or no sign-up required.
+- Do not invent testimonials, reviews, logos, addresses, phone numbers, prices, awards, clients, or guarantees.
+- Verified validation can be used carefully when it appears above.
+
+OUTPUT - return one JSON object with exactly these top-level keys:
+- brand
+- hero
+- what_it_does
+- how_it_works
+- what_makes_different
+- closing
+
+Field rules:
+- brand.name: string. Must exactly match "${ctx.companyName}".
+- brand.tagline: string, 6-10 words. Service or product positioning for the existing business.
+- hero.headline: string, 8-10 words. A concrete buyer outcome or promise grounded in mission and business profile; no generic AI/startup phrasing.
+- hero.subhead: string, 2 sentences, 24-40 words total. Sentence 1 says what this business does and for whom. Sentence 2 says why buyers should trust or pay attention.
+- what_it_does.heading: string. Short heading appropriate to the business services or product.
+- what_it_does.capabilities: array with exactly 3 objects. Each object needs title and description strings. Title is 3-5 words. Description is 1-2 concrete sentences about a real service or product capability.
+- how_it_works.heading: string. Short heading describing how clients or users work with the business.
+- how_it_works.steps: array with exactly 3 objects. Each object needs number, title, and description. Number must be 1, 2, then 3. Title is 3-5 words. Description is one concrete client or product step.
+- what_makes_different.heading: string. Short heading about proof, positioning, or why buyers choose this business.
+- what_makes_different.points: array with exactly 3 strings. Each string is one line grounded in proof, positioning edge, service model, product capability, or competitor gap.
+- closing.headline: string. One direct closing sentence for a buyer. No grandiose language.
+- closing.body: string. 1-2 sentences. It may suggest a sensible next step only when supported by the business context, but must not invent a form, button, or contact detail.
+
+what_it_does.capabilities MUST have exactly 3 items.
+how_it_works.steps MUST have exactly 3 items.
+what_makes_different.points MUST have exactly 3 items.
+
+HARD RULES
+- Existing business page, not startup invention.
+- Never invent testimonials, user counts, ratings, credentials, logos, press, phone numbers, addresses, pricing, or guarantees.
+- Never write a year; the renderer injects it.
+- Never use emoji; the renderer handles visual chrome.
+- Banned phrases: world-class, best-in-class, cutting-edge, next-generation, revolutionize, empower, leverage as a verb, synergize, modern, streamlined, intelligent, innovative, transform your life, unlock your potential, shared context, accelerate.`;
+}
 
 const HOLLOW_PHRASES = [
   'modern', 'streamlined', 'intelligent', 'innovative', 'next-generation',
@@ -758,7 +888,7 @@ export function renderLandingHtml(
   family: Family,
 ): string {
   const year = new Date().getFullYear();
-  const title = `${content.brand.name} — ${content.brand.tagline}`;
+  const title = `${content.brand.name} | ${content.brand.tagline}`;
   const fontLink = tokens.googleFontsHref
     ? `<link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -801,6 +931,49 @@ ${built.body}
 // ──────────────────────────────────────────────────────────────────────────
 // Validation — catch obvious generation failures before we save
 // ──────────────────────────────────────────────────────────────────────────
+
+// Strip em/en-dashes, markdown artifacts, and other AI-tell residue from
+// every text field in the LLM-generated content tree before render. The
+// stripInlineMarkdown helper handles the heavy lifting (em/en-dash → ", ",
+// **bold** / *italic* / _underline_ / `code` removal, leftover separator
+// cleanup). Applied to every string the renderer interpolates so dashes
+// never reach the visible page.
+function sanitizeLandingContent(c: LandingContent): LandingContent {
+  const s = (v: string | undefined | null) => stripInlineMarkdown(v ?? '');
+  return {
+    brand: {
+      name: s(c.brand.name),
+      tagline: s(c.brand.tagline),
+    },
+    hero: {
+      headline: s(c.hero.headline),
+      subhead: s(c.hero.subhead),
+    },
+    what_it_does: {
+      heading: s(c.what_it_does.heading),
+      capabilities: c.what_it_does.capabilities.map((cap) => ({
+        title: s(cap.title),
+        description: s(cap.description),
+      })),
+    },
+    how_it_works: {
+      heading: s(c.how_it_works.heading),
+      steps: c.how_it_works.steps.map((step) => ({
+        number: step.number,
+        title: s(step.title),
+        description: s(step.description),
+      })),
+    },
+    what_makes_different: {
+      heading: s(c.what_makes_different.heading),
+      points: c.what_makes_different.points.map(s),
+    },
+    closing: {
+      headline: s(c.closing.headline),
+      body: s(c.closing.body),
+    },
+  };
+}
 
 function validateLandingContent(c: unknown): asserts c is LandingContent {
   const x = c as LandingContent;
@@ -853,13 +1026,16 @@ export async function generateLandingPage(ctx: PipelineContext): Promise<void> {
     await emitActivity(ctx, `Generating landing page (${family} family, ${industryRow.name})`, 'llm');
 
     // 4. Generate content using prompt with anti-patterns injected
-    const prompt = buildLandingPrompt(ctx, facts, industryRow, antiPatterns);
+    const prompt = ctx.journey === 'grow_my_company'
+      ? buildGrowLandingPrompt(ctx, facts, industryRow, antiPatterns)
+      : buildLandingPrompt(ctx, facts, industryRow, antiPatterns);
     let content = await callSmallLLMJson<LandingContent>(prompt, {
       maxTokens: 2400,
       retryOnce: true,
       schema: LandingContentSchema,
     });
     validateLandingContent(content);
+    content = sanitizeLandingContent(content);
 
     // 5. AI-feel hero validator — one cheap retry if the headline drips with
     //    hollow phrases ("modern", "intelligent", etc.). Catches Plinor-style
@@ -880,7 +1056,7 @@ CRITICAL — your previous hero.headline contained the phrase "${check.phrase}".
           schema: LandingContentSchema,
         });
         validateLandingContent(retry);
-        content = retry;
+        content = sanitizeLandingContent(retry);
       } catch (retryErr) {
         log.warn('AI-feel retry failed — keeping original content', { error: retryErr instanceof Error ? retryErr.message : String(retryErr) });
       }
@@ -904,6 +1080,15 @@ CRITICAL — your previous hero.headline contained the phrase "${check.phrase}".
     });
 
     await publishLandingToSubdomain(ctx, html);
+    ctx.landingPageBrief = {
+      url: ctx.slug ? `https://${ctx.slug}.baljia.app` : null,
+      headline: content.hero.headline,
+      subhead: content.hero.subhead,
+      tagline: content.brand.tagline,
+      capabilities: content.what_it_does.capabilities.map((item) => `${item.title}: ${item.description}`),
+      steps: content.how_it_works.steps.map((step) => `${step.number}. ${step.title}: ${step.description}`),
+      differentiators: content.what_makes_different.points,
+    };
   } catch (err) {
     log.warn('Landing page generation failed — non-blocking', {
       companyId: ctx.companyId,
@@ -921,7 +1106,7 @@ async function publishLandingToSubdomain(ctx: PipelineContext, html: string): Pr
     return;
   }
   if (!isLandingDeployConfigured()) {
-    log.info('Landing deploy not configured (neither CF nor Render) — skipping publish', {
+    log.info('Landing deploy not configured (Cloudflare missing, Render fallback disabled) — skipping publish', {
       companyId: ctx.companyId,
       slug: ctx.slug,
     });
