@@ -563,12 +563,41 @@ function clampComplexity(value: unknown): number {
   return n;
 }
 
+/**
+ * Auto-format the locked task shapes onto separate lines. The LLM frequently
+ * emits the full task description on a single line with the labels inline
+ * (e.g. "Build the MVP X: Input: ... Output: ... Core flow: ... Use ...").
+ * Detect the known labels and split them so the description renders as
+ * structured lines, not a wall of paragraph text.
+ */
+function applyTaskShapeLineBreaks(s: string): string {
+  let out = s;
+  // Engineering shape: Build the MVP X: \n\n Input: ... \n Output: ... \n Core flow: ... \n Use ...
+  out = out.replace(/\s+Input:\s+/g, '\n\nInput: ');
+  out = out.replace(/\s+Output:\s+/g, '\nOutput: ');
+  out = out.replace(/\s+Core flow:\s+/g, '\nCore flow: ');
+  // Tech-stack closing line — usually starts with "Use Express", "Use Next.js"
+  // etc. Insert a newline when preceded by sentence-ending punctuation.
+  out = out.replace(/([.!?])\s+Use\s+/g, '$1\nUse ');
+
+  // Research shape: opening: \n\n <targets> \n For each: ... / Document: ... \n Identify <co>'s ...
+  out = out.replace(/\s+For each:\s+/g, '\nFor each: ');
+  out = out.replace(/\s+Document:\s+/g, '\nDocument: ');
+  out = out.replace(/([.!?])\s+Identify\s+/g, '$1\nIdentify ');
+
+  // Outreach shape: opening: \n\n Find / Identify them on... \n Target ... \n Send ... \n Goal/angle
+  // The outreach format uses informal labels (no fixed prefix), so the
+  // LLM's own newlines (if any) are preserved by the per-line normalize.
+  // We don't force-split outreach because it doesn't have explicit labels.
+
+  return out;
+}
+
 function normalizeTaskDescription(value: string): string {
-  // Whitespace-normalize + strip inline-markdown artifacts (LLM sometimes
-  // emits **bold** or *italic* even when the consumer renders plain text,
-  // and those leak as literal characters). Per-line normalize, no chopping.
-  const normalized = value
-    .replace(/\r\n/g, '\n')
+  // Whitespace-normalize + strip inline-markdown artifacts + auto-format
+  // the locked task shapes onto separate lines.
+  const withBreaks = applyTaskShapeLineBreaks(value.replace(/\r\n/g, '\n'));
+  const normalized = withBreaks
     .split('\n')
     .map((line) => stripInlineMarkdown(line))
     .filter((line, idx, arr) => line.length > 0 || (idx > 0 && arr[idx - 1].length > 0)) // collapse multi-blank
