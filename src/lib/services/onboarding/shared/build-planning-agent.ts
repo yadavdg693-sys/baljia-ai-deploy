@@ -52,6 +52,7 @@ function fallbackBuildPlanningArtifacts(ctx: PipelineContext, rawIdea: string): 
       first_priorities: undefined,
     },
     mission_doc: {
+      one_liner: 'A focused product for a clearly defined customer.',
       mission: 'Help the target customer solve the core problem with less friction.',
       what_were_building: `We are building the smallest useful version of ${idea}. The first version should focus on one customer, one workflow, and one outcome that can be validated.`,
       where_were_headed: 'The company should earn trust by solving one painful problem clearly. Early customer conversations should shape the product before it expands. Once the first workflow works, the company can add deeper features around real usage. The goal is a company that grows from evidence, not assumptions.',
@@ -248,7 +249,8 @@ Field rules:
 - market_research.market_positioning: string. Founder-facing Markdown. Start with one bold angle line, then 3-5 concrete customer pains or buying reasons, then one short positioning paragraph.
 - market_research.why_this_fits_you: string. 1 short paragraph, max 2 sentences, using founder context when available; otherwise explain idea-market fit.
 - market_research.first_priorities: array of exactly 3 concise priority sentences covering the first build, research, and outreach priorities.
-- mission_doc.mission: string. Exactly one sentence, short, sharp, and specific.
+- mission_doc.one_liner: string. Dashboard-friendly tagline. Max 14 words / ~80 characters. ONE short descriptive sentence stating WHAT the product is and WHO it's for. Pattern: "<short noun phrase> for <audience>" or "<verb-led description in <= 14 words>". Concrete, not aspirational. Examples (DO NOT copy verbatim, just match length): "AI stock research for retail Indian investors." / "Auto-confirmation tool for solo dental clinics." / "Cold outreach copywriter for SaaS founders." NEVER more than 14 words. NEVER ends with a comma or "covering..." style fragment. This goes in the dashboard topbar; long sentences break the UI.
+- mission_doc.mission: string. Exactly one sentence, short, sharp, and specific. Aspirational mission statement (the why), not a feature list.
 - mission_doc.what_were_building: string. 2 concrete sentences describing the product, audience, and mechanism.
 - mission_doc.where_were_headed: string. 3-4 vivid but grounded short sentences describing the future state for the target users.
 
@@ -310,16 +312,21 @@ Rules:
   };
   ctx.strategy = ctx.refinedIdea.refined_idea;
   ctx.missionDoc = {
+    one_liner: stripInlineMarkdown(compactLine(artifacts.mission_doc.one_liner ?? '', 120, 1)),
     mission: stripInlineMarkdown(compactLine(artifacts.mission_doc.mission, 220, 1)),
     what_were_building: stripInlineMarkdown(compactParagraphs(artifacts.mission_doc.what_were_building, 1, 430, 2)),
     where_were_headed: stripInlineMarkdown(compactParagraphs(artifacts.mission_doc.where_were_headed, 1, 620, 4)),
   };
   ctx.mission = ctx.missionDoc.mission;
-  // Use the FULL first sentence as the one-liner. The first sentence is
-  // already bounded by its period — capping at 18 words produced mid-clause
-  // fragments like "...answers covering" that read as broken UI.
-  const firstMissionSentence = ctx.missionDoc.what_were_building.split(/[.!?]/)[0].trim();
-  ctx.oneLiner = stripInlineMarkdown(firstMissionSentence);
+  // LLM is constrained at the prompt layer to ≤14 words / ~80 chars, so the
+  // one_liner field fits the topbar UI directly. Fall back to mission (also
+  // short) if the LLM omitted it, and to the first sentence of
+  // what_were_building as last resort. Slicing arbitrary word counts produced
+  // mid-clause fragments like "...analyst-grade answers covering".
+  const llmOneLiner = ctx.missionDoc.one_liner ?? '';
+  const missionFallback = ctx.missionDoc.mission ?? '';
+  const buildingFallback = stripInlineMarkdown(ctx.missionDoc.what_were_building.split(/[.!?]/)[0].trim());
+  ctx.oneLiner = llmOneLiner || missionFallback || buildingFallback;
 
   await emitActivity(ctx, `Refined: "${ctx.refinedIdea.refined_idea.slice(0, 100)}"`, 'llm');
   await appendMemorySection(ctx.companyId, '## Idea (Refined)', [

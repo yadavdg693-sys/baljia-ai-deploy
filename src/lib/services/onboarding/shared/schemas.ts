@@ -133,6 +133,10 @@ export const BusinessProfilePromptSchema = z.preprocess(objectOrEmpty, z.object(
 }));
 
 export const MissionDocSchema = z.preprocess(objectOrEmpty, z.object({
+  // Dashboard-friendly one-liner. Goes in the topbar — must fit in a single
+  // line of UI chrome (~14 words / ~80 chars max). Descriptive, not
+  // aspirational. Pattern: "{noun} for {audience} that {verb}."
+  one_liner: resilientText('A focused product for a clearly defined customer.', 120),
   mission: resilientText('Help the target customer solve the core problem with less friction.', 300),
   what_were_building: resilientText('We are building the simplest useful version of the offer for the target customer. It focuses on the core workflow, the buyer pain, and a clear outcome.', 900),
   where_were_headed: resilientText('The goal is to turn this idea into a company customers can understand, trust, and try. The early work should prove demand, sharpen the offer, and create a useful first experience. From there, the company can expand based on real customer signals.', 1200),
