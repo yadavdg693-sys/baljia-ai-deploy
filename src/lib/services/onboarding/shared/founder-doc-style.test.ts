@@ -56,11 +56,18 @@ describe('founder document style helpers', () => {
       .toBe('Position the wedge. The buyer should understand the job.');
   });
 
-  it('stripInlineMarkdown preserves legitimate hyphens and em-dashes', () => {
-    // Compound words and intra-word hyphens stay.
+  it('stripInlineMarkdown preserves regular hyphens (compound words)', () => {
     expect(stripInlineMarkdown('Asia-Pacific no-show reduction')).toBe('Asia-Pacific no-show reduction');
-    // Mid-sentence em-dash (no leading sentence-ending punctuation) stays.
-    expect(stripInlineMarkdown('This platform — and only this platform — works.'))
-      .toBe('This platform — and only this platform — works.');
+    expect(stripInlineMarkdown('5-10 sessions per week')).toBe('5-10 sessions per week');
+  });
+
+  it('stripInlineMarkdown removes em-dashes and en-dashes globally (AI tell)', () => {
+    // word—word → word, word
+    expect(stripInlineMarkdown('talk to—structured, current data')).toBe('talk to, structured, current data');
+    // word — word (with spaces) → word, word
+    expect(stripInlineMarkdown('This platform — and only this — works.'))
+      .toBe('This platform, and only this, works.');
+    // En-dash treated the same way
+    expect(stripInlineMarkdown('one – two – three')).toBe('one, two, three');
   });
 });

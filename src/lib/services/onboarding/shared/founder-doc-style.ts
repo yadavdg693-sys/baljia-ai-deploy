@@ -49,13 +49,20 @@ export function stripInlineMarkdown(
     s = s.replace(/(^|\n)#{1,6}\s+/g, '$1');
   }
 
-  // Clean leftover "lead — detail" separators. After stripping the bold
-  // markers from `**Lead.** - Detail` or `**Lead.** — Detail`, we're left
-  // with `Lead. - Detail` / `Lead. — Detail` — the dash was a structural
-  // separator the LLM used, not punctuation. Remove when after sentence-
-  // ending punctuation (preserves legitimate mid-sentence em-dash usage
-  // like "this — and only this — works").
+  // Clean leftover "lead — detail" separators after sentence-ending
+  // punctuation (artifact of stripped bold markers).
   s = s.replace(/([.!?])[ \t]+[-–—][ \t]+/g, '$1 ');
+
+  // Strip em-dashes / en-dashes globally — they're a strong AI tell and
+  // the LLM uses them frequently in stylistic positions. Replace with a
+  // comma so prose still reads correctly.
+  //   word—word     → word, word         (no-space em-dash between words)
+  //   word — word   → word, word         (spaced em-dash mid-sentence)
+  //   word– word    → word, word         (en-dash, both shapes)
+  // NOTE: regular hyphens "-" are intentionally preserved because they
+  // appear in compound words ("no-show", "Asia-Pacific") and ranges
+  // ("5-10"). Only em-dash (—) and en-dash (–) get this treatment.
+  s = s.replace(/[ \t]*[—–][ \t]*/g, ', ');
 
   if (!opts.keepLineStructure) {
     // Strip a leading dash separator at the start of the string (covers

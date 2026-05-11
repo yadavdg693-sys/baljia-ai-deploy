@@ -506,20 +506,39 @@ export function DashboardShell({ company: initialCompany, tasks: initialTasks, d
             </div>
             )}
 
-            {emails.length > 0 && (
             <div style={S.inboxColumn}>
+              {emails.length > 0 && (
+                <div style={S.section} className="dashboard-reveal">
+                  <div style={S.panelHeading}><span style={{ fontFamily: "'Newsreader', Georgia, serif" }}>Inbox</span></div>
+                  <p style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 8 }}>{inboxAddress || '—'}</p>
+                  {emails.slice(0, 3).map(e => (
+                    <button key={e.id} style={{ ...S.docRow, gridTemplateColumns: '1fr auto' }} onClick={() => setSelectedEmail(e)}>
+                      <div><strong style={{ fontSize: 12, color: 'var(--ink)' }}>{e.subject ?? '(no subject)'}</strong><br /><span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{e.direction === 'outbound' ? `To: ${e.to_address}` : `From: ${e.from_address ?? e.to_address}`}</span></div>
+                      <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{formatAge(e.created_at)}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+
               <div style={S.section} className="dashboard-reveal">
-                <div style={S.panelHeading}><span style={{ fontFamily: "'Newsreader', Georgia, serif" }}>Inbox</span></div>
-                <p style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 8 }}>{inboxAddress || '—'}</p>
-                {emails.slice(0, 3).map(e => (
-                  <button key={e.id} style={{ ...S.docRow, gridTemplateColumns: '1fr auto' }} onClick={() => setSelectedEmail(e)}>
-                    <div><strong style={{ fontSize: 12, color: 'var(--ink)' }}>{e.subject ?? '(no subject)'}</strong><br /><span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{e.direction === 'outbound' ? `To: ${e.to_address}` : `From: ${e.from_address ?? e.to_address}`}</span></div>
-                    <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{formatAge(e.created_at)}</span>
-                  </button>
-                ))}
+                <div style={S.panelHeading}><span style={{ fontFamily: "'Newsreader', Georgia, serif" }}>Campaigns</span></div>
+                <button style={{ ...S.btn, ...S.btnSm, opacity: 0.5, cursor: 'not-allowed' }} disabled>Run Ads</button>
+                <p style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 8 }}>No campaigns. Spend: $0.00</p>
+              </div>
+
+              <div style={S.section} className="dashboard-reveal">
+                <div style={S.panelHeading}><span style={{ fontFamily: "'Newsreader', Georgia, serif" }}>Social</span></div>
+                <div style={S.softPanel}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
+                    <div style={{ minWidth: 0 }}>
+                      <strong style={{ display: 'block', fontSize: 13, color: 'var(--ink)', wordBreak: 'break-word' as const }}>@{company.slug ?? 'baljia'}</strong>
+                      <p style={{ fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.45, marginTop: 4 }}>No tweets yet. Run a Twitter task when you want to announce progress.</p>
+                    </div>
+                    <button style={{ ...S.btn, ...S.btnSm, opacity: 0.5, cursor: 'not-allowed', flexShrink: 0 }} disabled>Tweet</button>
+                  </div>
+                </div>
               </div>
             </div>
-            )}
           </div>
 
           <DocumentSuggestionPanel companyId={company.id} />
