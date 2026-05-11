@@ -1,22 +1,47 @@
 // Document Service — migrated to Drizzle + Neon
 import { db, documents, documentSuggestions } from '@/lib/db';
-import { eq, and, asc, sql } from 'drizzle-orm';
+import { eq, and, asc, sql, notInArray } from 'drizzle-orm';
 import { sanitizeForFounder } from '@/lib/founder-safety/sanitize';
 import { stripLlmArtifacts } from '@/lib/text/llm-artifacts';
+import { FOUNDER_HIDDEN_DOC_TYPES } from '@/lib/founder-safety/hidden-doc-types';
 import type { Document, DocumentSuggestion } from '@/types';
 
-export async function getDocuments(companyId: string): Promise<Document[]> {
+// Internal doc types (codebase_map etc.) are filtered out of broad listings
+// by default. Internal callers that genuinely need them (codebase-map
+// service, etc.) use getDocumentByType with the exact type — no leak.
+const HIDDEN_TYPES_ARR = FOUNDER_HIDDEN_DOC_TYPES as unknown as string[];
+
+export async function getDocuments(
+  companyId: string,
+  opts: { includeInternal?: boolean } = {},
+): Promise<Document[]> {
+  const whereClause = opts.includeInternal
+    ? eq(documents.company_id, companyId)
+    : and(
+        eq(documents.company_id, companyId),
+        notInArray(documents.doc_type, HIDDEN_TYPES_ARR),
+      );
   return db.select().from(documents)
-    .where(eq(documents.company_id, companyId))
+    .where(whereClause)
     .orderBy(asc(documents.created_at)) as unknown as Promise<Document[]>;
 }
 
-export async function getPopulatedDocuments(companyId: string): Promise<Document[]> {
+export async function getPopulatedDocuments(
+  companyId: string,
+  opts: { includeInternal?: boolean } = {},
+): Promise<Document[]> {
+  const whereClause = opts.includeInternal
+    ? and(
+        eq(documents.company_id, companyId),
+        eq(documents.is_empty, false),
+      )
+    : and(
+        eq(documents.company_id, companyId),
+        eq(documents.is_empty, false),
+        notInArray(documents.doc_type, HIDDEN_TYPES_ARR),
+      );
   return db.select().from(documents)
-    .where(and(
-      eq(documents.company_id, companyId),
-      eq(documents.is_empty, false)
-    ))
+    .where(whereClause)
     .orderBy(asc(documents.created_at)) as unknown as Promise<Document[]>;
 }
 
