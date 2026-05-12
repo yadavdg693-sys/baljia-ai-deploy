@@ -682,6 +682,8 @@ export interface TaskProposal {
   description: string | null;
   tag: string;
   estimated_credits: number;
+  estimated_hours?: number;   // CEO-supplied splitting estimate (0.5–4); server enforces ≤4 cap
+  priority?: number;          // 25=low, 50=medium, 75=high, 100=critical (founder labels → ints)
   agent_name: string;       // founder-friendly label (from FOUNDER_AGENT_LABELS)
   explanation?: string;     // optional — CEO handles founder-facing communication directly
   run_link?: string;        // one-click URL to execute the task

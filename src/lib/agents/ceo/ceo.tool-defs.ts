@@ -65,17 +65,19 @@ const TASK_TOOLS = [
   },
   {
     name: 'create_task',
-    description: 'Create a new task. Routes to the right agent based on tag. Credits deducted when execution starts. Most tasks cost 1 credit; heavy Browser-agent tasks (complexity ≥ 7 with browser tag) cost 2 credits to cover Browserbase session time. Task needs founder approval before execution.',
+    description: 'Create ONE task — max 4 hours of work per call. If the scope is bigger, do NOT bundle: call create_task once per piece in dependency order, linking sequential pieces via related_task_ids. The server rejects estimated_hours > 4. Routes to the right agent based on tag. Credits deducted when execution starts. Most tasks cost 1 credit; heavy Browser-agent tasks (complexity ≥ 7 with browser tag) cost 2 credits. Task needs founder approval before execution.',
     input_schema: {
       type: 'object' as const,
       properties: {
         title: { type: 'string' as const, description: 'Clear, action-oriented task title' },
-        description: { type: 'string' as const, description: 'Detailed description of what should be done' },
+        description: { type: 'string' as const, description: 'Detailed description of what should be done. Worker reads ONLY this — include core flow, features, success criteria, out-of-scope.' },
         tag: { type: 'string' as const, description: 'Task category (e.g. landing-page, research, api, tweet, outreach, scrape, account-setup)' },
         complexity: { type: 'number' as const, description: 'Task complexity 1-10. 1-3 = trivial (single API call, status check). 4-6 = typical (login + form fill, single-page scrape). 7-10 = heavy (full SaaS signup with verification, multi-step flows, anti-bot-heavy sites). Drives credit cost for Browser-routed tasks.' },
-        related_task_ids: { type: 'array' as const, items: { type: 'string' as const }, description: 'IDs of related tasks (e.g. failed task being retried, so agent knows what was already tried)' },
+        estimated_hours: { type: 'number' as const, description: 'Honest one-shot agent work estimate in decimal hours. Range 0.5–4. The server REJECTS values > 4 — for bigger scope you MUST split into multiple create_task calls. Guide: trivial API check = 0.5; single-page scrape or short content = 1; typical CRUD page = 2–3; full feature slice with API + UI + persistence = 4 (and nothing more in one task).' },
+        priority: { type: 'string' as const, enum: ['low', 'medium', 'high', 'critical'], description: 'Queue priority. Defaults to medium. Use critical only for fixes that block other work or live-site outages.' },
+        related_task_ids: { type: 'array' as const, items: { type: 'string' as const }, description: 'IDs of related tasks. Use for: (a) retries — link the failed task so the agent knows what was already tried; (b) sequential pieces of a split — link the upstream task this one depends on.' },
       },
-      required: ['title', 'description', 'tag', 'complexity'],
+      required: ['title', 'description', 'tag', 'complexity', 'estimated_hours'],
     },
   },
   {

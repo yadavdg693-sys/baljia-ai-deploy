@@ -296,6 +296,7 @@ describe('CEO tool handlers — create_task', () => {
         title: 'Build a landing page',
         description: 'Marketing site',
         tag: 'landing-page',
+        estimated_hours: 3,
       },
       COMPANY_ID,
     );
@@ -321,6 +322,9 @@ describe('CEO tool handlers — create_task', () => {
       execution_mode: 'template_plus_params',
       verification_level: 'browser_flow',
       estimated_credits: 1,
+      estimated_hours: 3,
+      priority: 50, // default medium
+      complexity: 5, // default
       authorized_by: 'founder',
     });
 
@@ -341,6 +345,7 @@ describe('CEO tool handlers — create_task', () => {
     expect(result.content).toContain('Task created');
     expect(result.content).toContain('Build a landing page');
     expect(result.content).toContain('[t-new]');
+    expect(result.content).toContain('~3h');
     expect(result.content).toContain('Run link:');
     expect(result.action).toBeDefined();
     expect(result.action?.type).toBe('task_proposal');
@@ -350,6 +355,8 @@ describe('CEO tool handlers — create_task', () => {
         title: 'Build a landing page',
         tag: 'landing-page',
         estimated_credits: 1,
+        estimated_hours: 3,
+        priority: 50,
       });
     }
   });
@@ -383,6 +390,7 @@ describe('CEO tool handlers — create_task', () => {
         description: 'Use the openai provider pack',
         tag: 'account-setup',
         complexity: 8,
+        estimated_hours: 2.5,
       },
       COMPANY_ID,
     );
@@ -418,19 +426,19 @@ describe('CEO tool handlers — create_task', () => {
     const { handleToolCall } = await import('@/lib/agents/ceo/ceo.tools');
 
     // Missing complexity → defaults to 5
-    await handleToolCall('create_task', { title: 't', description: 'd', tag: 'scrape' }, COMPANY_ID);
+    await handleToolCall('create_task', { title: 't', description: 'd', tag: 'scrape', estimated_hours: 1 }, COMPANY_ID);
     expect(router.getCreditCostForTask).toHaveBeenLastCalledWith('scrape', 5);
 
     // Negative → clamp to 1
-    await handleToolCall('create_task', { title: 't', description: 'd', tag: 'scrape', complexity: -3 }, COMPANY_ID);
+    await handleToolCall('create_task', { title: 't', description: 'd', tag: 'scrape', complexity: -3, estimated_hours: 1 }, COMPANY_ID);
     expect(router.getCreditCostForTask).toHaveBeenLastCalledWith('scrape', 1);
 
     // >10 → clamp to 10
-    await handleToolCall('create_task', { title: 't', description: 'd', tag: 'scrape', complexity: 99 }, COMPANY_ID);
+    await handleToolCall('create_task', { title: 't', description: 'd', tag: 'scrape', complexity: 99, estimated_hours: 1 }, COMPANY_ID);
     expect(router.getCreditCostForTask).toHaveBeenLastCalledWith('scrape', 10);
 
     // Float → rounded
-    await handleToolCall('create_task', { title: 't', description: 'd', tag: 'scrape', complexity: 6.7 }, COMPANY_ID);
+    await handleToolCall('create_task', { title: 't', description: 'd', tag: 'scrape', complexity: 6.7, estimated_hours: 1 }, COMPANY_ID);
     expect(router.getCreditCostForTask).toHaveBeenLastCalledWith('scrape', 7);
   });
 
@@ -449,7 +457,7 @@ describe('CEO tool handlers — create_task', () => {
     const { handleToolCall } = await import('@/lib/agents/ceo/ceo.tools');
     const result = await handleToolCall(
       'create_task',
-      { title: 'Tweet something', description: 'Post a tweet', tag: 'twitter' },
+      { title: 'Tweet something', description: 'Post a tweet', tag: 'twitter', estimated_hours: 0.5 },
       COMPANY_ID,
     );
 
@@ -481,7 +489,7 @@ describe('CEO tool handlers — create_task', () => {
     const { handleToolCall } = await import('@/lib/agents/ceo/ceo.tools');
     const result = await handleToolCall(
       'create_task',
-      { title: 'Queue me', description: 'desc', tag: 'landing-page' },
+      { title: 'Queue me', description: 'desc', tag: 'landing-page', estimated_hours: 2 },
       COMPANY_ID,
     );
 
@@ -515,12 +523,210 @@ describe('CEO tool handlers — create_task', () => {
     const { handleToolCall } = await import('@/lib/agents/ceo/ceo.tools');
     const result = await handleToolCall(
       'create_task',
-      { title: 'Risky', description: 'd', tag: 'bug-fix' },
+      { title: 'Risky', description: 'd', tag: 'bug-fix', estimated_hours: 2 },
       COMPANY_ID,
     );
 
     expect(result.content).toContain('Heads up');
     expect(result.content).toContain('2 open');
+  });
+
+  // ── 4-hour cap + new params: estimated_hours and priority ────────────────
+
+  it('rejects task with estimated_hours > 4 — does NOT create, returns split guidance', async () => {
+    const governance = await import('@/lib/services/governance.service');
+    const taskService = await import('@/lib/services/task.service');
+    const events = await import('@/lib/services/event.service');
+
+    const { handleToolCall } = await import('@/lib/agents/ceo/ceo.tools');
+    const result = await handleToolCall(
+      'create_task',
+      {
+        title: 'Build the whole blog system',
+        description: 'Posts + comments + admin in one shot',
+        tag: 'landing-page',
+        complexity: 8,
+        estimated_hours: 12,
+      },
+      COMPANY_ID,
+    );
+
+    // No governance call, no task created, no event emitted — we reject early.
+    expect(governance.evaluateTask).not.toHaveBeenCalled();
+    expect(taskService.createTask).not.toHaveBeenCalled();
+    expect(events.emit).not.toHaveBeenCalled();
+
+    // Founder-safe message guides the CEO model to split, references 4h cap +
+    // related_task_ids + the worked example.
+    expect(result.content).toContain('Task too large');
+    expect(result.content).toContain('12h');
+    expect(result.content).toContain('4h');
+    expect(result.content).toContain('related_task_ids');
+    expect(result.action).toBeUndefined();
+  });
+
+  it('rejects task when estimated_hours is missing — does NOT create', async () => {
+    const governance = await import('@/lib/services/governance.service');
+    const taskService = await import('@/lib/services/task.service');
+
+    const { handleToolCall } = await import('@/lib/agents/ceo/ceo.tools');
+    const result = await handleToolCall(
+      'create_task',
+      { title: 't', description: 'd', tag: 'scrape', complexity: 3 },
+      COMPANY_ID,
+    );
+
+    expect(governance.evaluateTask).not.toHaveBeenCalled();
+    expect(taskService.createTask).not.toHaveBeenCalled();
+    expect(result.content).toContain('estimated_hours');
+    expect(result.content).toContain('0.5');
+    expect(result.content).toContain('4');
+  });
+
+  it('rejects task when estimated_hours is non-numeric or zero — does NOT create', async () => {
+    const taskService = await import('@/lib/services/task.service');
+    const { handleToolCall } = await import('@/lib/agents/ceo/ceo.tools');
+
+    // Non-numeric
+    const r1 = await handleToolCall(
+      'create_task',
+      { title: 't', description: 'd', tag: 'scrape', complexity: 3, estimated_hours: 'two' as unknown as number },
+      COMPANY_ID,
+    );
+    expect(r1.content).toContain('estimated_hours');
+    expect(taskService.createTask).not.toHaveBeenCalled();
+
+    // Zero
+    const r2 = await handleToolCall(
+      'create_task',
+      { title: 't', description: 'd', tag: 'scrape', complexity: 3, estimated_hours: 0 },
+      COMPANY_ID,
+    );
+    expect(r2.content).toContain('estimated_hours');
+    expect(taskService.createTask).not.toHaveBeenCalled();
+  });
+
+  it('accepts exactly 4 hours (boundary)', async () => {
+    const governance = await import('@/lib/services/governance.service');
+    const taskService = await import('@/lib/services/task.service');
+    const events = await import('@/lib/services/event.service');
+
+    vi.mocked(governance.evaluateTask).mockResolvedValueOnce({
+      can_execute: true,
+      execution_mode: 'template_plus_params',
+      verification_level: 'none',
+    });
+    vi.mocked(taskService.createTask).mockResolvedValueOnce(
+      makeTask({ id: 't-4h', title: 'Right at the cap' }) as never,
+    );
+    vi.mocked(events.emit).mockResolvedValueOnce({} as never);
+
+    const { handleToolCall } = await import('@/lib/agents/ceo/ceo.tools');
+    const result = await handleToolCall(
+      'create_task',
+      { title: 'Right at the cap', description: 'd', tag: 'scrape', complexity: 5, estimated_hours: 4 },
+      COMPANY_ID,
+    );
+
+    expect(taskService.createTask).toHaveBeenCalledTimes(1);
+    const createArg = vi.mocked(taskService.createTask).mock.calls.at(-1)![0];
+    expect(createArg).toMatchObject({ estimated_hours: 4 });
+    expect(result.content).toContain('~4h');
+  });
+
+  it('maps priority labels to integer (low=25, medium=50, high=75, critical=100)', async () => {
+    const governance = await import('@/lib/services/governance.service');
+    const taskService = await import('@/lib/services/task.service');
+    const events = await import('@/lib/services/event.service');
+
+    vi.mocked(governance.evaluateTask).mockResolvedValue({
+      can_execute: true,
+      execution_mode: 'template_plus_params',
+      verification_level: 'none',
+    });
+    vi.mocked(taskService.createTask).mockResolvedValue(makeTask() as never);
+    vi.mocked(events.emit).mockResolvedValue({} as never);
+
+    const { handleToolCall } = await import('@/lib/agents/ceo/ceo.tools');
+
+    await handleToolCall(
+      'create_task',
+      { title: 't', description: 'd', tag: 'scrape', complexity: 3, estimated_hours: 1, priority: 'low' },
+      COMPANY_ID,
+    );
+    expect(vi.mocked(taskService.createTask).mock.calls.at(-1)![0]).toMatchObject({ priority: 25 });
+
+    await handleToolCall(
+      'create_task',
+      { title: 't', description: 'd', tag: 'scrape', complexity: 3, estimated_hours: 1, priority: 'medium' },
+      COMPANY_ID,
+    );
+    expect(vi.mocked(taskService.createTask).mock.calls.at(-1)![0]).toMatchObject({ priority: 50 });
+
+    await handleToolCall(
+      'create_task',
+      { title: 't', description: 'd', tag: 'scrape', complexity: 3, estimated_hours: 1, priority: 'high' },
+      COMPANY_ID,
+    );
+    expect(vi.mocked(taskService.createTask).mock.calls.at(-1)![0]).toMatchObject({ priority: 75 });
+
+    await handleToolCall(
+      'create_task',
+      { title: 't', description: 'd', tag: 'scrape', complexity: 3, estimated_hours: 1, priority: 'critical' },
+      COMPANY_ID,
+    );
+    expect(vi.mocked(taskService.createTask).mock.calls.at(-1)![0]).toMatchObject({ priority: 100 });
+
+    // Unknown / missing → default medium (50)
+    await handleToolCall(
+      'create_task',
+      { title: 't', description: 'd', tag: 'scrape', complexity: 3, estimated_hours: 1 },
+      COMPANY_ID,
+    );
+    expect(vi.mocked(taskService.createTask).mock.calls.at(-1)![0]).toMatchObject({ priority: 50 });
+
+    await handleToolCall(
+      'create_task',
+      { title: 't', description: 'd', tag: 'scrape', complexity: 3, estimated_hours: 1, priority: 'urgent' },
+      COMPANY_ID,
+    );
+    expect(vi.mocked(taskService.createTask).mock.calls.at(-1)![0]).toMatchObject({ priority: 50 });
+  });
+
+  it('passes related_task_ids through (sequential splits link to upstream piece)', async () => {
+    const governance = await import('@/lib/services/governance.service');
+    const taskService = await import('@/lib/services/task.service');
+    const events = await import('@/lib/services/event.service');
+
+    vi.mocked(governance.evaluateTask).mockResolvedValueOnce({
+      can_execute: true,
+      execution_mode: 'template_plus_params',
+      verification_level: 'none',
+    });
+    vi.mocked(taskService.createTask).mockResolvedValueOnce(
+      makeTask({ id: 't-piece-2' }) as never,
+    );
+    vi.mocked(events.emit).mockResolvedValueOnce({} as never);
+
+    const { handleToolCall } = await import('@/lib/agents/ceo/ceo.tools');
+    await handleToolCall(
+      'create_task',
+      {
+        title: 'Comments on posts',
+        description: 'second piece of split',
+        tag: 'engineering',
+        complexity: 4,
+        estimated_hours: 3,
+        related_task_ids: ['t-piece-1'],
+      },
+      COMPANY_ID,
+    );
+
+    const arg = vi.mocked(taskService.createTask).mock.calls.at(-1)![0];
+    expect(arg).toMatchObject({
+      related_task_ids: ['t-piece-1'],
+      estimated_hours: 3,
+    });
   });
 });
 

@@ -191,6 +191,16 @@ async function handleGetTasks(companyId: string): Promise<ToolResult> {
   return { content: lines.join('\n\n') };
 }
 
+// Priority labels (founder-facing, Polsia-style) → integer used by tasks.priority.
+// Defaults to medium when omitted. edit_task still takes a raw 1-100 integer —
+// it's a separate path used for fine-tuning after creation.
+const PRIORITY_LABEL_TO_NUMBER: Record<string, number> = {
+  low: 25,
+  medium: 50,
+  high: 75,
+  critical: 100,
+};
+
 async function handleCreateTask(input: Record<string, unknown>, companyId: string): Promise<ToolResult> {
   const title = input.title as string;
   const description = input.description as string;
@@ -199,6 +209,32 @@ async function handleCreateTask(input: Record<string, unknown>, companyId: strin
   // Complexity 1-10. CEO must pass this; clamp into range and default to 5 if missing.
   const rawComplexity = typeof input.complexity === 'number' ? input.complexity : 5;
   const complexity = Math.max(1, Math.min(10, Math.round(rawComplexity)));
+
+  // estimated_hours is required. Server rejects > 4 to force the CEO to split
+  // bigger work into multiple create_task calls. Missing or non-numeric counts
+  // as a usage error: the model has to retry with a real estimate, which is
+  // the forcing function that makes splitting non-optional.
+  const rawHours = input.estimated_hours;
+  const estimatedHours = typeof rawHours === 'number' && Number.isFinite(rawHours) ? rawHours : NaN;
+
+  if (!Number.isFinite(estimatedHours) || estimatedHours <= 0) {
+    return {
+      content: 'create_task needs estimated_hours (decimal 0.5–4). For bigger scope, split by natural seams and call create_task once per piece, max 4 hours each. Use related_task_ids to link sequential pieces.',
+    };
+  }
+
+  if (estimatedHours > 4) {
+    return {
+      content: `Task too large — you scoped ${estimatedHours}h, the cap is 4h per task (one Render worker window). Split by natural seams and call create_task once per piece. Sequential pieces link upstream via related_task_ids. Example: "Build a blog system" → (1) posts CRUD page+API, 4h → (2) comments on posts, 3h, related_task_ids:[1] → (3) admin moderation panel, 4h, related_task_ids:[1].`,
+    };
+  }
+
+  // Clamp to [0.5, 4] — at this point we know it's ≤ 4 and > 0.
+  const safeHours = Math.max(0.5, Math.min(4, estimatedHours));
+
+  // Priority label → integer. Missing or unknown label → medium (50).
+  const rawPriority = typeof input.priority === 'string' ? input.priority.toLowerCase() : 'medium';
+  const priority = PRIORITY_LABEL_TO_NUMBER[rawPriority] ?? 50;
 
   // Step 1 — Classify execution mode + check prerequisites (NOT credits)
   const decision = await governanceService.evaluateTask({ title, description, tag, companyId });
@@ -224,11 +260,14 @@ async function handleCreateTask(input: Record<string, unknown>, companyId: strin
 
   const task = await taskService.createTask({
     company_id: companyId, title, description, tag,
+    priority,
     source: 'ceo_suggested',
     execution_mode: decision.execution_mode,
     verification_level: decision.verification_level,
     assigned_to_agent_id: agentId,
     estimated_credits: creditCost,
+    complexity,
+    estimated_hours: safeHours,
     related_task_ids: relatedTaskIds.length > 0 ? relatedTaskIds : undefined,
     authorized_by: 'founder',
     authorization_reason: 'CEO proposed, founder approved via chat',
@@ -247,13 +286,15 @@ async function handleCreateTask(input: Record<string, unknown>, companyId: strin
     ? '\n\nYou\'re at 0 credits right now. The task is queued — add credits when you\'re ready to run it.'
     : '';
   const creditLabel = creditCost === 1 ? '1 credit' : `${creditCost} credits`;
+  const hoursLabel = `~${safeHours % 1 === 0 ? safeHours.toFixed(0) : safeHours.toFixed(1)}h`;
   return {
-    content: `Task created: "${task.title}" [${task.id}] — ${creditLabel}. ${agentName} agent will handle this.\n\nRun link: ${runLink}${knownIssueWarning}${failureNote}${creditNote}`,
+    content: `Task created: "${task.title}" [${task.id}] — ${creditLabel}, ${hoursLabel}. ${agentName} agent will handle this.\n\nRun link: ${runLink}${knownIssueWarning}${failureNote}${creditNote}`,
     action: {
       type: 'task_proposal',
       data: {
         task_id: task.id, title: task.title, description: task.description, tag: task.tag,
-        estimated_credits: creditCost, agent_name: agentName, run_link: runLink,
+        estimated_credits: creditCost, estimated_hours: safeHours, priority,
+        agent_name: agentName, run_link: runLink,
       },
     },
   };
