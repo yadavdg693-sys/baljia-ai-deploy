@@ -341,11 +341,15 @@ describe('CEO tool handlers — create_task', () => {
       }),
     );
 
-    // Return shape: text confirmation + task_proposal action
+    // Return shape: text confirmation + task_proposal action.
+    // Note: estimated_hours is intentionally NOT echoed in the confirmation
+    // text nor included in the action data — it's internal scoping metadata,
+    // not founder-facing. Asserted as absent so a regression that re-leaks
+    // it to the UI surface fails the test.
     expect(result.content).toContain('Task created');
     expect(result.content).toContain('Build a landing page');
     expect(result.content).toContain('[t-new]');
-    expect(result.content).toContain('~3h');
+    expect(result.content).not.toMatch(/~?\d+\.?\d*h\b/); // no "3h", "~3h", "3.5h" etc.
     expect(result.content).toContain('Run link:');
     expect(result.action).toBeDefined();
     expect(result.action?.type).toBe('task_proposal');
@@ -355,9 +359,9 @@ describe('CEO tool handlers — create_task', () => {
         title: 'Build a landing page',
         tag: 'landing-page',
         estimated_credits: 1,
-        estimated_hours: 3,
         priority: 50,
       });
+      expect((result.action.data as unknown as Record<string, unknown>).estimated_hours).toBeUndefined();
     }
   });
 
@@ -631,7 +635,10 @@ describe('CEO tool handlers — create_task', () => {
     expect(taskService.createTask).toHaveBeenCalledTimes(1);
     const createArg = vi.mocked(taskService.createTask).mock.calls.at(-1)![0];
     expect(createArg).toMatchObject({ estimated_hours: 4 });
-    expect(result.content).toContain('~4h');
+    // estimated_hours must NOT leak into the confirmation text — internal
+    // scoping only. Founders see credits, not hours.
+    // Reject "~4h", " 4h.", "(4h)", "4 hours" etc. but not "t-4h" task IDs.
+    expect(result.content).not.toMatch(/(?:[\s~(])\d+\.?\d*\s?h(?:ours?)?\b/);
   });
 
   it('maps priority labels to integer (low=25, medium=50, high=75, critical=100)', async () => {

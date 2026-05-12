@@ -11,6 +11,10 @@ import { FOUNDER_AGENT_LABELS } from '@/lib/founder-labels';
 // Map priority integer → founder-facing label.
 // Mirrors the create_task tool's enum: low(25), medium(50), high(75), critical(100).
 // Medium returns null so we don't paint a pill on every default-priority task.
+// NOTE: estimated_hours is intentionally NOT surfaced. Founders pay in credits,
+// not hours — hours is internal scoping metadata used by the CEO model to enforce
+// the per-task cap. Leaking it as a UI badge would invite founders to reason
+// about worker runtime, which is platform concern, not founder concern.
 function priorityLabel(p: number | null | undefined): string | null {
   if (p === null || p === undefined) return null;
   if (p >= 90) return '🔥 critical';
@@ -24,13 +28,6 @@ function priorityPillClass(p: number | null | undefined): string {
   if (p >= 90) return 'bg-status-error/20 text-status-error';
   if (p >= 70) return 'bg-baljia-gold/20 text-baljia-gold';
   return 'bg-surface-tertiary text-text-muted';
-}
-
-// Drizzle returns numeric columns as strings on serialization. Accept both.
-function formatHours(h: number | string): string {
-  const n = typeof h === 'number' ? h : Number(h);
-  if (!Number.isFinite(n) || n <= 0) return '';
-  return n % 1 === 0 ? `${n.toFixed(0)}h` : `${n.toFixed(1)}h`;
 }
 
 const statusVariants: Record<string, 'default' | 'success' | 'error' | 'warning' | 'running' | 'blocked' | 'planning'> = {
@@ -160,7 +157,8 @@ export function TaskCard({ task, onApprove, onReject, onReorder, onClick }: Task
         </div>
       )}
 
-      {/* Meta row: tag, agent, hours, priority, time */}
+      {/* Meta row: tag, agent, priority, time. Hours is intentionally
+          omitted — see priorityLabel comment above. */}
       <div className="flex items-center flex-wrap gap-1.5 mt-2">
         {/* Tag */}
         <span className="text-xs px-1.5 py-0.5 rounded bg-surface-tertiary text-text-secondary">
@@ -171,18 +169,6 @@ export function TaskCard({ task, onApprove, onReject, onReorder, onClick }: Task
         {agentName && (
           <span className="text-xs px-1.5 py-0.5 rounded bg-surface-tertiary text-text-secondary">
             🤖 {agentName}
-          </span>
-        )}
-
-        {/* Estimated hours — surfaces splitting effort to the founder
-            (per Polsia parity: "I'll split this 12h job into 3 ≤4h pieces").
-            Drizzle returns numeric columns as strings; coerce + skip if missing. */}
-        {task.estimated_hours !== null && task.estimated_hours !== undefined && (
-          <span
-            className="text-xs px-1.5 py-0.5 rounded bg-surface-tertiary text-text-secondary"
-            title="Estimated agent runtime"
-          >
-            ⏱ ~{formatHours(task.estimated_hours)}
           </span>
         )}
 

@@ -286,14 +286,22 @@ async function handleCreateTask(input: Record<string, unknown>, companyId: strin
     ? '\n\nYou\'re at 0 credits right now. The task is queued — add credits when you\'re ready to run it.'
     : '';
   const creditLabel = creditCost === 1 ? '1 credit' : `${creditCost} credits`;
-  const hoursLabel = `~${safeHours % 1 === 0 ? safeHours.toFixed(0) : safeHours.toFixed(1)}h`;
+  // estimated_hours is intentionally NOT echoed in the confirmation text.
+  // It's internal scoping metadata (drives the 4-hour cap); founders pay in
+  // credits, not hours. The model may still mention hours conversationally
+  // in its prose chat reply (Polsia pattern), but we don't reinforce
+  // echoing a hours figure on every create_task result.
   return {
-    content: `Task created: "${task.title}" [${task.id}] — ${creditLabel}, ${hoursLabel}. ${agentName} agent will handle this.\n\nRun link: ${runLink}${knownIssueWarning}${failureNote}${creditNote}`,
+    content: `Task created: "${task.title}" [${task.id}] — ${creditLabel}. ${agentName} agent will handle this.\n\nRun link: ${runLink}${knownIssueWarning}${failureNote}${creditNote}`,
     action: {
       type: 'task_proposal',
       data: {
         task_id: task.id, title: task.title, description: task.description, tag: task.tag,
-        estimated_credits: creditCost, estimated_hours: safeHours, priority,
+        estimated_credits: creditCost, priority,
+        // NOTE: estimated_hours intentionally NOT in action data. It's
+        // internal scoping metadata (drives the 4-hour cap). The DB row
+        // keeps the column populated for ops/analytics; the founder UI
+        // path stays clean.
         agent_name: agentName, run_link: runLink,
       },
     },
