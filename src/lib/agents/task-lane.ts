@@ -161,7 +161,11 @@ const STANDARD_CAPABILITIES = new Set([
 export function classifyTaskLane(input: TaskLaneInput | undefined, context: TaskLaneContext = {}): TaskLane {
   const text = laneText(input, context);
   const explicitCanaryScope = `${input?.tag ?? ''}\n${input?.source ?? ''}`;
-  if (CANARY_TAG_RE.test(explicitCanaryScope) || context.planningDepth === 'canary_world_class') return 'canary';
+  if (
+    CANARY_TAG_RE.test(explicitCanaryScope) ||
+    context.planningDepth === 'canary_world_class' ||
+    isExplicitCanaryHarnessTask(input)
+  ) return 'canary';
   const description = stripPlanningHarnessMetadata(input?.description);
 
   const taskIntent = context.taskIntent ?? classifyTaskIntent({
@@ -391,6 +395,13 @@ function shouldApplyEngineeringLaneDefaults(input: {
 
 function capLaneMaxTurns(maxTurns: number): number {
   return Math.min(maxTurns, TASK_LANE_HARD_MAX_TURNS);
+}
+
+function isExplicitCanaryHarnessTask(input?: TaskLaneInput): boolean {
+  const title = input?.title ?? '';
+  const text = `${title}\n${stripPlanningHarnessMetadata(input?.description)}\n${input?.source ?? ''}`;
+  if (!/\bCANARY\b/.test(title)) return false;
+  return /\b(strict replay|world[- ]class canary|canary run|final replay|render evaluation)\b/i.test(text);
 }
 
 function laneText(input?: TaskLaneInput, context: TaskLaneContext = {}): string {

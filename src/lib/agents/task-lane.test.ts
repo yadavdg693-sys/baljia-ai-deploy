@@ -54,6 +54,15 @@ describe('task lane policy', () => {
     })).toBe('canary');
   });
 
+  it('recognizes explicit CANARY strict replay harness tasks without promoting product wording', () => {
+    expect(classifyTaskLane({
+      title: 'CANARY ecommerce-store strict replay',
+      description: 'World-class canary run with final replay.',
+      tag: 'engineering',
+      complexity: 10,
+    })).toBe('canary');
+  });
+
   it('does not route user-facing canary products into the canary lane by wording alone', () => {
     expect(classifyTaskLane({
       title: 'Build canary monitoring dashboard',
