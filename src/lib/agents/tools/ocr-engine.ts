@@ -16,8 +16,10 @@
 import { createWorker, type Worker } from 'tesseract.js';
 
 import { createLogger } from '@/lib/logger';
+import { assertUrlSafe } from '@/lib/agents/url-safety';
 
 const log = createLogger('OCR');
+const MAX_OCR_IMAGE_BYTES = 10 * 1024 * 1024;
 
 // Lazy worker — created on first OCR call, kept warm for subsequent calls
 // in the same Node process (avoids re-loading WASM + lang data every call).
@@ -136,11 +138,27 @@ export async function findTextOnPage(
 
 /** Fetch an image URL and return raw bytes for OCR. */
 export async function fetchImageBuffer(url: string): Promise<Buffer> {
-  const response = await fetch(url);
+  const safety = await assertUrlSafe(url);
+  if (!safety.ok) {
+    throw new Error(`OCR image URL blocked: ${safety.reason}`);
+  }
+
+  const response = await fetch(url, { signal: AbortSignal.timeout(20_000) });
   if (!response.ok) {
     throw new Error(`Failed to fetch image (${response.status}): ${url}`);
   }
+  const contentType = response.headers.get('content-type') ?? '';
+  if (contentType && !contentType.startsWith('image/')) {
+    throw new Error(`OCR expected an image URL, got content-type "${contentType}"`);
+  }
+  const contentLength = Number(response.headers.get('content-length') ?? 0);
+  if (contentLength > MAX_OCR_IMAGE_BYTES) {
+    throw new Error(`OCR image is too large (${contentLength} bytes)`);
+  }
   const arrayBuffer = await response.arrayBuffer();
+  if (arrayBuffer.byteLength > MAX_OCR_IMAGE_BYTES) {
+    throw new Error(`OCR image is too large (${arrayBuffer.byteLength} bytes)`);
+  }
   return Buffer.from(arrayBuffer);
 }
 

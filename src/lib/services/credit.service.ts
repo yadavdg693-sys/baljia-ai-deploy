@@ -6,18 +6,22 @@ import type { LedgerEntryType, PlanTier } from '@/types';
 
 const log = createLogger('Credit');
 
-// G-FIN-001: Per-plan daily spend caps (replaces hardcoded 20)
-// Trial cap was 10 — tightened to 3 because each task is ~$0.10-1.00 in LLM
-// tokens, and 10 trials × 3 days × ~$0.50/task = ~$15/founder = bleed at 50
-// trials. 3/day caps the worst case at ~$5/founder over the 3-day trial.
+// G-FIN-001: Per-plan daily spend caps. Production keeps the brake on;
+// local/E2E runs can opt out with DISABLE_CREDIT_DAILY_CAPS=true.
 const PLAN_SPEND_CAPS: Record<PlanTier, number> = {
-  trial: 3,
+  trial:   3,
   starter: 30,
-  growth: 75,
-  scale: 200,
+  growth:  75,
+  scale:   200,
 };
-const DEFAULT_SPEND_CAP = 20; // Fallback if plan tier unavailable
+const DEFAULT_SPEND_CAP = 30;
+const UNLIMITED_SPEND_CAP = 999_999;
 const LOW_BALANCE_THRESHOLD = 5;
+
+function getDailySpendCap(planTier: PlanTier): number {
+  if (process.env.DISABLE_CREDIT_DAILY_CAPS === 'true') return UNLIMITED_SPEND_CAP;
+  return PLAN_SPEND_CAPS[planTier] ?? DEFAULT_SPEND_CAP;
+}
 
 /**
  * Look up a company's plan tier from its subscription.
@@ -73,9 +77,11 @@ export async function claimSlotAndCharge(params: {
   if (amount <= 0) throw new Error('Charge amount must be positive');
 
   const planTier = await getCompanyPlanTier(companyId);
-  const dailyCap = PLAN_SPEND_CAPS[planTier] ?? DEFAULT_SPEND_CAP;
+  const dailyCap = getDailySpendCap(planTier);
   const today = new Date().toISOString().split('T')[0];
-  const idempotencyKey = `deduct:${taskId}:${today}`;
+  // Each launch attempt is a distinct billable event. The old task+day key
+  // blocked same-day retries because the first failed run had already used it.
+  const idempotencyKey = `deduct:${taskId}:${crypto.randomUUID()}`;
 
   // Single CTE chain: slot check → claim → cap check → balance check → deduct
   const result = await db.execute(sql`
@@ -88,6 +94,10 @@ export async function claimSlotAndCharge(params: {
       UPDATE tasks SET
         status = 'in_progress',
         started_at = NOW(),
+        completed_at = NULL,
+        failure_class = NULL,
+        turn_count = 0,
+        actual_credits_charged = 0,
         updated_at = NOW()
       WHERE id = ${taskId}
         AND status = 'todo'
@@ -199,6 +209,10 @@ export async function claimSlotOnly(params: {
       UPDATE tasks SET
         status = 'in_progress',
         started_at = NOW(),
+        completed_at = NULL,
+        failure_class = NULL,
+        turn_count = 0,
+        actual_credits_charged = 0,
         updated_at = NOW()
       WHERE id = ${taskId}
         AND status = 'todo'
@@ -230,7 +244,7 @@ export async function deductCredit(
   if (amount <= 0) throw new Error('Deduction amount must be positive');
 
   const planTier = await getCompanyPlanTier(companyId);
-  const dailyCap = PLAN_SPEND_CAPS[planTier] ?? DEFAULT_SPEND_CAP;
+  const dailyCap = getDailySpendCap(planTier);
   const today = new Date().toISOString().split('T')[0];
   const idempotencyKey = `deduct:${taskId}:${today}`;
 

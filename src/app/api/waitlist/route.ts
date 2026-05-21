@@ -8,8 +8,16 @@ import { db, users, waitlist } from '@/lib/db';
 import { eq } from 'drizzle-orm';
 import { parseJsonBody, isApiError } from '@/lib/api-utils';
 import { waitlistSchema } from '@/lib/validations';
+import { checkCustomRateLimitAsync, checkRateLimitAsync } from '@/lib/rate-limiter';
 
 export async function POST(request: NextRequest) {
+  const ipLimit = await checkRateLimitAsync(request, {
+    maxRequests: 20,
+    windowMs: 60 * 60_000,
+    keyPrefix: 'waitlist:ip',
+  });
+  if (ipLimit) return ipLimit;
+
   const body = await parseJsonBody(request);
   if (isApiError(body)) return body;
 
@@ -19,6 +27,11 @@ export async function POST(request: NextRequest) {
   }
 
   const email = parsed.data.email.toLowerCase().trim();
+  const emailLimit = await checkCustomRateLimitAsync(`waitlist:email:${email}`, {
+    maxRequests: 3,
+    windowMs: 60 * 60_000,
+  });
+  if (emailLimit) return emailLimit;
 
   // Check if user already exists (returning user)
   const [existingUser] = await db.select({ id: users.id })

@@ -14,8 +14,16 @@ import * as creditService from '@/lib/services/credit.service';
 import * as eventService from '@/lib/services/event.service';
 import { parseJsonBody, isApiError } from '@/lib/api-utils';
 import { quickStartSchema } from '@/lib/validations';
+import { checkCustomRateLimitAsync, checkRateLimitAsync } from '@/lib/rate-limiter';
 
 export async function POST(request: NextRequest) {
+  const ipLimit = await checkRateLimitAsync(request, {
+    maxRequests: 5,
+    windowMs: 10 * 60_000,
+    keyPrefix: 'quick-start:ip',
+  });
+  if (ipLimit) return ipLimit;
+
   const body = await parseJsonBody(request);
   if (isApiError(body)) return body;
 
@@ -25,6 +33,11 @@ export async function POST(request: NextRequest) {
   }
 
   const email = parsed.data.email.toLowerCase().trim();
+  const emailLimit = await checkCustomRateLimitAsync(`quick-start:email:${email}`, {
+    maxRequests: 2,
+    windowMs: 60 * 60_000,
+  });
+  if (emailLimit) return emailLimit;
 
   // Find or create user record (unverified — they'll verify via magic link)
   let [user] = await db.select({ id: users.id })
@@ -50,7 +63,7 @@ export async function POST(request: NextRequest) {
       account_created: false,
       company_id: existing[0].id,
       slug: existing[0].slug,
-      redirect: `/login?redirect=/dashboard/${existing[0].slug}`,
+      redirect: `/login?redirect=/dashboard/${existing[0].id}`,
       message: 'Company already exists — sign in to continue.',
     });
   }
@@ -97,7 +110,7 @@ export async function POST(request: NextRequest) {
     account_created: true,
     company_id: company.id,
     slug,
-    redirect: `/login?redirect=/dashboard/${slug}`,
+    redirect: `/login?redirect=/dashboard/${company.id}`,
     message: 'Account created — redirecting to dashboard.',
   }, { status: 201 });
 }

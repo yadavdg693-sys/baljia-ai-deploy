@@ -20,6 +20,10 @@ services:
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENROUTER_REASONING_EFFORT
+        value: xhigh
       - key: POSTMARK_SERVER_TOKEN
         sync: false
       - key: NEXT_PUBLIC_APP_URL
@@ -35,6 +39,8 @@ services:
       - key: UPSTASH_REDIS_REST_URL
         sync: false
       - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false
+      - key: REDIS_URL
         sync: false
       - key: TAVILY_API_KEY
         sync: false
@@ -60,6 +66,34 @@ services:
         sync: false
       - key: LATEDEV_API_KEY
         sync: false
+      - key: META_ADS_ACCESS_TOKEN
+        sync: false
+      - key: META_ADS_ACCOUNT_ID
+        sync: false
+      - key: META_PAGE_ID
+        sync: false
+      - key: META_PIXEL_ID
+        sync: false
+      - key: META_CAPI_ACCESS_TOKEN
+        sync: false
+      - key: HEYGEN_API_KEY
+        sync: false
+      - key: HEYGEN_FOUNDER_VOICE_ID
+        sync: false
+      - key: DEEPGRAM_API_KEY
+        sync: false
+      - key: FAL_KEY
+        sync: false
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET_NAME
+        sync: false
+      - key: R2_PUBLIC_URL
+        sync: false
       - key: BALJIA_AUTH_FROM_EMAIL
         value: system@baljia.ai
 
@@ -75,7 +109,7 @@ services:
     runtime: node
     plan: starter
     region: oregon
-    buildCommand: npm install
+    buildCommand: npm install && (python -m pip install --user graphifyy==0.7.16 || python3 -m pip install --user graphifyy==0.7.16)
     startCommand: npx tsx scripts/worker-boot.ts
     envVars:
       - key: NODE_ENV
@@ -96,6 +130,8 @@ services:
         sync: false
       - key: OPENROUTER_API_KEY
         sync: false
+      - key: OPENROUTER_REASONING_EFFORT
+        value: xhigh
       - key: BALJIA_OPENAI_OAUTH_STORE_PATH
         sync: false
       - key: POSTMARK_SERVER_TOKEN
@@ -124,6 +160,26 @@ services:
         sync: false
       - key: R2_BUCKET_NAME
         sync: false
+      - key: R2_PUBLIC_URL
+        sync: false
+      - key: META_ADS_ACCESS_TOKEN
+        sync: false
+      - key: META_ADS_ACCOUNT_ID
+        sync: false
+      - key: META_PAGE_ID
+        sync: false
+      - key: META_PIXEL_ID
+        sync: false
+      - key: META_CAPI_ACCESS_TOKEN
+        sync: false
+      - key: HEYGEN_API_KEY
+        sync: false
+      - key: HEYGEN_FOUNDER_VOICE_ID
+        sync: false
+      - key: DEEPGRAM_API_KEY
+        sync: false
+      - key: FAL_KEY
+        sync: false
       - key: BROWSERBASE_API_KEY
         sync: false
       - key: BROWSERBASE_PROJECT_ID
@@ -132,8 +188,12 @@ services:
         sync: false
       - key: UPSTASH_REDIS_REST_TOKEN
         sync: false
+      - key: REDIS_URL
+        sync: false
       - key: ENCRYPTION_KEY
         sync: false
+      - key: GRAPHIFY_ENABLED
+        value: "true"
 
   # ── Cron: Night Shift ──
   # Runs for ALL active companies every night at 2am UTC.

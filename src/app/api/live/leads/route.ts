@@ -8,8 +8,16 @@ import { db, contacts, companies, platformEvents } from '@/lib/db';
 import { eq, and } from 'drizzle-orm';
 import { parseJsonBody, isApiError } from '@/lib/api-utils';
 import { leadCaptureSchema } from '@/lib/validations';
+import { checkCustomRateLimitAsync, checkRateLimitAsync } from '@/lib/rate-limiter';
 
 export async function POST(request: NextRequest) {
+  const ipLimit = await checkRateLimitAsync(request, {
+    maxRequests: 20,
+    windowMs: 60_000,
+    keyPrefix: 'live-leads:ip',
+  });
+  if (ipLimit) return ipLimit;
+
   const body = await parseJsonBody(request);
   if (isApiError(body)) return body;
 
@@ -34,6 +42,11 @@ export async function POST(request: NextRequest) {
   }
 
   const email = parsed.data.email.toLowerCase().trim();
+  const emailLimit = await checkCustomRateLimitAsync(`live-leads:${company.id}:${email}`, {
+    maxRequests: 3,
+    windowMs: 60 * 60_000,
+  });
+  if (emailLimit) return emailLimit;
 
   // Deduplicate — don't insert if this email already exists for this company
   const [existing] = await db.select({ id: contacts.id })

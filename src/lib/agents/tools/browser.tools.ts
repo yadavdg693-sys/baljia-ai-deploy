@@ -11,6 +11,7 @@ import { eq, and, desc, sql } from 'drizzle-orm';
 import { createLogger } from '@/lib/logger';
 import { createCipheriv, createDecipheriv, randomBytes } from 'crypto';
 import { runOcr, findTextOnPage, fetchImageBuffer } from './ocr-engine';
+import { assertUrlSafe } from '@/lib/agents/url-safety';
 
 const log = createLogger('Browser');
 
@@ -165,6 +166,33 @@ async function executeBrowserCommand(
 // ══════════════════════════════════════════════
 // TOOL DEFINITIONS
 // ══════════════════════════════════════════════
+
+// Curated subset of browser tools for the Engineering Agent (id 30) —
+// just the journey-verification primitives. Excludes domain-skill memory,
+// provider packs, OCR, credential storage, and email-inbox features which
+// are specific to the full Browser Agent (id 42). Lets engineering tasks
+// drive a real Chromium session via Browserbase to verify JS-heavy apps
+// (React, Next.js, Vue) where verify_user_journey's HTTP-level walker can't
+// exercise client-side behavior.
+//
+// Intended use: AFTER verify_user_journey + verify_db_state both pass, if
+// the app has significant client-side JavaScript, the engineering agent
+// runs a short browser-driven walkthrough of the same flow as a final check.
+// Costs ~$0.05–0.10 per session start + per-minute Browserbase usage; cap
+// to one session per deploy.
+export function getBrowserVerificationTools() {
+  return getBrowserTools().filter((t) =>
+    [
+      'browser_navigate',
+      'browser_screenshot',
+      'browser_click',
+      'browser_fill',
+      'browser_extract',
+      'browser_get_content',
+      'browser_evaluate',
+    ].includes(t.name)
+  );
+}
 
 export function getBrowserTools() {
   return [
@@ -993,6 +1021,11 @@ export async function handleBrowserTool(
       const method = ((input.method as string) || 'GET').toUpperCase();
       const headers = (input.headers as Record<string, string> | undefined) ?? {};
       const body = input.body as string | undefined;
+      const safety = await assertUrlSafe(url);
+      if (!safety.ok) {
+        return `http_fetch blocked: ${safety.reason}`;
+      }
+
       try {
         const response = await fetch(url, {
           method,
