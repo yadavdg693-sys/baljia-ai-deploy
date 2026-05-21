@@ -85,6 +85,18 @@ dist/
 
 # generated landing-page HTML samples
 /tmp-landing/
+/tmp-landing-v2-samples/
+
+# local measurement and graph output
+/measurement-output/
+/graphify-out/
+
+# local visual debug screenshots
+/current.png
+/fresh.png
+/new-check.png
+/tmp-full.png
+/try-*.png
 
 # generated worker bundles from full-stack CF tests
 /src/scripts/cf-fullstack-test/.bundle/
