@@ -3,6 +3,7 @@ import { getSessionFromCookies } from '@/lib/auth';
 import { db, companies } from '@/lib/db';
 import { eq, and } from 'drizzle-orm';
 import { isValidUUID } from '@/lib/uuid-validation'; // G-INPUT-001: single canonical implementation
+import { isSuperAdminEmail } from '@/lib/super-admin';
 
 type ApiError = NextResponse<{ error: string }>;
 
@@ -146,19 +147,11 @@ export async function requireAdmin(): Promise<
   const authResult = await requireAuth();
   if (authResult instanceof NextResponse) return authResult;
 
-  const adminEmails = (process.env.ADMIN_EMAILS ?? '')
-    .split(',')
-    .map((e) => e.trim().toLowerCase())
-    .filter(Boolean);
-
-  const userEmail = authResult.user.email?.toLowerCase() ?? '';
-
-  if (adminEmails.length === 0) {
-    // Fail closed: if ADMIN_EMAILS is not configured, deny all
+  if (!process.env.ADMIN_EMAILS?.trim()) {
     return NextResponse.json({ error: 'Forbidden: admin access not configured' }, { status: 403 });
   }
 
-  if (!adminEmails.includes(userEmail)) {
+  if (!isSuperAdminEmail(authResult.user.email)) {
     return NextResponse.json({ error: 'Forbidden: admin access required' }, { status: 403 });
   }
 

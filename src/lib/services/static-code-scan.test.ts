@@ -47,6 +47,34 @@ describe('static-code-scan rules', () => {
     expect(f.some((x) => x.rule === 'sql-template-interpolation')).toBe(false);
   });
 
+  it('flags Next server session helpers imported from shared utils', () => {
+    const f = scanFile({
+      path: 'app/api/canary-ai-summary/route.ts',
+      content: 'import { getSession, cn } from "@/lib/utils";\nexport async function POST() {}',
+    });
+    expect(f.some((x) => x.rule === 'session-imported-from-utils' && x.severity === 'high')).toBe(true);
+  });
+
+  it('does NOT flag session helpers imported from lib/session', () => {
+    const f = scanFile({
+      path: 'app/api/canary-ai-summary/route.ts',
+      content: 'import { getSession } from "@/lib/session";\nexport async function POST() {}',
+    });
+    expect(f.some((x) => x.rule === 'session-imported-from-utils')).toBe(false);
+  });
+
+  it('flags storage ArrayBuffer byte-copy pitfalls', () => {
+    const f = scanFile({
+      path: 'lib/storage.ts',
+      content: [
+        'const body = file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength);',
+        'return { size: body.length };',
+      ].join('\n'),
+    });
+    expect(f.some((x) => x.rule === 'storage-arraybuffer-slice' && x.severity === 'high')).toBe(true);
+    expect(f.some((x) => x.rule === 'storage-arraybuffer-length' && x.severity === 'high')).toBe(true);
+  });
+
   it('flags app.use(session) without trust proxy in server.js', () => {
     const f = scanFile({
       path: 'server.js',

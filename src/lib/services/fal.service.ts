@@ -7,6 +7,8 @@ import { createLogger } from '@/lib/logger';
 const log = createLogger('FalAI');
 
 const FAL_API_BASE = 'https://queue.fal.run';
+const DEFAULT_POLL_TIMEOUT_MS = 5 * 60 * 1000;
+const POLL_INTERVAL_MS = 3000;
 
 export function isFalConfigured(): boolean {
   return !!process.env.FAL_KEY;
@@ -38,9 +40,61 @@ async function falRun<T>(
     throw new Error(`Fal.ai submit failed: ${text}`);
   }
 
-  const result = await submitRes.json() as T;
-  log.info('Fal.ai generation complete', { model: modelId });
-  return result;
+  const submitted = await submitRes.json() as T & {
+    request_id?: string;
+    status?: string;
+    status_url?: string;
+    response_url?: string;
+  };
+
+  if (!submitted.request_id && !submitted.status_url && !submitted.response_url) {
+    log.info('Fal.ai generation complete', { model: modelId });
+    return submitted;
+  }
+
+  const deadline = Date.now() + Number(process.env.FAL_POLL_TIMEOUT_MS ?? DEFAULT_POLL_TIMEOUT_MS);
+  while (Date.now() < deadline) {
+    const statusUrl = submitted.status_url
+      ?? (submitted.request_id ? `${FAL_API_BASE}/${modelId}/requests/${submitted.request_id}/status` : null);
+    if (!statusUrl) break;
+
+    const statusRes = await fetch(statusUrl, {
+      headers: { Authorization: `Key ${apiKey}` },
+    });
+    if (!statusRes.ok) {
+      const text = await statusRes.text();
+      throw new Error(`Fal.ai status failed: ${text}`);
+    }
+
+    const status = await statusRes.json() as {
+      status?: string;
+      response_url?: string;
+      error?: string;
+    };
+
+    if (status.status === 'FAILED' || status.status === 'ERROR') {
+      throw new Error(`Fal.ai generation failed: ${status.error ?? status.status}`);
+    }
+
+    if (status.status === 'COMPLETED' || status.status === 'completed') {
+      const responseUrl = status.response_url ?? submitted.response_url;
+      if (!responseUrl) throw new Error('Fal.ai completed without a response URL');
+      const responseRes = await fetch(responseUrl, {
+        headers: { Authorization: `Key ${apiKey}` },
+      });
+      if (!responseRes.ok) {
+        const text = await responseRes.text();
+        throw new Error(`Fal.ai result fetch failed: ${text}`);
+      }
+      const result = await responseRes.json() as T;
+      log.info('Fal.ai generation complete', { model: modelId });
+      return result;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+  }
+
+  throw new Error(`Fal.ai generation timed out for ${modelId}`);
 }
 
 // ══════════════════════════════════════════════

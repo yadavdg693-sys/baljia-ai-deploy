@@ -10,7 +10,7 @@ interface UpgradeDialogProps {
 
 const FEATURES = [
   '1 company',
-  '30 night shifts (1 task/day)',
+  '30 autopilot runs (1 task/day)',
   '5 task credits/month',
   'Unlimited Strategy & Planning Chat',
   'Server, Database, Email, Browser included',

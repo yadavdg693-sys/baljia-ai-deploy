@@ -28,7 +28,7 @@ For the spec ID → file map (8 core specs, 6 control-plane children, 5 billing 
 | Founder Company DBs | Neon (1 per company) | Programmatic provisioning via API, scale-to-zero |
 | Auth (founder) | Custom JWT (jose) + magic link + Google OAuth | Full control over session management |
 | Auth (LLM provider) | **Claude Code OAuth** (`~/.claude/.credentials.json`) → ANTHROPIC_API_KEY → Bedrock | Piggybacks on operator's Pro/Max subscription; no extra creds. See `src/lib/anthropic-oauth.ts`. |
-| Hosting | Cloudflare Workers (primary) + Render (legacy fallback) | See ADR-002. CF Workers serve API + agent execution + scheduled tasks; Render kept for environments without CF creds |
+| Hosting | **Render** for everything except onboarding landing pages | `baljia-ai` web service runs Next.js + API + chat + scheduled crons. `baljia-ai-worker` (Render BG worker) runs the durable task poller (`scripts/worker-boot.ts`). **The only Cloudflare piece in production is the onboarding-landing-page path** (CF Worker reads R2, serves `*.baljia.app`). API, agent execution, queues, crons — all Render. |
 | Cache + ephemeral counters | Redis Cloud (via `ioredis` TCP, not Upstash REST) | Rate-limit counters (`rl:chat:<ip>`), Tavily search cache, fire-and-forget pub/sub on `events:<companyId>`. Falls back gracefully if `REDIS_URL` unset. NOTE: the **task queue is in Postgres** (`tasks.status='todo'` + atomic claim under `WHERE status='todo'`), not Redis. Pub/sub channel is published-to but not yet consumed client-side; dashboard refresh uses 30s poll + on-action hook. |
 | Task queue | Postgres (`tasks` table) | Atomic claim via `WHERE status='todo'` in `claimSlotAndCharge`. Render BG worker (`scripts/worker-boot.ts`) polls + claims; web process can also `launchTask` directly. One slot per company. |
 | LLM (CEO chat) | **Claude Opus 4.6** (`claude-opus-4-6`) | Strategic, multi-tool orchestration, founder-facing. Override via `CEO_CLAUDE_MODEL`. |
@@ -36,36 +36,43 @@ For the spec ID → file map (8 core specs, 6 control-plane children, 5 billing 
 | LLM (Governance) | Claude Haiku 4.5 (`claude-haiku-4-5-20251001`) | Fast/cheap for routing, classification, credit quoting |
 | LLM provider chain (per call) | OpenAI Codex JWT → Claude (OAuth/API/Bedrock) → OpenRouter → Gemini Flash | Each fails over to the next. See `src/lib/agents/agent-factory.ts` and `ceo.agent.ts` |
 | Payments | Stripe | Subscriptions, credit purchases, billing portal |
-| Code Hosting | GitHub (platform-owned org) | Platform code; per-founder repos used only by Render legacy deploy path (CF deploys static landing directly to R2) |
+| Code Hosting | GitHub (platform-owned org) | Platform code; per-founder repos for Render deploys of founder apps. |
 | Browser Automation | Browserbase | Cloud Playwright for Browser agent |
 | Email | Postmark (transactional) | SPF/DKIM/DMARC, deliverability |
 | Email Verification | Hunter.io | find_email, verify_email |
 | Research | Tavily | Read-only web search for Research agent (Baljia improvement) |
-| Ad Creative | Sora 2 (OpenAI) | 15-30s AI video ads |
-| Object Storage | Cloudflare R2 (via AWS S3 SDK) | Asset storage for generated content |
+| Ad Creative | HeyGen Video Agent (primary), Fal.ai fallback | 9:16 AI video ads saved to R2 before Meta upload |
+| Object Storage | Cloudflare R2 (via AWS S3 SDK) | Founder landing-page HTML (written during onboarding) + generated assets. Read by the onboarding-landing-page CF Worker on `*.baljia.app`. |
 | Monitoring | Sentry | Error tracking, performance monitoring |
 | Validation | Zod | Runtime input validation on all API boundaries |
 | Testing | Vitest | Unit and integration tests |
 
-## Hosting Architecture (ADR-002 Split Hosting)
+## Hosting Architecture (current reality — supersedes ADR-002 framing)
 
-Two-tier hosting: **Cloudflare Workers as primary, Render as legacy fallback**. Tier dispatch happens at runtime — services check `isCloudflareDeployConfigured()` and route accordingly. Lets dev/CI environments without CF creds keep working.
+**Render runs everything except the onboarding landing pages, which use Cloudflare R2 + a single CF Worker on `*.baljia.app`.**
 
-| Concern | Cloudflare path (primary) | Render path (legacy fallback) |
-|---|---|---|
-| API + Next.js app | CF Worker via `@opennextjs/cloudflare` (`wrangler.toml`) | Render web service (`render.yaml`) |
-| Scheduled tasks | CF Cron Triggers / Workflows | Render cron jobs |
-| Founder landing pages | R2 upload to `founder-apps/{slug}/index.html`, served by CF Worker via wildcard `*.baljia.app` route | GitHub repo + Render static site + per-subdomain DNS |
-| Founder DBs | Neon (unchanged across both paths) | Neon (unchanged) |
+| Concern | Where it runs |
+|---|---|
+| Next.js app + API + chat UI + onboarding pipeline orchestration | Render web service (`baljia-ai`, `render.yaml`) |
+| Durable task worker (agent execution — Engineering, Browser, Research, etc.) | Render BG worker (`baljia-ai-worker`, runs `scripts/worker-boot.ts`) |
+| Scheduled crons | Render cron jobs |
+| Founder landing-page HTML storage | **Cloudflare R2** at `founder-apps/{slug}/index.html` (written during onboarding) |
+| Founder landing-page serving on `*.baljia.app` | **CF Worker** (`founder-app-worker/`) — reads R2 by hostname, serves HTML. This is the **only** CF Worker in production. |
+| Founder DBs (per-company) | Neon |
+| Founder app deploys (engineering-agent output — full-stack apps) | **Render** (one web service per founder). NOT CF Workers — Engineering agent never builds for the CF Workers runtime. |
 
-### Founder landing page deploy flow (CF primary path)
+> **Stale / unused code paths to be aware of:**
+> - `wrangler.toml` at repo root + `src/cf-worker-entry.ts` — a separate "CF as primary for everything" spike. **Not deployed.** The deployed CF Worker is the one inside `founder-app-worker/`, with its own `wrangler.toml`.
+> - `docs/adr-002-split-hosting-strategy.md` — historical; the "CF Workers as primary for the whole platform" framing in there is superseded by this section. The Render-for-everything-except-landing-pages split below is what's actually in production.
+> - `isCloudflareDeployConfigured()` / `getLandingDeployTarget()` dispatch in `landing-deploy.service.ts`: gates whether onboarding pushes the landing HTML to R2 (production path) vs. a GitHub-static-site dev fallback enabled by `ALLOW_RENDER_LANDING_FALLBACK=true`.
+
+### Onboarding landing-page deploy flow (only place Cloudflare runs our logic)
 
 1. `generateLandingPage(ctx)` produces structured 8-field JSON via LLM (design_intent + 7 content sections — see canonical format below)
 2. Renderer turns JSON → HTML with design tokens (per-company palette / font / density)
-3. `publishLandingToSubdomain(ctx, html)` calls `deployLandingPage()` which dispatches to CF
-4. CF path uploads HTML to R2 at deterministic key `founder-apps/{slug}/index.html`
-5. CF Worker on `*.baljia.app` wildcard route reads R2 by hostname slug, serves HTML
-6. **HTML is NOT stored in `documents` table** — the deployed URL is the source of truth
+3. `publishLandingToSubdomain(ctx, html)` calls `deployLandingPage()`, which calls `uploadLandingHtml(slug, html)` to write to R2 at `founder-apps/{slug}/index.html`
+4. The `founder-app-worker/` CF Worker, bound to the wildcard route `*.baljia.app/*`, reads R2 by hostname slug on each request and serves the HTML
+5. **HTML is NOT stored in `documents` table** — the deployed URL is the source of truth
 
 ### Landing page canonical format (7 sections)
 
@@ -81,13 +88,14 @@ Country may appear ONCE in closing or tagline as PROVENANCE only ("Built in Indi
 
 ### Code locations
 
-- `src/lib/services/landing-deploy.service.ts` — tier dispatcher (CF / Render)
-- `src/lib/services/cf-deploy.service.ts` — R2 upload + idempotency
+- `src/lib/services/landing-deploy.service.ts` — orchestrates landing deploy; calls `cf-deploy.service.ts` for the R2 upload
+- `src/lib/services/cf-deploy.service.ts` — R2 upload + idempotency (named `cf-deploy` because the upload target lives on Cloudflare)
 - `src/lib/services/onboarding/shared/landing.ts` — structured-JSON generator + renderer + `publishLandingToSubdomain`
 - `src/lib/services/onboarding/shared/landing-design-tokens.ts` — palette × mood, font pairings, density resolver
-- `src/lib/services/domain.service.ts` — `provisionWildcardSubdomain` (DB-only, no DNS call since `*.baljia.app` is wildcard)
-- `founder-app-worker/` — CF Worker source serving `*.baljia.app`
-- See `docs/adr-002-split-hosting-strategy.md` for the decision record and `docs/cf-founder-app-runbook.md` for ops
+- `src/lib/services/domain.service.ts` — `provisionWildcardSubdomain` (DB-only; `*.baljia.app` is handled by the CF Worker's wildcard route)
+- `founder-app-worker/` — **deployed.** The single CF Worker in production. Reads R2, serves `*.baljia.app/*`. Has its own `wrangler.toml` inside the directory.
+- `wrangler.toml` at repo root + `src/cf-worker-entry.ts` — a separate "CF as primary for everything" spike. **Not deployed.** Distinct from `founder-app-worker/wrangler.toml`.
+- `docs/adr-002-split-hosting-strategy.md` and `docs/cf-founder-app-runbook.md` — partially historical: the landing-page part is current; the "CF Workers primary for the rest of the platform" framing is superseded by the section above.
 
 ## 9 Agents
 

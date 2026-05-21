@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { getSessionFromRequest } from '@/lib/auth';
+import { shouldHideOwnerPathBeforeAuth } from '@/lib/super-admin-routing';
 
 // M-INFRA-025: CORS origin whitelist
 const ALLOWED_ORIGINS = [
@@ -92,12 +93,17 @@ export async function middleware(request: NextRequest) {
     pathname.startsWith('/api/webhooks') ||
     pathname.startsWith('/api/health') ||
     pathname.startsWith('/api/waitlist') ||
+    pathname.startsWith('/api/quick-start') ||
     pathname.startsWith('/api/live') ||       // public live wall + lead capture
     pathname.startsWith('/api/events/stream'); // public live wall SSE
 
-  // Protected: dashboard pages + non-public API routes
-  const isProtectedPage = pathname.startsWith('/dashboard');
+  // Protected: dashboard/owner pages + non-public API routes
+  const isProtectedPage = pathname.startsWith('/dashboard') || pathname.startsWith('/owner');
   const isProtectedApi = pathname.startsWith('/api') && !isPublicApi;
+
+  if (shouldHideOwnerPathBeforeAuth(pathname)) {
+    return new NextResponse(null, { status: 404 });
+  }
 
   if (isProtectedPage) {
     const session = await getSessionFromRequest(request);

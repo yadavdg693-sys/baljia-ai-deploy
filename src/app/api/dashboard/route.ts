@@ -5,9 +5,11 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuthAndCompany, getRequiredCompanyId, isApiError } from '@/lib/api-utils';
-import { db, tasks, companies, documents, dashboardLinks, emailThreads, tweets as tweetsTable, adCampaigns, subscriptions, platformEvents } from '@/lib/db';
+import { db, tasks, companies, documents, dashboardLinks, emailThreads, tweets as tweetsTable, adCampaigns, subscriptions, platformEvents, promoVideoJobs } from '@/lib/db';
+import { mapPromoVideoJob } from '@/lib/services/promo-video-core.service';
 import { eq, and, desc, inArray, notInArray } from 'drizzle-orm';
 import * as creditService from '@/lib/services/credit.service';
+import { stripTaskInternalFields } from '@/lib/services/task.service';
 import { FOUNDER_HIDDEN_DOC_TYPES } from '@/lib/founder-safety/hidden-doc-types';
 
 export async function GET(request: NextRequest) {
@@ -25,6 +27,7 @@ export async function GET(request: NextRequest) {
     emailRows,
     tweetRows,
     adRows,
+    promoVideoRows,
     creditBalance,
     sub,
     setupEventRows,
@@ -82,6 +85,11 @@ export async function GET(request: NextRequest) {
       .orderBy(desc(adCampaigns.created_at))
       .limit(10),
 
+    db.select().from(promoVideoJobs)
+      .where(eq(promoVideoJobs.company_id, companyId))
+      .orderBy(desc(promoVideoJobs.created_at))
+      .limit(10),
+
     creditService.getBalance(companyId),
 
     db.select({ plan_type: subscriptions.plan_type, status: subscriptions.status })
@@ -110,12 +118,13 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({
     company,
-    tasks: taskRows,
+    tasks: taskRows.map(stripTaskInternalFields),
     documents: docRows,
     links: linkRows,
     emails: emailRows,
     tweets: tweetRows,
     ads: adRows,
+    promo_videos: promoVideoRows.map((row) => mapPromoVideoJob(row)),
     setup_events: setupEventRows.reverse().map((event) => ({
       id: event.id,
       event_type: event.event_type,

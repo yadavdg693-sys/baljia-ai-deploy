@@ -131,6 +131,7 @@ export const tasks = pgTable('tasks', {
   executability_type: varchar('executability_type', { length: 50 }).default('can_run_now'),
   execution_mode: varchar('execution_mode', { length: 50 }),
   assigned_to_agent_id: integer('assigned_to_agent_id').references(() => agents.id),
+  execution_contract: jsonb('execution_contract').$type<Record<string, unknown>>(),
   estimated_hours: decimal('estimated_hours', { precision: 4, scale: 1 }),
   estimated_credits: integer('estimated_credits').default(1),
   actual_credits_charged: integer('actual_credits_charged').default(0),
@@ -171,6 +172,27 @@ export const tasks = pgTable('tasks', {
 // ══════════════════════════════════════════════
 // TASK EXECUTIONS
 // ══════════════════════════════════════════════
+export const taskDrafts = pgTable('task_drafts', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  company_id: uuid('company_id').notNull().references(() => companies.id),
+  title: varchar('title', { length: 500 }).notNull(),
+  description: text('description'),
+  tag: varchar('tag', { length: 50 }).notNull(),
+  priority: integer('priority').default(50),
+  source: varchar('source', { length: 50 }).notNull(),
+  status: varchar('status', { length: 50 }).default('pending_ceo_review').notNull(),
+  suggestion_reasoning: text('suggestion_reasoning'),
+  proposed_task: jsonb('proposed_task').$type<Record<string, unknown>>(),
+  proposed_execution_contract: jsonb('proposed_execution_contract').$type<Record<string, unknown>>(),
+  reviewed_task_id: uuid('reviewed_task_id').references(() => tasks.id),
+  reviewed_at: timestamp('reviewed_at', { withTimezone: true }),
+  created_at: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow(),
+}, (t) => [
+  index('idx_task_drafts_company').on(t.company_id),
+  index('idx_task_drafts_company_status').on(t.company_id, t.status),
+]);
+
 export const taskExecutions = pgTable('task_executions', {
   id: uuid('id').primaryKey().defaultRandom(),
   task_id: uuid('task_id').notNull().references(() => tasks.id),
@@ -640,6 +662,41 @@ export const platformEvents = pgTable('platform_events', {
 // ══════════════════════════════════════════════
 // DASHBOARD LINKS (CEO tool)
 // ══════════════════════════════════════════════
+export const promoVideoJobs = pgTable('promo_video_jobs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  company_id: uuid('company_id').notNull().references(() => companies.id, { onDelete: 'cascade' }),
+  task_id: uuid('task_id').references(() => tasks.id, { onDelete: 'set null' }),
+  status: varchar('status', { length: 50 }).notNull().default('queued'),
+  goal: varchar('goal', { length: 50 }).notNull(),
+  duration_seconds: integer('duration_seconds').notNull(),
+  aspect_ratio: varchar('aspect_ratio', { length: 20 }).notNull(),
+  style: varchar('style', { length: 50 }).notNull(),
+  visual_mode: varchar('visual_mode', { length: 50 }).notNull().default('actual_site'),
+  voice_mode: varchar('voice_mode', { length: 50 }).notNull(),
+  cta: text('cta'),
+  brief: jsonb('brief').$type<Record<string, unknown>>(),
+  storyboard: jsonb('storyboard').$type<Record<string, unknown>>(),
+  capture_assets: jsonb('capture_assets').$type<Record<string, unknown>[]>(),
+  ai_usage: jsonb('ai_usage').$type<Record<string, unknown>>(),
+  preview_key: text('preview_key'),
+  preview_url: text('preview_url'),
+  audio_key: text('audio_key'),
+  audio_url: text('audio_url'),
+  output_key: text('output_key'),
+  output_url: text('output_url'),
+  thumbnail_key: text('thumbnail_key'),
+  thumbnail_url: text('thumbnail_url'),
+  error_message: text('error_message'),
+  created_at: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow(),
+  completed_at: timestamp('completed_at', { withTimezone: true }),
+}, (t) => [
+  index('idx_promo_video_jobs_company').on(t.company_id),
+  index('idx_promo_video_jobs_task').on(t.task_id),
+  index('idx_promo_video_jobs_status').on(t.status),
+  index('idx_promo_video_jobs_company_created').on(t.company_id, t.created_at),
+]);
+
 export const dashboardLinks = pgTable('dashboard_links', {
   id: uuid('id').primaryKey().defaultRandom(),
   company_id: uuid('company_id').notNull().references(() => companies.id),
@@ -890,6 +947,178 @@ export const artifacts = pgTable('artifacts', {
 // ══════════════════════════════════════════════
 // APPROVAL RECORDS — stored approval lineage for risky work (SPEC-CTRL-102)
 // ══════════════════════════════════════════════
+// OpenCode-style structured runtime records for agent execution replay,
+// inspection, abort/resume controls, and safer repair workflows.
+export const agentRunEvents = pgTable('agent_run_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  session_id: uuid('session_id').references(() => sessions.id, { onDelete: 'cascade' }),
+  run_id: uuid('run_id').references(() => runs.id, { onDelete: 'cascade' }),
+  task_id: uuid('task_id').notNull().references(() => tasks.id),
+  execution_id: uuid('execution_id').references(() => taskExecutions.id),
+  sequence: integer('sequence').notNull(),
+  turn: integer('turn'),
+  event_type: varchar('event_type', { length: 80 }).notNull(),
+  provider: varchar('provider', { length: 50 }),
+  tool_name: varchar('tool_name', { length: 120 }),
+  status: varchar('status', { length: 50 }),
+  message: text('message'),
+  input: jsonb('input'),
+  output: jsonb('output'),
+  metadata: jsonb('metadata'),
+  created_at: timestamp('created_at', { withTimezone: true }).defaultNow(),
+}, (t) => [
+  index('idx_agent_run_events_run').on(t.run_id),
+  index('idx_agent_run_events_task').on(t.task_id),
+  index('idx_agent_run_events_execution').on(t.execution_id),
+  index('idx_agent_run_events_type').on(t.event_type),
+  uniqueIndex('idx_agent_run_events_execution_sequence').on(t.execution_id, t.sequence),
+]);
+
+export const agentRunMessages = pgTable('agent_run_messages', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  run_id: uuid('run_id').references(() => runs.id, { onDelete: 'cascade' }),
+  task_id: uuid('task_id').notNull().references(() => tasks.id),
+  execution_id: uuid('execution_id').references(() => taskExecutions.id),
+  turn: integer('turn'),
+  role: varchar('role', { length: 40 }).notNull(),
+  provider: varchar('provider', { length: 50 }),
+  content: text('content'),
+  raw: jsonb('raw'),
+  created_at: timestamp('created_at', { withTimezone: true }).defaultNow(),
+}, (t) => [
+  index('idx_agent_run_messages_run').on(t.run_id),
+  index('idx_agent_run_messages_task').on(t.task_id),
+]);
+
+export const agentToolCalls = pgTable('agent_tool_calls', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  run_id: uuid('run_id').references(() => runs.id, { onDelete: 'cascade' }),
+  task_id: uuid('task_id').notNull().references(() => tasks.id),
+  execution_id: uuid('execution_id').references(() => taskExecutions.id),
+  turn: integer('turn'),
+  tool_name: varchar('tool_name', { length: 120 }).notNull(),
+  input: jsonb('input'),
+  result: text('result'),
+  status: varchar('status', { length: 50 }).default('completed').notNull(),
+  metadata: jsonb('metadata'),
+  started_at: timestamp('started_at', { withTimezone: true }),
+  completed_at: timestamp('completed_at', { withTimezone: true }).defaultNow(),
+  created_at: timestamp('created_at', { withTimezone: true }).defaultNow(),
+}, (t) => [
+  index('idx_agent_tool_calls_run').on(t.run_id),
+  index('idx_agent_tool_calls_task').on(t.task_id),
+  index('idx_agent_tool_calls_name').on(t.tool_name),
+]);
+
+export const agentGateDecisions = pgTable('agent_gate_decisions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  run_id: uuid('run_id').references(() => runs.id, { onDelete: 'cascade' }),
+  task_id: uuid('task_id').notNull().references(() => tasks.id),
+  execution_id: uuid('execution_id').references(() => taskExecutions.id),
+  gate_name: varchar('gate_name', { length: 100 }).notNull(),
+  status: varchar('status', { length: 50 }).notNull(),
+  reason: text('reason'),
+  evidence: jsonb('evidence'),
+  turn: integer('turn'),
+  created_at: timestamp('created_at', { withTimezone: true }).defaultNow(),
+}, (t) => [
+  index('idx_agent_gate_decisions_run').on(t.run_id),
+  index('idx_agent_gate_decisions_task').on(t.task_id),
+  index('idx_agent_gate_decisions_gate').on(t.gate_name),
+]);
+
+export const agentProviderAttempts = pgTable('agent_provider_attempts', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  run_id: uuid('run_id').references(() => runs.id, { onDelete: 'cascade' }),
+  task_id: uuid('task_id').notNull().references(() => tasks.id),
+  execution_id: uuid('execution_id').references(() => taskExecutions.id),
+  provider: varchar('provider', { length: 50 }).notNull(),
+  model: varchar('model', { length: 120 }),
+  status: varchar('status', { length: 50 }).notNull(),
+  error: text('error'),
+  latency_ms: integer('latency_ms'),
+  token_usage: jsonb('token_usage'),
+  cost_usd: decimal('cost_usd', { precision: 10, scale: 6 }),
+  metadata: jsonb('metadata'),
+  started_at: timestamp('started_at', { withTimezone: true }).defaultNow(),
+  completed_at: timestamp('completed_at', { withTimezone: true }),
+}, (t) => [
+  index('idx_agent_provider_attempts_run').on(t.run_id),
+  index('idx_agent_provider_attempts_task').on(t.task_id),
+  index('idx_agent_provider_attempts_provider').on(t.provider),
+]);
+
+export const agentVerificationResults = pgTable('agent_verification_results', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  run_id: uuid('run_id').references(() => runs.id, { onDelete: 'cascade' }),
+  task_id: uuid('task_id').notNull().references(() => tasks.id),
+  execution_id: uuid('execution_id').references(() => taskExecutions.id),
+  verifier: varchar('verifier', { length: 100 }).notNull(),
+  level: varchar('level', { length: 50 }),
+  passed: boolean('passed').notNull(),
+  summary: text('summary'),
+  checks: jsonb('checks'),
+  evidence: jsonb('evidence'),
+  created_at: timestamp('created_at', { withTimezone: true }).defaultNow(),
+}, (t) => [
+  index('idx_agent_verification_results_run').on(t.run_id),
+  index('idx_agent_verification_results_task').on(t.task_id),
+  index('idx_agent_verification_results_passed').on(t.passed),
+]);
+
+export const agentSubagentOutputs = pgTable('agent_subagent_outputs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  run_id: uuid('run_id').references(() => runs.id, { onDelete: 'cascade' }),
+  task_id: uuid('task_id').notNull().references(() => tasks.id),
+  execution_id: uuid('execution_id').references(() => taskExecutions.id),
+  role: varchar('role', { length: 50 }).notNull(),
+  status: varchar('status', { length: 50 }).default('completed').notNull(),
+  output: jsonb('output'),
+  cannot_complete_task: boolean('cannot_complete_task').default(true).notNull(),
+  created_at: timestamp('created_at', { withTimezone: true }).defaultNow(),
+}, (t) => [
+  index('idx_agent_subagent_outputs_run').on(t.run_id),
+  index('idx_agent_subagent_outputs_task').on(t.task_id),
+  index('idx_agent_subagent_outputs_role').on(t.role),
+]);
+
+export const agentPatchCheckpoints = pgTable('agent_patch_checkpoints', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  run_id: uuid('run_id').references(() => runs.id, { onDelete: 'cascade' }),
+  task_id: uuid('task_id').notNull().references(() => tasks.id),
+  execution_id: uuid('execution_id').references(() => taskExecutions.id),
+  starting_commit: varchar('starting_commit', { length: 80 }),
+  last_good_commit: varchar('last_good_commit', { length: 80 }),
+  task_commit_range: varchar('task_commit_range', { length: 180 }),
+  failed_commit: varchar('failed_commit', { length: 80 }),
+  rollback_available: boolean('rollback_available').default(false).notNull(),
+  rollback_confidence: varchar('rollback_confidence', { length: 50 }),
+  patch_summary: jsonb('patch_summary'),
+  created_at: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow(),
+}, (t) => [
+  index('idx_agent_patch_checkpoints_run').on(t.run_id),
+  index('idx_agent_patch_checkpoints_task').on(t.task_id),
+]);
+
+export const agentRunControls = pgTable('agent_run_controls', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  run_id: uuid('run_id').references(() => runs.id, { onDelete: 'cascade' }),
+  task_id: uuid('task_id').notNull().references(() => tasks.id),
+  execution_id: uuid('execution_id').references(() => taskExecutions.id),
+  action: varchar('action', { length: 80 }).notNull(),
+  status: varchar('status', { length: 50 }).default('requested').notNull(),
+  requested_by: varchar('requested_by', { length: 120 }),
+  reason: text('reason'),
+  payload: jsonb('payload'),
+  created_at: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  handled_at: timestamp('handled_at', { withTimezone: true }),
+}, (t) => [
+  index('idx_agent_run_controls_run').on(t.run_id),
+  index('idx_agent_run_controls_task').on(t.task_id),
+  index('idx_agent_run_controls_status').on(t.status),
+]);
+
 export const approvalRecords = pgTable('approval_records', {
   id: uuid('id').primaryKey().defaultRandom(),
   task_id: uuid('task_id').notNull().references(() => tasks.id),
@@ -935,6 +1164,48 @@ export const knownIssueRegistry = pgTable('known_issue_registry', {
   updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow(),
 }, (t) => [
   index('idx_known_issue_registry_status').on(t.fix_status),
+]);
+
+// ══════════════════════════════════════════════
+// PAYMENT CONNECTIONS — founder-owned Stripe / Razorpay credentials
+// Engineering agent reads these when running stripe_* / razorpay_* tools
+// so products/prices/payment-links are created in the FOUNDER'S account,
+// not Baljia's. Encrypted at rest via Web Crypto AES-256-GCM.
+// ══════════════════════════════════════════════
+export const paymentConnections = pgTable('payment_connections', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  company_id: uuid('company_id').notNull().references(() => companies.id, { onDelete: 'cascade' }),
+  provider: varchar('provider', { length: 20 }).notNull(),          // 'stripe' | 'razorpay'
+  mode: varchar('mode', { length: 10 }).notNull().default('test'),  // 'test' | 'live'
+  auth_method: varchar('auth_method', { length: 20 }).notNull().default('paste_key'), // 'paste_key' | 'oauth'
+  secret_key_encrypted: text('secret_key_encrypted').notNull(),     // OAuth access_token OR pasted secret key
+  publishable_key: varchar('publishable_key', { length: 255 }),
+  webhook_secret_encrypted: text('webhook_secret_encrypted'),
+  account_id: varchar('account_id', { length: 255 }),               // Stripe acct_xxx (stripe_user_id) or Razorpay merchant id
+  display_name: varchar('display_name', { length: 255 }),
+  status: varchar('status', { length: 20 }).notNull().default('connected'), // 'connected' | 'invalid' | 'revoked'
+  last_validated_at: timestamp('last_validated_at', { withTimezone: true }),
+  connected_at: timestamp('connected_at', { withTimezone: true }).defaultNow().notNull(),
+  updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  uniqueIndex('uniq_payment_connection_per_provider').on(t.company_id, t.provider),
+  index('idx_payment_connections_company').on(t.company_id),
+]);
+
+export const superAdminAuditEvents = pgTable('super_admin_audit_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  admin_user_id: uuid('admin_user_id').references(() => users.id, { onDelete: 'set null' }),
+  admin_email: varchar('admin_email', { length: 255 }).notNull(),
+  action: varchar('action', { length: 100 }).notNull(),
+  target_type: varchar('target_type', { length: 80 }),
+  target_id: text('target_id'),
+  metadata: jsonb('metadata').$type<Record<string, unknown>>(),
+  created_at: timestamp('created_at', { withTimezone: true }).defaultNow(),
+}, (t) => [
+  index('idx_super_admin_audit_admin').on(t.admin_user_id),
+  index('idx_super_admin_audit_action').on(t.action),
+  index('idx_super_admin_audit_target').on(t.target_type, t.target_id),
+  index('idx_super_admin_audit_created').on(t.created_at),
 ]);
 
 // ══════════════════════════════════════════════

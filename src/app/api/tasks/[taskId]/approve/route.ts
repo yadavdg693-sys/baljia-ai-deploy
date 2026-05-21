@@ -7,6 +7,8 @@ import { isValidUUID } from '@/lib/uuid-validation';
 import { db, companies } from '@/lib/db';
 import { eq } from 'drizzle-orm';
 import { createLogger } from '@/lib/logger';
+import { routeTask } from '@/lib/services/router.service';
+import { engineeringContractBlockReason } from '@/lib/agents/execution-contract';
 
 const log = createLogger('TaskApprove');
 
@@ -50,6 +52,12 @@ export async function POST(
     return NextResponse.json({ error: 'Execution is suspended on this account.' }, { status: 409 });
   }
 
+  const agentId = task.assigned_to_agent_id ?? routeTask(task.tag);
+  const contractBlockReason = engineeringContractBlockReason(task, agentId);
+  if (contractBlockReason) {
+    return NextResponse.json({ error: contractBlockReason }, { status: 409 });
+  }
+
   const balance = await creditService.getBalance(task.company_id);
   if (balance < 1) {
     return NextResponse.json({ error: 'Insufficient credits. Purchase more to run tasks.' }, { status: 409 });
@@ -85,7 +93,18 @@ export async function POST(
   // worker run; surface progress via dashboard polling + on-action refresh.
   void import('@/lib/agents/worker-launcher').then(({ launchTask }) =>
     launchTask(taskId).catch((err) => {
-      log.error('launchTask after approve failed', { taskId, error: err instanceof Error ? err.message : String(err) });
+      const error = err instanceof Error ? err.message : String(err);
+      log.error('launchTask after approve failed', { taskId, error });
+      void eventService.emit(task.company_id, 'task_launch_failed', {
+        task_id: task.id,
+        title: task.title,
+        error,
+      }).catch((emitError) => {
+        log.error('Failed to emit task_launch_failed', {
+          taskId,
+          error: emitError instanceof Error ? emitError.message : String(emitError),
+        });
+      });
     }),
   );
 
@@ -95,6 +114,6 @@ export async function POST(
     status: 'todo',                    // still todo for ~1s — worker claim flips to in_progress
     authorized: true,
     queued_for_worker: true,
-    note: 'Task approved and launching now.',
+    note: 'Task approved and queued for launch.',
   });
 }

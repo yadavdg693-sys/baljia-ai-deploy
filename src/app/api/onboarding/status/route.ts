@@ -26,7 +26,7 @@ const STAGE_LABELS: Record<string, string> = {
   send_startup_email: 'Sending your first company email...',
   generate_market_research: 'Researching market opportunity...',
   save_mission: 'Writing mission statement...',
-  create_starter_tasks: 'Creating your first tasks...',
+  create_starter_tasks: 'Preparing your first operating plan...',
   generate_landing_page: 'Generating your landing page...',
   post_launch_tweet: 'Posting launch announcement...',
   generate_ceo_summary: 'Preparing CEO briefing...',

@@ -77,7 +77,6 @@ async function main() {
       name: 'TestCo AI',
       slug: `testco-${Date.now()}`,
       one_liner: 'AI-powered test company for CEO tool validation',
-      company_stage: 'validation',
       lifecycle: 'trial_active',
       plan_tier: 'trial',
       execution_state: 'active',

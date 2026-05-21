@@ -28,7 +28,11 @@
 // Every site that touches pi-ai should go through `loadPiAi` / `loadPiAiOAuth`
 // in this module instead of importing pi-ai directly.
 
-let installed = false;
+const guardState = globalThis as typeof globalThis & {
+  __baljiaPiAiUnhandledRejectionGuardInstalled?: boolean;
+};
+
+let installed = guardState.__baljiaPiAiUnhandledRejectionGuardInstalled === true;
 
 function shouldSwallow(reason: unknown): boolean {
   if (!reason) return false;
@@ -49,8 +53,9 @@ function shouldSwallow(reason: unknown): boolean {
 }
 
 function installGuard(): void {
-  if (installed) return;
+  if (installed || guardState.__baljiaPiAiUnhandledRejectionGuardInstalled) return;
   installed = true;
+  guardState.__baljiaPiAiUnhandledRejectionGuardInstalled = true;
 
   // Node — `process.on('unhandledRejection')`.
   if (typeof process !== 'undefined' && typeof process.on === 'function') {

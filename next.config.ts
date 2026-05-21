@@ -24,6 +24,15 @@ const nextConfig: NextConfig = {
       },
     ];
   },
+  webpack(config, { dev }) {
+    if (!dev) {
+      // Next's bundled webpack can crash in production builds on Windows/Node 22
+      // while hashing persistent cache entries. Disabling the cache keeps the
+      // build deterministic; Render/Linux still benefits from npm layer cache.
+      config.cache = false;
+    }
+    return config;
+  },
 };
 
 // Wrap with Sentry only when auth token is available (avoids build errors in dev)

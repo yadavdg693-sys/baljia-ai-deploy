@@ -2,7 +2,7 @@
 // new credit-pricing helper that drives heavy-Browser-task billing.
 
 import { describe, it, expect } from 'vitest';
-import { routeTask, getAgentName, getCreditCostForTask } from './router.service';
+import { routeTask, routeTaskStrict, getAgentName, getCreditCostForTask } from './router.service';
 
 describe('routeTask', () => {
   it('routes browser tags to agent 42', () => {
@@ -12,13 +12,31 @@ describe('routeTask', () => {
   });
 
   it('routes engineering tags to agent 30', () => {
+    expect(routeTask('engineering')).toBe(30);
     expect(routeTask('landing-page')).toBe(30);
     expect(routeTask('api')).toBe(30);
     expect(routeTask('billing')).toBe(30);
   });
 
-  it('falls back to engineering (30) for unknown tags', () => {
+  it('routes exact agent aliases without substring matching', () => {
+    expect(routeTask('browser')).toBe(42);
+    expect(routeTask('meta_ads')).toBe(41);
+    expect(routeTask('cold-outreach')).toBe(54);
+  });
+
+  it('keeps legacy routeTask fallback for old queued tasks', () => {
     expect(routeTask('totally-unknown-tag-xyz')).toBe(30);
+  });
+
+  it('does not strict-route unknown tags into engineering', () => {
+    expect(routeTaskStrict('totally-unknown-tag-xyz')).toBeNull();
+    expect(routeTaskStrict('market-analysis-extra')).toBeNull();
+    expect(routeTaskStrict('scrape-dashboard')).toBeNull();
+  });
+
+  it('does not substring-route compound or accidental tags', () => {
+    expect(routeTask('market-analysis-extra')).toBe(30);
+    expect(routeTask('scrape-dashboard')).toBe(30);
   });
 });
 

@@ -15,7 +15,7 @@ const PLATFORM_TOOL_REGISTRY: Record<string, string[]> = {
   browser: ['browser_navigate','browser_screenshot','browser_click','browser_fill','browser_extract','browser_get_content','browser_evaluate','get_site_tier','save_credentials','get_credentials','generate_password','get_company_email','check_verification_inbox','verify_credentials','list_stored_credentials','list_browser_contexts','delete_browser_context','record_domain_skill','read_domain_skills','list_provider_packs','start_provider_pack','ocr_current_page','ocr_click_text','ocr_image','get_inbox','get_email_thread','wait_for_email','send_company_email','http_fetch','add_contact','get_contacts'],
   content: ['create_draft','get_drafts','publish_post','update_draft','generate_image_prompt','get_content_calendar'],
   support: ['get_support_tickets','reply_to_ticket','close_ticket','escalate_ticket','add_contact'],
-  meta_ads: ['get_campaigns','create_campaign','create_ad_set','create_image_creative','launch_ad','pause_campaign','get_insights','upload_ad_video','create_video_creative','save_ad','add_captions'],
+  meta_ads: ['get_campaigns','create_campaign','create_ad_set','create_image_creative','launch_ad','pause_campaign','get_insights','generate_ad_video','save_ad_creative_to_r2','upload_ad_video','create_video_creative','save_ad','add_captions'],
   research: ['web_search','search_competitors','get_market_data'],
   base: ['read_document','write_document','create_task','update_task_status','send_message','save_memory','get_memory','list_scripts','run_script','get_script_output','add_dashboard_link','get_dashboard_links'],
 };

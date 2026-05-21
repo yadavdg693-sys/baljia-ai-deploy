@@ -1,71 +1,134 @@
-# Skill: AI features inside founder apps (Claude Agent SDK + Codex)
+# agent-sdk — AI & Search for Founder Apps
 
-**READ THIS BEFORE adding any LLM call, AI-powered feature, agent loop, or
-prompt-template logic to a founder app.**
+**Read this BEFORE adding any LLM call, AI feature, or web search to a founder app.**
 
-## Why this skill exists
+AI and search are **opt-in**. They are NOT included in every app by default.
+Only add them when the founder explicitly requests an AI feature or search capability.
 
-Polsia made `agent-sdk` mandatory because LLM integration has a long list
-of stack-specific gotchas the LLM's training data papers over. On Workers
-specifically: SDK transport selection, OAuth vs API key auth, streaming
-limits, timeout behavior, and tool-use response parsing all break in
-non-obvious ways if you copy a generic example off the web.
+---
 
-## Status: scaffold (full content TBD)
+## When a Founder Asks for AI Features
 
-The full contents of this skill — code patterns, anti-patterns, working
-examples, auth strategies — are not yet written here. For now, when the
-engineering agent reads this skill it will see this scaffold and know
-to surface that the AI integration is being attempted without a fully
-documented playbook. Treat that as a signal: pause, ask for guidance,
-or default to the safest path (Anthropic SDK + ANTHROPIC_API_KEY via
-additional_secrets, with a 25-second timeout to fit the Workers CPU
-limit).
+### Step 1 — Add env vars to their Render service
 
-## What this skill WILL cover (when filled in)
+Use `render_set_env_var` (or pass via `create_instance` `extraEnvVars`) to add:
 
-- **Provider selection** — when to use Claude vs OpenAI Codex vs Gemini
-  vs OpenRouter from a founder app, and which one the operator's OAuth
-  already covers
-- **Auth patterns**:
-  - Anthropic API key (`sk-ant-...`) vs Claude Code OAuth (`sk-ant-oat...`)
-    and the identity-prefix requirement on the latter (see
-    `src/lib/anthropic-oauth.ts` for the platform-side reference impl)
-  - OpenAI direct vs Codex JWT routing (see `src/lib/agents/ceo/ceo.agent.ts`
-    for the Codex JWT detection + routing pattern)
-  - Passing keys via `additional_secrets` on `cf_deploy_app` — never
-    hardcoding in `script_content`
-- **Workers-specific transports**:
-  - Anthropic SDK: `dangerouslyAllowBrowser: true` is REQUIRED for
-    OAuth tokens (the SDK refuses bearer auth in server contexts otherwise)
-  - OpenAI SDK works on Workers with default transport — no custom http client needed
-  - Gemini: `additionalProperties` in tool schemas is rejected (recursive
-    sanitization required — see `sanitizeForGemini` in agent-factory.ts)
-- **Streaming vs single-shot**: when each is appropriate, and how to
-  respect the 30s CPU limit on Workers (long streams are fine if data is
-  flowing; CPU only counts blocking work)
-- **Tool use loops**: how to structure agent loops that fit Workers'
-  per-request budget; when to break work into separate requests
-- **Cost guardrails**: how to budget tokens per founder request, surface
-  cost back to the founder app's UI, hard-stop at a per-request ceiling
-- **Memory + context**: stateless Workers vs the founder's need for
-  conversation history (use Neon DB; don't try to keep state in Worker globals)
+```
+AI_GATEWAY_URL   = https://generativelanguage.googleapis.com/v1beta/openai
+AI_GATEWAY_TOKEN = <GEMINI_API_KEY from platform>
+GEMINI_API_KEY   = <same key>
+AI_TEXT_MODEL    = gemini-2.5-flash
+AI_JSON_MODEL    = gemini-2.5-flash
+AI_EMBEDDING_MODEL = gemini-embedding-001
+AI_EMBEDDING_DIMENSIONS = 3072
+```
 
-## When to read which skill alongside this one
+These are **platform-managed keys** — the founder never sees or provides them.
 
-- Always also read `cloudflare-workers` (runtime constraints)
-- If persisting messages/transcripts → also read `neon-postgres`
-- If the AI generates large outputs (images, files) → also read `r2-storage`
-- If the AI sends notifications → also read `email-postmark`
+### Step 2 — Use `lib/ai.ts` from the skeleton
 
-## Verification
+The skeleton already has a pre-built client at `lib/ai.ts`. Import it directly:
 
-When this skill is fully populated, verification will mean:
-1. Token budget per request is enforced (test with a forced loop, confirm hard-stop)
-2. Auth fallback chain works (test with one provider deliberately broken)
-3. Streaming responses don't blow the 30s CPU budget (test with a deliberately long completion)
-4. Tool-use parsing handles partial/malformed responses (test with a deliberately broken tool name)
+```ts
+import { openai, DEFAULT_MODEL } from '@/lib/ai';
 
-Until then: if the agent is about to add AI features, surface the gap in
-its task report so a human reviews the choice of provider, auth method,
-and timeout posture.
+// Text generation
+const result = await openai.chat.completions.create({
+  model: DEFAULT_MODEL,   // "gemini-2.5-flash"
+  messages: [
+    { role: "system", content: "You are a helpful assistant." },
+    { role: "user", content: userMessage },
+  ],
+  max_tokens: 1000,
+});
+
+const reply = result.choices[0].message.content;
+```
+
+### Step 3 — Always add timeout + fallback
+
+```ts
+const controller = new AbortController();
+const timer = setTimeout(() => controller.abort(), 25_000); // 25s max
+
+try {
+  const result = await openai.chat.completions.create({
+    model: DEFAULT_MODEL,
+    messages: [...],
+    signal: controller.signal,
+  });
+  return result.choices[0].message.content;
+} catch (err) {
+  if (err instanceof Error && err.name === 'AbortError') {
+    return 'AI response took too long. Please try again.';
+  }
+  console.error('[ai] generation failed', err);
+  return 'Something went wrong. Please try again.';
+} finally {
+  clearTimeout(timer);
+}
+```
+
+---
+
+## When a Founder Asks for Web Search
+
+### Step 1 — Add Tavily env var to their Render service
+
+```
+TAVILY_API_KEY = <TAVILY_API_KEY from platform>
+```
+
+### Step 2 — Use the `tavilySearch` helper from `lib/ai.ts`
+
+```ts
+import { tavilySearch } from '@/lib/ai';
+
+const { answer, results } = await tavilySearch("latest AI news", {
+  maxResults: 5,
+  searchDepth: "basic",
+  includeAnswer: true,   // Tavily generates a summary answer
+});
+
+// results = [{ title, url, content, score }, ...]
+```
+
+### When to use each search depth:
+| Depth | Speed | Use for |
+|---|---|---|
+| `basic` | Fast | Simple lookups, quick facts |
+| `advanced` | Slower, more thorough | Research, comprehensive answers |
+
+---
+
+## Model Reference
+
+| Model | Speed | Use for |
+|---|---|---|
+| `gemini-2.5-flash` | Fast | Default — most tasks |
+| `gemini-2.5-pro` | Slower, smarter | Complex reasoning, long docs |
+| `gemini-embedding-001` | Fast | Embeddings on Google `generativelanguage.googleapis.com/v1beta/openai` gateway; returns 3072 dimensions |
+
+---
+
+## What NOT to Do
+
+| ❌ Wrong | ✅ Right |
+|---|---|
+| Hardcode `GEMINI_API_KEY` in code | Read from `process.env.AI_GATEWAY_TOKEN` |
+| Add AI to every app by default | Only when founder requests it |
+| Open-ended agent loop in v1 | Single, focused AI action |
+| No timeout on model call | Always wrap with `AbortController` |
+| No fallback message | Always return user-friendly error |
+| Use `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` | Use `AI_GATEWAY_TOKEN` from the fixed Gemini provider env |
+
+---
+
+## Production Policy
+
+Founder/user apps are pinned to the Gemini OpenAI-compatible endpoint. Do not switch these apps to `https://ai.baljia.app` while their runtime model is `gemini-2.5-flash`; that combination can return 404 and force fallback-only AI behavior.
+
+```
+AI_GATEWAY_URL   → https://generativelanguage.googleapis.com/v1beta/openai
+AI_GATEWAY_TOKEN → <GEMINI_API_KEY from platform>
+```

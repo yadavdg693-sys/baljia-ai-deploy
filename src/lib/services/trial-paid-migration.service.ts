@@ -76,9 +76,9 @@ export interface RenderScaffold {
  * the Worker's fetch handler, and writes the Response back to Node's
  * http.ServerResponse. No CF-specific runtime needed.
  *
- * Assumes the Worker uses the raw-fetch Neon pattern (no @neondatabase/serverless
- * import) per build-fullstack-cf-app skill. If a future Worker imports npm deps,
- * this scaffold needs to detect them and add to package.json dependencies.
+ * Assumes the legacy Worker uses the raw-fetch Neon pattern (no
+ * @neondatabase/serverless import). If a future archived Worker imports npm
+ * deps, this scaffold needs to detect them and add package.json dependencies.
  */
 export function buildRenderScaffold(params: {
   workerSource: string;
@@ -359,6 +359,27 @@ export async function waitForRenderHealthy(url: string, timeoutMs = 240_000): Pr
  * BEFORE DNS-level routing if they exist. We need to delete the per-subdomain
  * Worker route, then create a CNAME (proxied) → Render's hostname.
  */
+async function deleteRenderService(serviceId: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${RENDER_API}/services/${serviceId}`, {
+      method: 'DELETE',
+      headers: renderHeaders(),
+    });
+
+    if (res.ok || res.status === 404) {
+      log.info('Render service deleted or already absent', { serviceId, status: res.status });
+      return true;
+    }
+
+    const body = await res.text().catch(() => '');
+    log.warn('Render service delete failed', { serviceId, status: res.status, body: body.slice(0, 500) });
+    return false;
+  } catch (err) {
+    log.warn('Render service delete threw', { serviceId, error: err instanceof Error ? err.message : String(err) });
+    return false;
+  }
+}
+
 export async function swapDnsToRender(params: {
   subdomain: string;
   renderHostname: string;  // e.g. "baljia-app-foo.onrender.com"
@@ -572,7 +593,7 @@ export async function migrateTrialToPaid(companyId: string): Promise<MigrationRe
 
   // 9. Update company state
   await db.update(companies).set({
-    hosting_state: 'active',
+    hosting_state: 'live',
     custom_domain: `${subdomain}.baljia.app`,
   }).where(eq(companies.id, companyId));
 
@@ -596,9 +617,9 @@ export async function migrateTrialToPaid(companyId: string): Promise<MigrationRe
 
 // ══════════════════════════════════════════════
 // PHASE 3 — TRIAL EXPIRY ARCHIVAL
-// Trial ended without conversion. Save the founder's code to GitHub as a
-// portable artifact ("Trial expired YYYY-MM-DD"), tear down the live
-// CF Worker. Founder loses the live URL but keeps the code.
+// Trial ended without conversion. The current founder-app runtime is Render,
+// so expiry tears down the Render service and preserves the GitHub repo. The
+// old CF Worker cleanup remains only as a legacy fallback for pre-Render apps.
 // ══════════════════════════════════════════════
 
 export interface ArchiveResult {
@@ -606,13 +627,15 @@ export interface ArchiveResult {
   reason?: string;
   artifacts?: {
     githubRepo?: string;
+    renderServiceId?: string;
     bytesArchived?: number;
   };
 }
 
 /**
- * Archive a trial-expired company's CF Worker to GitHub and tear it down.
- * Idempotent: safe to retry. If no Worker exists, returns success with nothing.
+ * Archive a trial-expired company's live app.
+ * Idempotent: safe to retry. Render is the current app runtime; CF Worker
+ * archival only exists for older trial apps created before the Render switch.
  *
  * Trust signal for non-converters: their code is preserved at github.com/
  * BALAJIapps/{slug}, recoverable any time. They lose the live URL but
@@ -626,6 +649,7 @@ export async function archiveExpiredTrialApp(companyId: string): Promise<Archive
       id: companies.id,
       slug: companies.slug,
       github_repo: companies.github_repo,
+      render_service_id: companies.render_service_id,
     })
     .from(companies)
     .where(eq(companies.id, companyId))
@@ -636,10 +660,48 @@ export async function archiveExpiredTrialApp(companyId: string): Promise<Archive
 
   const subdomain = company.slug;
 
-  // 1. Read current Worker source. If no Worker, nothing to archive.
+  // Current path: trial apps run on Render from the company GitHub repo.
+  // On expiry, delete the Render service to stop cost and mark hosting
+  // suspended. The repo remains intact, so the founder's code is preserved.
+  if (company.render_service_id) {
+    const deleted = await deleteRenderService(company.render_service_id);
+    if (!deleted) {
+      return {
+        success: false,
+        reason: `Failed to delete Render service ${company.render_service_id}`,
+        artifacts: {
+          githubRepo: company.github_repo ?? undefined,
+          renderServiceId: company.render_service_id,
+        },
+      };
+    }
+
+    await db.update(companies).set({
+      render_service_id: null,
+      hosting_state: 'suspended',
+    }).where(eq(companies.id, companyId));
+
+    log.info('Render trial service archived', {
+      companyId,
+      repo: company.github_repo,
+      renderServiceId: company.render_service_id,
+    });
+
+    return {
+      success: true,
+      artifacts: {
+        githubRepo: company.github_repo ?? undefined,
+        renderServiceId: company.render_service_id,
+      },
+    };
+  }
+
+  // Legacy fallback: read current Worker source. If no Worker exists, still
+  // mark hosting suspended so expired companies do not remain "live" forever.
   const cfSource = await getWorkerScriptSource(workerScriptName(subdomain));
   if (!cfSource) {
     log.info('No CF Worker to archive', { companyId, subdomain });
+    await db.update(companies).set({ hosting_state: 'suspended' }).where(eq(companies.id, companyId));
     return { success: true, artifacts: {} };
   }
 

@@ -98,6 +98,11 @@ export interface SanitizeOptions {
   includeVendors?: boolean;
   /** Optional context for violation logs (e.g. which callsite, which companyId). */
   context?: Record<string, string | number | null | undefined>;
+  /** Phrases (case-insensitive) that, even if banned, should pass through
+   *  unredacted at this callsite. Use VERY sparingly — only for genuinely
+   *  internal callsites (agent-only briefings, system-source task metadata)
+   *  where the text never renders on the founder UI. The default is empty. */
+  allowedTerms?: string[];
 }
 
 /**
@@ -107,9 +112,15 @@ export interface SanitizeOptions {
  * Soft mode:  redacts violations and logs them. Use for LLM output.
  */
 export function sanitizeForFounder(text: string, opts: SanitizeOptions = {}): SanitizeResult {
-  const { mode = 'strict', includeVendors = false, context } = opts;
+  const { mode = 'strict', includeVendors = false, context, allowedTerms } = opts;
   const termSet = includeVendors ? ALL_BANNED_TERMS : STRICT_BANNED_TERMS;
-  const violations = findViolations(text, termSet);
+  const allowedLower = (allowedTerms ?? []).map((t) => t.toLowerCase());
+  let violations = findViolations(text, termSet);
+
+  // Filter out allowedTerms — keep the violation list scoped to truly leaking phrases.
+  if (allowedLower.length > 0) {
+    violations = violations.filter((v) => !allowedLower.includes(v.label.toLowerCase()));
+  }
 
   if (violations.length === 0) {
     return { clean: text, violations: [], hadViolations: false };

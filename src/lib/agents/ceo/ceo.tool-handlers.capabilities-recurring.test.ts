@@ -79,6 +79,8 @@ vi.mock('drizzle-orm', () => ({
 
 vi.mock('@/lib/services/router.service', () => ({
   routeTask: vi.fn().mockReturnValue(30),
+  routeTaskStrict: vi.fn().mockReturnValue(30),
+  getKnownTaskTags: vi.fn().mockReturnValue(['feature', 'mvp', 'research']),
   getAgentName: vi.fn().mockReturnValue('Engineering'),
 }));
 
@@ -90,6 +92,12 @@ vi.mock('@/lib/services/task.service', () => ({
   createTask: vi.fn(),
   getTask: vi.fn(),
   updateTask: vi.fn(),
+}));
+vi.mock('@/lib/services/task-draft.service', () => ({
+  getPendingTaskDrafts: vi.fn().mockResolvedValue([]),
+  getTaskDraft: vi.fn().mockResolvedValue(null),
+  markTaskDraftFinalized: vi.fn(),
+  discardTaskDraft: vi.fn(),
 }));
 vi.mock('@/lib/services/credit.service', () => ({
   getBalance: vi.fn(),
@@ -201,7 +209,7 @@ describe('CEO tool handlers — capabilities (6 tools)', () => {
     expect(result.content).toContain('Browserbase');
     expect(result.content).toContain('Tavily');
     expect(result.content).toContain('Hunter.io');
-    expect(result.content).toContain('Cloudflare R2');
+    expect(result.content).toContain('R2 object storage');
     expect(result.content).toContain('Postmark');
   });
 
@@ -228,9 +236,9 @@ describe('CEO tool handlers — capabilities (6 tools)', () => {
     expect(result.content).toContain('browser_navigate');
   });
 
-  it('find_agent_for_task uses routeTask + getAgentName and surfaces the recommendation', async () => {
+  it('find_agent_for_task uses canonical tag routing and surfaces the recommendation', async () => {
     const router = await import('@/lib/services/router.service');
-    vi.mocked(router.routeTask).mockReturnValueOnce(30);
+    vi.mocked(router.routeTaskStrict).mockReturnValueOnce(30);
     vi.mocked(router.getAgentName).mockReturnValueOnce('Engineering');
 
     const { handleToolCall } = await import('@/lib/agents/ceo/ceo.tools');
@@ -240,17 +248,13 @@ describe('CEO tool handlers — capabilities (6 tools)', () => {
       COMPANY_ID,
     );
 
-    expect(router.routeTask).toHaveBeenCalledWith('landing-page');
+    expect(router.routeTaskStrict).toHaveBeenCalledWith('landing-page');
     expect(result.content).toContain('Recommended: Engineering');
     expect(result.content).toContain('Agent #30');
     expect(result.content).toContain('landing-page');
   });
 
-  it('find_agent_for_task falls back to task_description when tag is empty', async () => {
-    const router = await import('@/lib/services/router.service');
-    vi.mocked(router.routeTask).mockReturnValueOnce(29);
-    vi.mocked(router.getAgentName).mockReturnValueOnce('Research');
-
+  it('find_agent_for_task refuses free-text routing when tag is empty', async () => {
     const { handleToolCall } = await import('@/lib/agents/ceo/ceo.tools');
     const result = await handleToolCall(
       'find_agent_for_task',
@@ -259,10 +263,8 @@ describe('CEO tool handlers — capabilities (6 tools)', () => {
     );
 
     // No tag passed → handler should route off the description
-    expect(router.routeTask).toHaveBeenCalledWith('competitor research');
-    expect(result.content).toContain('Recommended: Research');
-    expect(result.content).toContain('Agent #29');
-    expect(result.content).toContain('auto-detected');
+    expect(result.content).toContain('canonical task tag');
+    expect(result.content).toContain('will not infer');
   });
 });
 

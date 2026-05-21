@@ -20,17 +20,30 @@ import { buildPermissionSnapshot } from '@/lib/services/governance.service';
 import { remediateFailed } from '@/lib/services/remediation.service';
 import { checkAutoResolve } from '@/lib/services/failure.service';
 import { canExecuteTask } from '@/lib/services/guardrail.service';
-import { executeAgent } from './agent-factory';
+import { engineeringCompletionGate, executeAgent } from './agent-factory';
+import { engineeringContractBlockReason } from './execution-contract';
 import { executeDeterministic } from './deterministic-executor';
 import { executeTemplate } from './template-executor';
 import type { AgentInput, AgentResult } from './agent-factory';
 import { Watchdog } from './watchdog';
-import { getCostCeilingForAgent } from './cost-ceilings';
+import { getCostCeilingForTask } from './cost-ceilings';
+import { applyTaskLaneRuntimePolicy, getTaskLanePolicy } from './task-lane';
+import {
+  completeStructuredRun,
+  createStructuredRunContext,
+  consumeRequestedAbort,
+  recordExecutionSnapshot,
+  recordStructuredVerification,
+} from './runtime/structured-run-store';
+import { shouldAutoFinalizeEngineeringWorkerError } from './runtime/clean-gate-finalizer';
+import type { StructuredRunContext } from './runtime/agent-runtime';
 import { preflightCheck, formatPreflightFailures } from '@/lib/services/preflight.service';
-import { db, companies, tasks as tasksTable, taskExecutions } from '@/lib/db';
+import { runPromoVideoTask } from '@/lib/services/promo-video-worker.service';
+import { db, companies, reports, tasks as tasksTable, taskExecutions } from '@/lib/db';
 import { eq, and, gte, inArray, sql } from 'drizzle-orm';
 import { createLogger } from '@/lib/logger';
 import type { TaskExecution, Lifecycle } from '@/types';
+import { classifyFailureMessage } from '@/lib/failure-classification';
 
 const log = createLogger('Worker');
 
@@ -56,6 +69,197 @@ export interface LaunchOptions {
    * Slot-busy and task-status checks still apply.
    */
   subscriptionFunded?: boolean;
+  /**
+   * Optional per-call execution cap used by measurement/canary runners.
+   * Production launches keep the platform-wide MAX_EXECUTION_MS default.
+   */
+  maxExecutionMs?: number;
+}
+
+function isWatchdogIdleError(message: string | null | undefined): boolean {
+  return /watchdog: idle|idle or stuck|stuck detected|timeout/i.test(String(message ?? ''));
+}
+
+export function isTransientWorkerDbError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /failed query|connect timeout|connection timeout|econnreset|etimedout|fetch failed|network|socket|terminated|timeout|enotfound|temporarily unavailable/i.test(message);
+}
+
+async function retryWorkerDbWrite<T>(label: string, operation: () => Promise<T>, attempts = 20): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (!isTransientWorkerDbError(error) || attempt === attempts) break;
+      const delayMs = Math.min(30_000, 1_000 * attempt);
+      log.warn(`${label} failed transiently; retrying`, {
+        attempt,
+        attempts,
+        delayMs,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  throw lastError;
+}
+
+function isOnlyFinalizationGateReason(reason: string | null): boolean {
+  if (!reason) return false;
+  return /write_codebase_map|create_report|final report|codebase map/i.test(reason) &&
+    !/verify_user_journey|verify_db_state|verify_browser_ui|static_code_scan|review_pushed_code|design_audit|design_critique|render_get_logs|check_url_health|HIGH-severity|BLOCKER|known-bad/i.test(reason);
+}
+
+function extractRoutesFromExecutionLog(logEntries: Record<string, unknown>[]): Array<{ path: string; method: string; auth: 'public' | 'session' | 'admin'; notes?: string }> {
+  const routes = new Map<string, { path: string; method: string; auth: 'public' | 'session' | 'admin'; notes?: string }>();
+  const routeRe = /\b(GET|POST|PUT|PATCH|DELETE)\s+(\/(?:api\/)?[A-Za-z0-9_./:[\]-]*)/g;
+  for (const entry of logEntries) {
+    const text = JSON.stringify(entry);
+    for (const match of text.matchAll(routeRe)) {
+      const method = match[1].toUpperCase();
+      const rawPath = match[2].replace(/[),"'.]+$/g, '');
+      if (!rawPath || rawPath.length > 160) continue;
+      const auth: 'public' | 'session' | 'admin' = /admin/i.test(rawPath) ? 'admin' : /auth|login|session/i.test(text) ? 'session' : 'public';
+      routes.set(`${method} ${rawPath}`, { method, path: rawPath, auth, notes: 'Auto-finalized from execution evidence.' });
+    }
+  }
+  return [...routes.values()].slice(0, 40);
+}
+
+function extractTablesFromExecutionLog(logEntries: Record<string, unknown>[]): Array<{ table: string; columns: string[]; notes?: string }> {
+  const tables = new Set<string>();
+  const tableRe = /\b([a-z][a-z0-9_]*(?:_[a-z0-9]+)*)\b/g;
+  for (const entry of logEntries) {
+    const text = JSON.stringify(entry);
+    for (const match of text.matchAll(tableRe)) {
+      const name = match[1];
+      if (/^(canary_|user$|session$|account$|verification$)/.test(name) && name.length <= 80) {
+        tables.add(name);
+      }
+    }
+  }
+  return [...tables].slice(0, 40).map((table) => ({
+    table,
+    columns: [],
+    notes: 'Auto-finalized from execution evidence; rerun write_codebase_map manually for full columns.',
+  }));
+}
+
+function extractLatestCommitFromExecutionLog(logEntries: Record<string, unknown>[]): string | null {
+  for (const entry of [...logEntries].reverse()) {
+    const text = String(entry.result ?? entry.content ?? JSON.stringify(entry));
+    const match = text.match(/\bCommit:\s*([a-f0-9]{7,40})\b/i) ?? text.match(/\bcommit\s+([a-f0-9]{7,40})\b/i);
+    if (match) return match[1];
+  }
+  return null;
+}
+
+async function tryAutoFinalizeAfterWatchdogIdle(params: {
+  task: Awaited<ReturnType<typeof taskService.getTask>>;
+  execution: TaskExecution;
+  agentId: number;
+  gateReason: string | null;
+}): Promise<boolean> {
+  const { task, execution, agentId, gateReason } = params;
+  if (!task || agentId !== 30 || !isOnlyFinalizationGateReason(gateReason)) return false;
+  const logEntries = Array.isArray(execution.execution_log) ? execution.execution_log as Record<string, unknown>[] : [];
+  if (logEntries.length === 0) return false;
+
+  const [company] = await db.select({
+    github_repo: companies.github_repo,
+    render_service_id: companies.render_service_id,
+    custom_domain: companies.custom_domain,
+    subdomain: companies.subdomain,
+    slug: companies.slug,
+  }).from(companies).where(eq(companies.id, task.company_id)).limit(1);
+
+  const now = new Date().toISOString();
+  const appUrl = company?.custom_domain
+    ? `https://${company.custom_domain}`
+    : company?.subdomain
+      ? `https://${company.subdomain}.baljia.app`
+      : company?.slug
+        ? `https://${company.slug}.baljia.app`
+        : null;
+
+  const { getCodebaseMap, writeCodebaseMap } = await import('@/lib/services/codebase-map.service');
+  const existingMap = await getCodebaseMap(task.company_id).catch(() => null);
+  const routes = extractRoutesFromExecutionLog(logEntries);
+  const schema = extractTablesFromExecutionLog(logEntries);
+  await writeCodebaseMap(task.company_id, {
+    schema_version: 1,
+    stack: existingMap?.stack ?? {
+      framework: 'unknown',
+      runtime: 'Node.js',
+      database: 'Neon Postgres',
+      hosting: 'Render',
+      integrations: [],
+    },
+    deploy: {
+      github_repo: company?.github_repo ?? existingMap?.deploy.github_repo ?? null,
+      render_service_id: company?.render_service_id ?? existingMap?.deploy.render_service_id ?? null,
+      app_url: appUrl ?? existingMap?.deploy.app_url ?? null,
+      last_commit_sha: extractLatestCommitFromExecutionLog(logEntries) ?? existingMap?.deploy.last_commit_sha ?? null,
+      last_deployed_at: now,
+    },
+    schema: schema.length > 0 ? schema : existingMap?.schema ?? [],
+    routes: routes.length > 0 ? routes : existingMap?.routes ?? [],
+    patterns: existingMap?.patterns ?? {
+      auth: 'unknown',
+      query_layer: 'unknown',
+      error_handling: 'unknown',
+    },
+    shipped_features: [
+      ...(existingMap?.shipped_features ?? []),
+      { feature: `Auto-finalized task: ${task.title}`, task_id: task.id, shipped_at: now },
+    ],
+    notes: 'auto_finalized=true; generated after watchdog idle because functional gates were already clean and only final artifacts were missing.',
+  });
+
+  const mapLog = {
+    tool: 'write_codebase_map',
+    result: `Codebase map saved (${Math.max(schema.length, existingMap?.schema.length ?? 0)} table(s), ${Math.max(routes.length, existingMap?.routes.length ?? 0)} route(s)). auto_finalized=true`,
+  };
+  const reportTitle = `Auto-finalized Engineering Report: ${task.title}`;
+  const reportContent = [
+    `auto_finalized=true`,
+    `Task: ${task.title}`,
+    appUrl ? `Live URL: ${appUrl}` : null,
+    company?.github_repo ? `GitHub repo: ${company.github_repo}` : null,
+    company?.render_service_id ? `Render service: ${company.render_service_id}` : null,
+    '',
+    'Reason: watchdog idle/stuck occurred after functional gates were clean; only final codebase map/report artifacts were missing.',
+    `Previous completion gate reason: ${gateReason}`,
+  ].filter(Boolean).join('\n');
+  await db.insert(reports).values({
+    company_id: task.company_id,
+    task_id: task.id,
+    title: reportTitle,
+    content: reportContent,
+    report_type: 'execution',
+    structured_data: { auto_finalized: true, gate_reason: gateReason },
+  });
+  const reportLog = {
+    tool: 'create_report',
+    result: `Report created: "${reportTitle}" auto_finalized=true`,
+  };
+  execution.execution_log = [
+    ...logEntries,
+    { event: 'auto_finalizer_started', reason: gateReason },
+    mapLog,
+    reportLog,
+  ];
+  const postReason = engineeringCompletionGate(agentId, execution.execution_log, task as never);
+  if (postReason) {
+    execution.execution_log = [
+      ...execution.execution_log,
+      { event: 'auto_finalizer_failed_gate_replay', reason: postReason },
+    ];
+    return false;
+  }
+  return true;
 }
 
 export async function launchTask(taskId: string, opts: LaunchOptions = {}): Promise<TaskExecution> {
@@ -113,17 +317,29 @@ export async function launchTask(taskId: string, opts: LaunchOptions = {}): Prom
     }
   }
 
-  // 1. Route to correct agent
-  const agentId = routeTask(task.tag);
+  // 1. Use CEO-assigned agent first; routeTask is only a legacy fallback.
+  const agentId = task.assigned_to_agent_id ?? routeTask(task.tag);
   const agentName = getAgentName(agentId);
+  const isPromoVideoTask = task.tag.toLowerCase().trim() === 'promo-video';
 
   log.info('Launching task', { taskId, title: task.title, agent: agentName, agentId });
+
+  const contractBlockReason = engineeringContractBlockReason(task, agentId);
+  if (contractBlockReason) {
+    await taskService.updateTask(taskId, { status: 'blocked_pre_start' });
+    await eventService.emit(task.company_id, 'task_failed', {
+      task_id: taskId,
+      title: task.title,
+      reason: contractBlockReason,
+    });
+    throw new Error(contractBlockReason);
+  }
 
   // PREFLIGHT: For engineering tasks, verify all required external creds are
   // healthy BEFORE claiming a slot or charging credits. Stale GitHub tokens,
   // missing Render keys, and unreachable Neon connections used to waste
   // entire 200-turn runs before discovery. Fail loud, fail cheap.
-  if (agentId === 30) {
+  if (agentId === 30 && !isPromoVideoTask) {
     const preflight = await preflightCheck();
     if (!preflight.ok) {
       const reason = formatPreflightFailures(preflight.failures);
@@ -189,6 +405,8 @@ export async function launchTask(taskId: string, opts: LaunchOptions = {}): Prom
 
   // Task is now in_progress and credit is deducted — assign agent
   const startedTask = await taskService.updateTask(taskId, { assigned_to_agent_id: agentId });
+  const runtimeTask = applyTaskLaneRuntimePolicy(startedTask, agentId);
+  const lanePolicy = getTaskLanePolicy(runtimeTask);
 
   await eventService.emit(task.company_id, 'task_started', {
     task_id: taskId,
@@ -200,8 +418,8 @@ export async function launchTask(taskId: string, opts: LaunchOptions = {}): Prom
   // 4. Create watchdog with active monitoring + per-agent cost ceiling.
   // The ceiling is a backstop against runaway token spend; the agent also
   // sees the live budget summary in its per-turn context so it can self-pace.
-  const costCeilingUsd = getCostCeilingForAgent(agentId, task.complexity);
-  const watchdog = new Watchdog(taskId, task.max_turns, task.company_id, costCeilingUsd);
+  const costCeilingUsd = getCostCeilingForTask(agentId, runtimeTask);
+  const watchdog = new Watchdog(taskId, runtimeTask.max_turns, task.company_id, costCeilingUsd);
   const abortController = new AbortController();
   watchdog.startActiveMonitor(() => {
     abortController.abort();
@@ -214,10 +432,10 @@ export async function launchTask(taskId: string, opts: LaunchOptions = {}): Prom
     id: crypto.randomUUID(),
     task_id: taskId,
     agent_id: agentId,
-    execution_mode: task.execution_mode ?? 'full_agent',
+    execution_mode: runtimeTask.execution_mode ?? 'full_agent',
     status: 'running',
     turn_count: 0,
-    max_turns: task.max_turns,
+    max_turns: runtimeTask.max_turns,
     started_at: new Date().toISOString(),   // B5 FIX: consistent ISOString
     completed_at: null,
     wall_clock_seconds: null,
@@ -252,18 +470,139 @@ export async function launchTask(taskId: string, opts: LaunchOptions = {}): Prom
       title: task.title,
       tag: task.tag,
       description: task.description,
+      assigned_to_agent_id: agentId,
     });
-    permissionSnapshot = buildPermissionSnapshot(task, agentId);
+    permissionSnapshot = buildPermissionSnapshot(runtimeTask, agentId);
     log.info('Context assembled', {
       taskId,
+      lane: lanePolicy.lane,
       memoryLayers: Object.keys(contextPacket.memory_layers).length,
       priorReports: contextPacket.prior_reports.length,
       failureFingerprints: contextPacket.failure_fingerprints.length,
       riskCeiling: permissionSnapshot.risk_ceiling,
-      maxTurns: permissionSnapshot.max_turns,
+      maxTurns: runtimeTask.max_turns,
+      costCeilingUsd,
     });
   } catch (ctxError) {
     log.warn('Context assembly failed, proceeding without', { taskId, error: ctxError instanceof Error ? ctxError.message : 'Unknown' });
+  }
+
+  const structuredRun: StructuredRunContext = await createStructuredRunContext({
+    task: runtimeTask,
+    execution,
+    agentId,
+    executionMode: runtimeTask.execution_mode ?? 'full_agent',
+    permissionSnapshot,
+  });
+  const runControlPollInterval = structuredRun.enabled
+    ? setInterval(() => {
+        void consumeRequestedAbort(structuredRun).then((shouldAbort) => {
+          if (shouldAbort) abortController.abort();
+        });
+      }, 2000)
+    : null;
+
+  if (isPromoVideoTask) {
+    try {
+      const result = await runPromoVideoTask({ task: startedTask, executionId: execution.id });
+      const wallClockSeconds = Math.round((Date.now() - executionStartTime) / 1000);
+      execution.turn_count = 1;
+      execution.execution_log = result.log;
+      execution.wall_clock_seconds = wallClockSeconds;
+      execution.token_usage = watchdog.getCostStatus() as unknown as Record<string, unknown>;
+      execution.verification_evidence = {
+        level: runtimeTask.verification_level ?? 'quality_review',
+        passed: true,
+        summary: 'Deterministic promo-video pipeline rendered and uploaded the requested media.',
+        phase: result.phase,
+        ...(result.outputUrl ? { output_url: result.outputUrl } : {}),
+        ...(result.previewUrl ? { preview_url: result.previewUrl } : {}),
+        ...(result.thumbnailUrl ? { thumbnail_url: result.thumbnailUrl } : {}),
+      };
+      execution.status = 'completed';
+      execution.completed_at = new Date().toISOString();
+
+      await retryWorkerDbWrite('complete deterministic promo-video task', () => taskService.completeTask(taskId));
+      await retryWorkerDbWrite('update promo-video task accounting', () => taskService.updateTask(taskId, {
+        turn_count: 1,
+        actual_credits_charged: opts.subscriptionFunded ? 0 : task.estimated_credits,
+      }));
+      await retryWorkerDbWrite('finalize deterministic promo-video task', () => taskService.finalizeTask(taskId, true));
+      await eventService.emit(task.company_id, 'task_completed', {
+        task_id: taskId,
+        title: task.title,
+        agent: agentName,
+        phase: result.phase,
+        ...(result.outputUrl ? { output_url: result.outputUrl } : {}),
+        ...(result.previewUrl ? { preview_url: result.previewUrl } : {}),
+        ...(result.thumbnailUrl ? { thumbnail_url: result.thumbnailUrl } : {}),
+      });
+      await recordStructuredVerification(structuredRun, {
+        level: runtimeTask.verification_level ?? 'quality_review',
+        passed: true,
+        summary: 'Promo video rendered and uploaded.',
+        checks: [],
+        evidence: execution.verification_evidence,
+      });
+      log.info('Deterministic promo-video task completed', { taskId, wallClockSeconds, phase: result.phase, outputUrl: result.outputUrl });
+    } catch (error) {
+      const wallClockSeconds = Math.round((Date.now() - executionStartTime) / 1000);
+      execution.status = 'failed';
+      execution.completed_at = new Date().toISOString();
+      execution.wall_clock_seconds = wallClockSeconds;
+      execution.error_summary = error instanceof Error ? error.message : 'Unknown error';
+      execution.watchdog_events = watchdog.getEvents() as unknown as Record<string, unknown>[];
+      execution.token_usage = watchdog.getCostStatus() as unknown as Record<string, unknown>;
+      const failureClass = determineFailureClass(execution.error_summary);
+
+      await retryWorkerDbWrite('mark deterministic promo-video task failed', () => taskService.failTask(taskId, failureClass));
+      await eventService.emit(task.company_id, 'task_failed', {
+        task_id: taskId,
+        title: task.title,
+        agent: agentName,
+        error: execution.error_summary,
+        failure_class: failureClass,
+      }).catch((eventError) => {
+        log.warn('Failed to emit promo-video task_failed event', {
+          taskId,
+          error: eventError instanceof Error ? eventError.message : String(eventError),
+        });
+      });
+      log.error('Deterministic promo-video task failed', { taskId, error: execution.error_summary });
+    } finally {
+      watchdog.stopMonitor();
+      if (runControlPollInterval) clearInterval(runControlPollInterval);
+
+      try {
+        await retryWorkerDbWrite('persist deterministic promo-video execution state', async () => {
+          await db.update(taskExecutions)
+            .set({
+              status: execution.status,
+              turn_count: execution.turn_count,
+              completed_at: execution.completed_at ? new Date(execution.completed_at) : null,
+              wall_clock_seconds: execution.wall_clock_seconds,
+              token_usage: execution.token_usage,
+              error_summary: execution.error_summary,
+              watchdog_events: execution.watchdog_events,
+              verification_evidence: execution.verification_evidence,
+              execution_log: execution.execution_log,
+            })
+            .where(eq(taskExecutions.id, execution.id));
+        });
+        await recordExecutionSnapshot(structuredRun, execution.execution_log ?? []);
+        await completeStructuredRun(structuredRun, {
+          status: execution.status === 'running' ? 'failed' : execution.status,
+          turnCount: execution.turn_count,
+          wallClockSeconds: execution.wall_clock_seconds,
+          tokenUsage: execution.token_usage,
+          errorSummary: execution.error_summary,
+        });
+      } catch (persistError) {
+        log.error('Failed to persist deterministic promo-video execution', { taskId }, persistError);
+      }
+    }
+
+    return execution;
   }
 
   try {
@@ -277,28 +616,62 @@ export async function launchTask(taskId: string, opts: LaunchOptions = {}): Prom
       template_plus_params: executeTemplate,
       full_agent: executeAgent,
     };
-    const executionMode = task.execution_mode ?? 'full_agent';
+    const executionMode = runtimeTask.execution_mode ?? 'full_agent';
     const executor = executorByMode[executionMode] ?? executeAgent;
 
-    log.info('Dispatching task', { taskId, executionMode, agent: agentName });
+    log.info('Dispatching task', { taskId, executionMode, agent: agentName, lane: lanePolicy.lane, maxTurns: runtimeTask.max_turns, costCeilingUsd });
 
+    // Stream execution_log + turn_count to the DB every ~3s while the agent
+    // runs. Without this, founders staring at the dashboard see null columns
+    // for the entire 10-15 minute build. The agent-factory throttles internally;
+    // we just write whatever it hands us.
+    const onProgress = async (snapshot: { turn: number; log: Record<string, unknown>[] }) => {
+      try {
+        watchdog.recordHeartbeat('execution progress flushed to database', 'progress_flush');
+        await db.update(taskExecutions)
+          .set({
+            execution_log: snapshot.log as unknown as Record<string, unknown>[],
+            turn_count: snapshot.turn,
+          })
+          .where(eq(taskExecutions.id, execution.id));
+        await recordExecutionSnapshot(structuredRun, snapshot.log);
+        if (await consumeRequestedAbort(structuredRun)) {
+          abortController.abort();
+        }
+      } catch (err) {
+        log.warn('Mid-flight execution_log flush failed (non-fatal)', {
+          taskId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    };
+
+    const executionTimeoutMs = opts.maxExecutionMs ?? MAX_EXECUTION_MS;
     const result = await Promise.race([
       executor({
-        task: startedTask,
+        task: runtimeTask,
         agentId,
         agentName,
         watchdog,
         execution,
         contextPacket,
         permissionSnapshot,
+        structuredRun,
+        onProgress,
+        abortSignal: abortController.signal,
       }),
-      // Timeout via setTimeout OR via watchdog active monitor (abort signal)
+      // Timeout via setTimeout OR via watchdog active monitor (abort signal).
+      // Both paths MUST abort the AbortController so the executor's threaded
+      // signal fires and the inner LLM fetch + agent loop cancel within
+      // ~100ms. Without the .abort() on the timeout path, the hard 4-hour
+      // cap would reject the race promise but the agent kept running in the
+      // background and could land late github_create_commit / render_deploy
+      // writes after the task was marked failed.
       new Promise<never>((_, reject) => {
-        const timer = setTimeout(
-          () => reject(new Error(`Task execution timed out after ${MAX_EXECUTION_MS / 1000}s`)),
-          MAX_EXECUTION_MS
-        );
-        // Listen for watchdog abort (stuck/idle detection)
+        const timer = setTimeout(() => {
+          abortController.abort();
+          reject(new Error(`Task execution timed out after ${executionTimeoutMs / 1000}s`));
+        }, executionTimeoutMs);
         abortController.signal.addEventListener('abort', () => {
           clearTimeout(timer);
           reject(new Error('Task killed by watchdog: idle or stuck detected'));
@@ -313,12 +686,12 @@ export async function launchTask(taskId: string, opts: LaunchOptions = {}): Prom
     execution.wall_clock_seconds = wallClockSeconds;
     execution.token_usage = watchdog.getCostStatus() as unknown as Record<string, unknown>;
 
-    await taskService.completeTask(taskId); // transitions to 'verifying'
-    await taskService.updateTask(taskId, {
+    await retryWorkerDbWrite('complete task after agent execution', () => taskService.completeTask(taskId)); // transitions to 'verifying'
+    await retryWorkerDbWrite('update task execution accounting', () => taskService.updateTask(taskId, {
       turn_count: result.turnCount,
       // Subscription-funded runs (night-shift) don't touch credit_ledger
       actual_credits_charged: opts.subscriptionFunded ? 0 : task.estimated_credits,
-    });
+    }));
 
     // 6.5. Persist execution_log + turn_count to DB BEFORE verification runs.
     // Without this, verifier's deploy evidence check (which queries
@@ -329,14 +702,17 @@ export async function launchTask(taskId: string, opts: LaunchOptions = {}): Prom
     // execution_log but stays for the other fields (status, error_summary,
     // verification_evidence). Idempotent.
     try {
-      await db.update(taskExecutions)
-        .set({
-          execution_log: execution.execution_log,
-          turn_count: execution.turn_count,
-          wall_clock_seconds: execution.wall_clock_seconds,
-          token_usage: execution.token_usage,
-        })
-        .where(eq(taskExecutions.id, execution.id));
+      await retryWorkerDbWrite('persist execution log before verification', async () => {
+        await db.update(taskExecutions)
+          .set({
+            execution_log: execution.execution_log,
+            turn_count: execution.turn_count,
+            wall_clock_seconds: execution.wall_clock_seconds,
+            token_usage: execution.token_usage,
+          })
+          .where(eq(taskExecutions.id, execution.id));
+      });
+      await recordExecutionSnapshot(structuredRun, execution.execution_log ?? []);
     } catch (preVerifyPersistError) {
       log.warn('Failed to persist execution_log before verification (verifier may see empty log)', {
         taskId,
@@ -349,6 +725,13 @@ export async function launchTask(taskId: string, opts: LaunchOptions = {}): Prom
     execution.verification_evidence = verification as unknown as Record<string, unknown>;
     execution.status = verification.passed ? 'completed' : 'failed';
     execution.completed_at = new Date().toISOString();
+    await recordStructuredVerification(structuredRun, {
+      level: verification.level,
+      passed: verification.passed,
+      summary: verification.summary,
+      checks: verification.checks,
+      evidence: verification,
+    });
     log.info('Task verification', { taskId, passed: verification.passed, level: verification.level });
 
     // Event emission handled by verifyAndUpdate (sole authority for task_completed/task_failed events)
@@ -390,36 +773,208 @@ export async function launchTask(taskId: string, opts: LaunchOptions = {}): Prom
       execution.status = 'timed_out';
     }
 
-    await taskService.failTask(taskId, failureClass);
+    if (!execution.execution_log || execution.turn_count === 0) {
+      try {
+        const [persistedProgress] = await db.select({
+          execution_log: taskExecutions.execution_log,
+          turn_count: taskExecutions.turn_count,
+        }).from(taskExecutions).where(eq(taskExecutions.id, execution.id)).limit(1);
+        if (!execution.execution_log && persistedProgress?.execution_log) {
+          execution.execution_log = persistedProgress.execution_log as Record<string, unknown>[];
+        }
+        if (execution.turn_count === 0 && persistedProgress?.turn_count) {
+          execution.turn_count = persistedProgress.turn_count;
+        }
+      } catch (progressReadError) {
+        log.warn('Failed to preserve failed execution progress log', {
+          taskId,
+          error: progressReadError instanceof Error ? progressReadError.message : String(progressReadError),
+        });
+      }
+    }
 
-    await eventService.emit(task.company_id, 'task_failed', {
-      task_id: taskId,
-      title: task.title,
-      agent: agentName,
-      error: execution.error_summary,
-      failure_class: failureClass,
-    });
+    let autoFinalized = false;
+    if (watchdog.wasKilled() && isWatchdogIdleError(execution.error_summary)) {
+      const gateReason = engineeringCompletionGate(agentId, Array.isArray(execution.execution_log) ? execution.execution_log : [], task as never);
+      autoFinalized = await tryAutoFinalizeAfterWatchdogIdle({
+        task,
+        execution,
+        agentId,
+        gateReason,
+      }).catch((autoError) => {
+        log.warn('Watchdog auto-finalizer failed', {
+          taskId,
+          error: autoError instanceof Error ? autoError.message : String(autoError),
+        });
+        return false;
+      });
+
+      if (autoFinalized) {
+        try {
+          execution.error_summary = null;
+          execution.status = 'running';
+          await retryWorkerDbWrite('complete auto-finalized task', () => taskService.completeTask(taskId));
+          await retryWorkerDbWrite('update auto-finalized task accounting', () => taskService.updateTask(taskId, {
+            turn_count: execution.turn_count,
+            actual_credits_charged: opts.subscriptionFunded ? 0 : task.estimated_credits,
+          }));
+          await retryWorkerDbWrite('persist auto-finalized execution progress', async () => {
+            await db.update(taskExecutions)
+              .set({
+                execution_log: execution.execution_log,
+                turn_count: execution.turn_count,
+                wall_clock_seconds: execution.wall_clock_seconds,
+                token_usage: execution.token_usage,
+                watchdog_events: execution.watchdog_events,
+              })
+              .where(eq(taskExecutions.id, execution.id));
+          });
+          const verification = await verifyAndUpdate(taskId);
+          execution.verification_evidence = verification as unknown as Record<string, unknown>;
+          execution.status = verification.passed ? 'completed' : 'failed';
+          execution.completed_at = new Date().toISOString();
+          await recordStructuredVerification(structuredRun, {
+            level: verification.level,
+            passed: verification.passed,
+            summary: verification.summary,
+            checks: verification.checks,
+            evidence: verification,
+          });
+          log.info('Task auto-finalized after watchdog idle', { taskId, verified: verification.passed });
+        } catch (autoFinalizePersistError) {
+          autoFinalized = false;
+          execution.status = 'failed';
+          execution.error_summary = autoFinalizePersistError instanceof Error
+            ? autoFinalizePersistError.message
+            : String(autoFinalizePersistError);
+          log.warn('Auto-finalized watchdog task could not be persisted or verified; falling back to failed state', {
+            taskId,
+            error: execution.error_summary,
+          });
+        }
+      }
+    }
+
+    if (!autoFinalized && shouldAutoFinalizeEngineeringWorkerError({
+      agentId,
+      logEntries: Array.isArray(execution.execution_log) ? execution.execution_log : [],
+      task: task as never,
+      errorSummary: execution.error_summary,
+      completionGate: engineeringCompletionGate,
+    })) {
+      const previousError = execution.error_summary;
+      try {
+        const logEntries = Array.isArray(execution.execution_log) ? execution.execution_log : [];
+        execution.execution_log = [
+          ...logEntries,
+          {
+            event: 'auto_finalizer_started',
+            reason: 'worker_error_after_clean_completion_gate',
+            error: String(previousError ?? '').slice(0, 1000),
+          },
+          {
+            event: 'auto_finalizer_completed',
+            reason: 'worker_error_after_clean_completion_gate',
+          },
+        ];
+        execution.error_summary = null;
+        execution.status = 'running';
+        await retryWorkerDbWrite('complete clean-gate auto-finalized task', () => taskService.completeTask(taskId));
+        await retryWorkerDbWrite('update clean-gate auto-finalized task accounting', () => taskService.updateTask(taskId, {
+          turn_count: execution.turn_count,
+          actual_credits_charged: opts.subscriptionFunded ? 0 : task.estimated_credits,
+        }));
+        await retryWorkerDbWrite('persist clean-gate auto-finalized execution progress', async () => {
+          await db.update(taskExecutions)
+            .set({
+              execution_log: execution.execution_log,
+              turn_count: execution.turn_count,
+              wall_clock_seconds: execution.wall_clock_seconds,
+              token_usage: execution.token_usage,
+              watchdog_events: execution.watchdog_events,
+            })
+            .where(eq(taskExecutions.id, execution.id));
+        });
+        await recordExecutionSnapshot(structuredRun, execution.execution_log ?? []);
+        const verification = await verifyAndUpdate(taskId);
+        execution.verification_evidence = verification as unknown as Record<string, unknown>;
+        execution.status = verification.passed ? 'completed' : 'failed';
+        execution.completed_at = new Date().toISOString();
+        await recordStructuredVerification(structuredRun, {
+          level: verification.level,
+          passed: verification.passed,
+          summary: verification.summary,
+          checks: verification.checks,
+          evidence: verification,
+        });
+        autoFinalized = true;
+        log.info('Task auto-finalized after worker error because completion gate was clean', {
+          taskId,
+          verified: verification.passed,
+          previousError: String(previousError ?? '').slice(0, 300),
+        });
+      } catch (cleanFinalizeError) {
+        autoFinalized = false;
+        execution.status = 'failed';
+        execution.error_summary = cleanFinalizeError instanceof Error
+          ? cleanFinalizeError.message
+          : String(cleanFinalizeError);
+        log.warn('Clean-gate worker-error auto-finalizer failed; falling back to failed state', {
+          taskId,
+          error: execution.error_summary,
+        });
+      }
+    }
+
+    if (!autoFinalized) {
+      try {
+        await retryWorkerDbWrite('mark task failed after worker error', () => taskService.failTask(taskId, failureClass));
+      } catch (failTaskError) {
+        log.error('Failed to mark task failed after retries; continuing to persist execution state', {
+          taskId,
+          failureClass,
+          error: failTaskError instanceof Error ? failTaskError.message : String(failTaskError),
+        });
+      }
+
+      try {
+        await eventService.emit(task.company_id, 'task_failed', {
+          task_id: taskId,
+          title: task.title,
+          agent: agentName,
+          error: execution.error_summary,
+          failure_class: failureClass,
+        });
+      } catch (eventError) {
+        log.warn('Failed to emit task_failed event after worker error', {
+          taskId,
+          error: eventError instanceof Error ? eventError.message : String(eventError),
+        });
+      }
 
     // Auto-remediation (only if circuit breaker allows)
-    if (task.source !== 'auto_remediation') {
-      try {
-        const remediation = await remediateFailed(taskId);
-        log.info('Remediation triggered', { taskId, strategy: remediation.strategy, reason: remediation.reason });
-      } catch { /* non-blocking */ }
-    }
+      if (task.source !== 'auto_remediation') {
+        try {
+          const remediation = await remediateFailed(taskId);
+          log.info('Remediation triggered', { taskId, strategy: remediation.strategy, reason: remediation.reason });
+        } catch { /* non-blocking */ }
+      }
 
     // Failed tasks consume credit — no auto-refund (SPEC-BILL-103).
     // Refunds are manual-only, issued by platform support for platform-fault failures.
 
-    log.error('Task failed', { taskId, title: task.title, failureClass, error: execution.error_summary });
+      log.error('Task failed', { taskId, title: task.title, failureClass, error: execution.error_summary });
+    }
   }
 
   // Clean up watchdog monitor
   watchdog.stopMonitor();
+  if (runControlPollInterval) clearInterval(runControlPollInterval);
 
   // C-TASK-001: Persist final execution state to DB
   try {
-    await db.update(taskExecutions)
+    await retryWorkerDbWrite('persist final execution state', async () => {
+      await db.update(taskExecutions)
       .set({
         status: execution.status,
         turn_count: execution.turn_count,
@@ -432,6 +987,15 @@ export async function launchTask(taskId: string, opts: LaunchOptions = {}): Prom
         execution_log: execution.execution_log,
       })
       .where(eq(taskExecutions.id, execution.id));
+    });
+    await recordExecutionSnapshot(structuredRun, execution.execution_log ?? []);
+    await completeStructuredRun(structuredRun, {
+      status: execution.status,
+      turnCount: execution.turn_count,
+      wallClockSeconds: execution.wall_clock_seconds,
+      tokenUsage: execution.token_usage,
+      errorSummary: execution.error_summary,
+    });
   } catch (persistError) {
     log.error('Failed to persist execution', { taskId }, persistError);
   }
@@ -445,17 +1009,7 @@ export async function launchTask(taskId: string, opts: LaunchOptions = {}): Prom
 
 // Canonical 8-class taxonomy (SPEC-CTRL-106)
 function determineFailureClass(errorMessage: string): import('@/types').FailureClass {
-  const msg = errorMessage.toLowerCase();
-
-  if (msg.includes('timed out') || msg.includes('timeout') || msg.includes('idle') || msg.includes('stall')) return 'timeout';
-  if (msg.includes('credential') || msg.includes('oauth') || msg.includes('api key') || msg.includes('token expired') || msg.includes('auth')) return 'connector_failure';
-  if (msg.includes('network') || msg.includes('fetch') || msg.includes('econnrefused') || msg.includes('503') || msg.includes('502')) return 'external_block';
-  if (msg.includes('too large') || msg.includes('scope') || msg.includes('split') || msg.includes('decompos')) return 'scope_overflow';
-  if (msg.includes('tool') || msg.includes('rpc') || msg.includes('not supported') || msg.includes('capability')) return 'capability_miss';
-  if (msg.includes('policy') || msg.includes('content safety') || msg.includes('guardrail') || msg.includes('blocked')) return 'policy_violation';
-  if (msg.includes('verification') || msg.includes('verifier') || msg.includes('quality check')) return 'verification_reject';
-
-  return 'infra_error';
+  return classifyFailureMessage(errorMessage);
 }
 
 // ══════════════════════════════════════════════

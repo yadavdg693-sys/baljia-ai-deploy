@@ -44,6 +44,8 @@
     "src/scripts",
     "scripts",
     "deploy",
+    "measurement-output",
+    "test-results",
     "tmp-landing"
   ]
 }

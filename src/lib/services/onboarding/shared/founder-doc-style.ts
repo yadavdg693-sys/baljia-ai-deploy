@@ -28,8 +28,8 @@ export { stripLlmArtifacts as stripInlineMarkdown } from '@/lib/text/llm-artifac
  */
 export function compactLine(
   value: string | undefined | null,
-  _maxChars?: number,        // eslint-disable-line @typescript-eslint/no-unused-vars
-  _maxSentences?: number,    // eslint-disable-line @typescript-eslint/no-unused-vars
+  _maxChars?: number,
+  _maxSentences?: number,
 ): string {
   return collapseSpaces(value);
 }
@@ -41,8 +41,8 @@ export function compactLine(
 export function compactParagraphs(
   value: string | undefined | null,
   maxParagraphs = 2,
-  _maxCharsPerParagraph?: number,        // eslint-disable-line @typescript-eslint/no-unused-vars
-  _maxSentencesPerParagraph?: number,    // eslint-disable-line @typescript-eslint/no-unused-vars
+  _maxCharsPerParagraph?: number,
+  _maxSentencesPerParagraph?: number,
 ): string {
   const raw = (value ?? '').replace(/\r/g, '').trim();
   if (!raw) return '';
@@ -124,7 +124,7 @@ export function compactMarkdown(
  * char truncation. The maxChars parameter is accepted for back-compat
  * but ignored.
  */
-export function compactList(items: string[], maxItems: number, _maxChars?: number): string[] { // eslint-disable-line @typescript-eslint/no-unused-vars
+export function compactList(items: string[], maxItems: number, _maxChars?: number): string[] {
   return items
     .slice(0, maxItems)
     .map((item) => collapseSpaces(item))
@@ -135,6 +135,6 @@ export function compactList(items: string[], maxItems: number, _maxChars?: numbe
  * Whitespace cleanup for a markdown table cell. Pipe-escape and newline-
  * collapse handled by the caller (escapeCell). No char truncation.
  */
-export function compactTableCell(value: string | undefined | null, _maxChars?: number): string { // eslint-disable-line @typescript-eslint/no-unused-vars
+export function compactTableCell(value: string | undefined | null, _maxChars?: number): string {
   return collapseSpaces(value);
 }

@@ -42,12 +42,22 @@ export default async function PlatformOpsFeedbackDetail({ params }: Props) {
       <div style={{ display: 'flex', gap: 14, padding: '8px 0', fontSize: 12 }}>
         <span style={{ background: '#e5e7eb', padding: '2px 8px', borderRadius: 4 }}>severity: <strong>{bug.severity}</strong></span>
         <span style={{ background: '#e5e7eb', padding: '2px 8px', borderRadius: 4 }}>status: <strong>{bug.status}</strong></span>
+        <span style={{ background: '#e5e7eb', padding: '2px 8px', borderRadius: 4 }}>source: <strong>{bug.source ?? 'user'}</strong></span>
+        {bug.area && <span style={{ background: '#e5e7eb', padding: '2px 8px', borderRadius: 4 }}>area: <strong>{bug.area}</strong></span>}
+        <span style={{ background: '#e5e7eb', padding: '2px 8px', borderRadius: 4 }}>seen: <strong>{bug.occurrence_count ?? 1}x</strong></span>
         {bug.estimated_risk && <span style={{ background: '#e5e7eb', padding: '2px 8px', borderRadius: 4 }}>fix risk: <strong>{bug.estimated_risk}</strong></span>}
         <span style={{ color: '#666' }}>id: {bug.id.slice(0, 8)}…</span>
       </div>
 
       <h3 style={{ fontSize: 15, marginTop: 20 }}>Original report</h3>
       <pre style={{ background: '#f9fafb', padding: 14, fontSize: 12, whiteSpace: 'pre-wrap', borderRadius: 6, border: '1px solid #e5e7eb' }}>{bug.description ?? '(no description)'}</pre>
+
+      {bug.metadata && (
+        <>
+          <h3 style={{ fontSize: 15, marginTop: 24 }}>System metadata</h3>
+          <pre style={{ background: '#f9fafb', padding: 14, fontSize: 12, whiteSpace: 'pre-wrap', borderRadius: 6, border: '1px solid #e5e7eb' }}>{JSON.stringify(bug.metadata, null, 2)}</pre>
+        </>
+      )}
 
       <h3 style={{ fontSize: 15, marginTop: 24 }}>Triage diagnosis</h3>
       {bug.diagnosis ? (

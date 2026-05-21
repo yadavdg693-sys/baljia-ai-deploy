@@ -35,5 +35,5 @@ export async function POST(
     previous_status: task.status,
   });
 
-  return NextResponse.json(retried);
+  return NextResponse.json(taskService.stripTaskInternalFields(retried));
 }

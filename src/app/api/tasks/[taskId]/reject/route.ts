@@ -26,5 +26,5 @@ export async function POST(
     title: task.title,
   });
 
-  return NextResponse.json(rejected);
+  return NextResponse.json(taskService.stripTaskInternalFields(rejected));
 }

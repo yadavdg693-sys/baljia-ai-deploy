@@ -98,6 +98,8 @@ vi.mock('@/lib/services/credit.service', () => ({
 
 vi.mock('@/lib/services/router.service', () => ({
   routeTask: vi.fn().mockReturnValue(29),
+  routeTaskStrict: vi.fn().mockReturnValue(29),
+  getKnownTaskTags: vi.fn().mockReturnValue(['feature', 'mvp', 'research']),
   getAgentName: vi.fn().mockReturnValue('Research'),
   getCreditCostForTask: vi.fn().mockReturnValue(1),
 }));
@@ -109,6 +111,13 @@ vi.mock('@/lib/services/task.service', () => ({
     id: 'task-1', title: 'Test', description: 'desc', tag: 'research',
   }),
   updateTask: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('@/lib/services/task-draft.service', () => ({
+  getPendingTaskDrafts: vi.fn().mockResolvedValue([]),
+  getTaskDraft: vi.fn().mockResolvedValue(null),
+  markTaskDraftFinalized: vi.fn(),
+  discardTaskDraft: vi.fn(),
 }));
 
 vi.mock('@/lib/services/document.service', () => ({
@@ -425,6 +434,9 @@ describe('CEO tool handlers — research / memory / platform / credit-balance', 
       get_module_capabilities: { module_name: 'engineering' },
       get_agent_capabilities: { agent_id: 'engineering' },
       find_agent_for_task: { task_description: 'build a thing', tag: 'engineering' },
+      get_task_drafts: {},
+      finalize_task_draft: { draft_id: '00000000-0000-0000-0000-000000000001', title: 'T', description: 'D', tag: 'research', complexity: 3, estimated_hours: 1 },
+      discard_task_draft: { draft_id: '00000000-0000-0000-0000-000000000001' },
       create_task: { title: 'T', description: 'D', tag: 'research' },
       reject_task: { task_id: '00000000-0000-0000-0000-000000000001' },
       get_task_details: { task_id: '00000000-0000-0000-0000-000000000001' },

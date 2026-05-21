@@ -19,6 +19,7 @@ import { GrowCompanyStrategy } from './strategies/grow-company.strategy';
 import { SurpriseMeStrategy } from './strategies/surprise-me.strategy';
 import { initCosts, flushCosts } from './shared/cost-tracker';
 import { OnboardingWatchdog } from './watchdog';
+import { recordOnboardingIssue } from './stage-runner';
 
 const log = createLogger('Onboarding');
 
@@ -51,7 +52,7 @@ export async function runOnboardingPipeline(
     .set({ onboarding_status: 'running' })
     .where(and(
       eq(companies.id, companyId),
-      inArray(companies.onboarding_status, ['initializing', 'failed']),
+      inArray(companies.onboarding_status, ['initializing', 'pending_auth', 'failed']),
     ))
     .returning({ id: companies.id, name: companies.name, slug: companies.slug });
 
@@ -111,6 +112,14 @@ export async function runOnboardingPipeline(
     watchdog.throwIfKilled();
   } catch (err) {
     log.error('Onboarding pipeline failed', { companyId, journey }, err);
+    await recordOnboardingIssue(ctx, {
+      stage: 'orchestrator',
+      kind: 'pipeline_failed',
+      severity: 'critical',
+      error: err instanceof Error ? err.message : String(err),
+      message: 'Onboarding pipeline failed outside a recoverable stage.',
+      fallbackUsed: false,
+    });
     await db.update(companies)
       .set({ onboarding_status: 'failed' })
       .where(eq(companies.id, companyId));

@@ -26,8 +26,8 @@ export async function callSmallLLM(prompt: string, maxTokens = 256): Promise<str
         return await callOpenAI({ userPrompt: prompt, maxTokens, model: OPENAI_MODELS.GPT_5_4_MINI });
       }
       if (p === 'anthropic' && isAnthropicAvailable()) {
-        const { createAnthropicWithOAuth, CLAUDE_CODE_IDENTITY } = await import('@/lib/anthropic-oauth');
-        const { client, isOAuth } = createAnthropicWithOAuth();
+        const { createAnthropicWithOAuthAsync, CLAUDE_CODE_IDENTITY } = await import('@/lib/anthropic-oauth');
+        const { client, isOAuth } = await createAnthropicWithOAuthAsync();
         // OAuth requires the Claude Code identity as the first system block.
         // Non-OAuth path skips system entirely (matches prior behavior).
         const response = await (isOAuth

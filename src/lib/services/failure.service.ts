@@ -4,6 +4,7 @@ import { db, failureFingerprints, taskFailureLinks } from '@/lib/db';
 import { eq, gte, desc, sql, and, ne } from 'drizzle-orm';
 import * as eventService from '@/lib/services/event.service';
 import type { FailureFingerprint } from '@/types';
+import { classifyFailureMessage } from '@/lib/failure-classification';
 
 // 64-bit FNV-1a hash via two 32-bit words — ES2017-compatible, no BigInt needed.
 function generateHash(input: string): string {
@@ -27,15 +28,7 @@ function generateHash(input: string): string {
 
 // Canonical 8-class taxonomy (SPEC-CTRL-106)
 function categorizeError(errorMessage: string, _tag: string): string {
-  const msg = errorMessage.toLowerCase();
-  if (msg.includes('timeout') || msg.includes('timed out') || msg.includes('idle') || msg.includes('stall')) return 'timeout';
-  if (msg.includes('credential') || msg.includes('oauth') || msg.includes('api key') || msg.includes('token expired') || msg.includes('auth')) return 'connector_failure';
-  if (msg.includes('external') || msg.includes('fetch') || msg.includes('network') || msg.includes('econnrefused') || msg.includes('503') || msg.includes('502')) return 'external_block';
-  if (msg.includes('scope') || msg.includes('too large') || msg.includes('split') || msg.includes('decompos')) return 'scope_overflow';
-  if (msg.includes('tool') || msg.includes('rpc') || msg.includes('not supported') || msg.includes('capability')) return 'capability_miss';
-  if (msg.includes('policy') || msg.includes('content safety') || msg.includes('guardrail') || msg.includes('blocked')) return 'policy_violation';
-  if (msg.includes('verification') || msg.includes('verifier') || msg.includes('quality check')) return 'verification_reject';
-  return 'infra_error';
+  return classifyFailureMessage(errorMessage);
 }
 
 function normalizePattern(errorMessage: string): string {
@@ -220,11 +213,18 @@ export async function getRelevantKnownIssuesForAgent(
   if (tokens.length === 0) return [];
   // ILIKE ANY array — match if description contains any token
   const ilikeArr = tokens.map((t) => `%${t}%`);
+  const ilikeSqlArray = sql`ARRAY[${sql.join(ilikeArr.map((p) => sql`${p}`), sql`, `)}]::text[]`;
+  const agentNeedle = `%${agentId}%`;
   return db.select().from(failureFingerprints)
     .where(and(
       ne(failureFingerprints.fix_status, 'wont_fix'),
-      sql`(${failureFingerprints.description} ILIKE ANY (ARRAY[${sql.join(ilikeArr.map((p) => sql`${p}`), sql`, `)}]::text[])
-           OR ${failureFingerprints.affected_agents}::text ILIKE ${'%' + agentId + '%'})`,
+      sql`(${failureFingerprints.affected_agents} IS NULL
+           OR ${failureFingerprints.affected_agents}::text = '[]'
+           OR ${failureFingerprints.affected_agents}::text ILIKE ${agentNeedle})`,
+      sql`(${failureFingerprints.description} ILIKE ANY (${ilikeSqlArray})
+           OR ${failureFingerprints.fix_notes} ILIKE ANY (${ilikeSqlArray})
+           OR ${failureFingerprints.category} ILIKE ANY (${ilikeSqlArray})
+           OR ${failureFingerprints.affected_tools}::text ILIKE ANY (${ilikeSqlArray}))`,
     ))
     .orderBy(desc(failureFingerprints.occurrence_count), desc(failureFingerprints.last_seen_at))
     .limit(limit) as unknown as Promise<FailureFingerprint[]>;
@@ -234,11 +234,12 @@ export async function getRelevantKnownIssuesForAgent(
 export function formatKnownIssuesForAgent(issues: FailureFingerprint[]): string {
   if (issues.length === 0) return 'KNOWN ISSUES: none match this context.';
   const lines = [`KNOWN ISSUES: ${issues.length} relevant entr${issues.length === 1 ? 'y' : 'ies'}`, ''];
+  const maxFixNotes = issues.length <= 2 ? 500 : 180;
   for (const fp of issues) {
     const status = fp.fix_status === 'fixed' ? '[FIXED]' : `[${(fp.fix_status ?? 'open').toUpperCase()}]`;
     const desc = (fp.description ?? '').slice(0, 120);
     lines.push(`- ${status} ${desc}`);
-    if (fp.fix_notes) lines.push(`  fix: ${fp.fix_notes.slice(0, 200)}`);
+    if (fp.fix_notes) lines.push(`  fix: ${fp.fix_notes.slice(0, maxFixNotes)}`);
   }
   return lines.join('\n');
 }

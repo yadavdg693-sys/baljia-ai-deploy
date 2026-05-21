@@ -49,8 +49,8 @@ export async function generateOnboardingMagicLink(ctx: PipelineContext): Promise
   });
 
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://baljia.ai';
-  // redirect target: the founder's dashboard (scoped by slug so we hit the right company)
-  const redirect = ctx.slug ? `/dashboard/${ctx.slug}` : '/dashboard';
+  // redirect target: the founder's dashboard, using the UUID route the page loads by.
+  const redirect = `/dashboard/${ctx.companyId}`;
   const url = `${baseUrl}/api/auth/verify?token=${encodeURIComponent(token)}&redirect=${encodeURIComponent(redirect)}`;
 
   (ctx as PipelineContext & MagicLinkExtension).magicLinkUrl = url;

@@ -1,0 +1,1 @@
+ALTER TABLE "payment_connections" ADD COLUMN "auth_method" varchar(20) DEFAULT 'paste_key' NOT NULL;

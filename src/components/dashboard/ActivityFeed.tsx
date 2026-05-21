@@ -21,8 +21,8 @@ const EVENT_CONFIG: Record<string, { icon: string; color: string; verb: string }
   document_updated: { icon: '📄', color: 'text-status-investigating', verb: 'updated' },
   company_created: { icon: '🏢', color: 'text-baljia-gold', verb: 'created company' },
   chat_message: { icon: '💬', color: 'text-text-secondary', verb: 'sent message' },
-  night_shift_started: { icon: '🌙', color: 'text-status-planning', verb: 'started night shift' },
-  night_shift_completed: { icon: '🌅', color: 'text-status-success', verb: 'finished night shift' },
+  night_shift_started: { icon: '🌙', color: 'text-status-planning', verb: 'started autopilot run' },
+  night_shift_completed: { icon: '🌅', color: 'text-status-success', verb: 'finished autopilot run' },
   onboarding_stage: { icon: '🚀', color: 'text-baljia-gold', verb: 'reached stage' },
 };
 

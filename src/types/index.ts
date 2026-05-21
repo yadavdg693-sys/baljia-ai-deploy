@@ -120,6 +120,7 @@ export interface Task {
   executability_type: ExecutabilityType;
   execution_mode: ExecutionMode | null;
   assigned_to_agent_id: number | null;
+  execution_contract?: Record<string, unknown> | null;
   estimated_hours: number | null;
   estimated_credits: number;
   actual_credits_charged: number;
@@ -208,6 +209,7 @@ export interface DashboardData {
   tasks: Task[];
   documents: Document[];
   reports: Report[];
+  promo_videos?: PromoVideoJob[];
   credit_balance: number;
   business_metrics: {
     revenue: number;
@@ -215,6 +217,126 @@ export interface DashboardData {
     views: number;
     users: number;
   };
+}
+
+// ============================================
+// PROMO VIDEOS
+// ============================================
+
+export type PromoVideoGoal = 'attention' | 'launch' | 'product_hunt' | 'explain' | 'demo' | 'pitch';
+export type PromoVideoDuration = 15 | 30 | 60 | 90;
+export type PromoVideoAspectRatio = '9:16' | '16:9' | '1:1';
+export type PromoVideoStyle = 'product_demo' | 'clean_saas' | 'cinematic_ui';
+export type PromoVideoVisualMode = 'actual_site' | 'cinematic';
+export type PromoVideoVoiceMode = 'deepgram' | 'founder_avatar';
+export type PromoVideoStatus =
+  | 'queued'
+  | 'capturing'
+  | 'writing_script'
+  | 'preview_rendering'
+  | 'preview_ready'
+  | 'finalizing'
+  | 'rendering'
+  | 'uploading'
+  | 'ready'
+  | 'failed';
+
+export interface PromoVideoFocusRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface PromoVideoPoint {
+  x: number;
+  y: number;
+}
+
+export interface PromoVideoCaptureAsset {
+  id: string;
+  label: string;
+  kind: 'screenshot' | 'static' | 'fallback';
+  url: string | null;
+  width?: number;
+  height?: number;
+  primaryText?: string;
+  summary?: string;
+  buttons?: string[];
+  focusRect?: PromoVideoFocusRect;
+  cursorTarget?: PromoVideoPoint;
+  shotType?: 'wide' | 'focus' | 'click' | 'cta';
+}
+
+export interface PromoVideoScene {
+  id: string;
+  duration_seconds: number;
+  headline: string;
+  caption: string;
+  narration: string;
+  asset_ref: string | null;
+  motion: 'push' | 'pan' | 'zoom' | 'hold' | 'reveal';
+  scene_type?: 'hook' | 'pain' | 'product_reveal' | 'walkthrough' | 'benefit' | 'proof' | 'cta';
+  callout?: string;
+  cta?: string;
+}
+
+export interface PromoVideoStoryboard {
+  title: string;
+  duration_seconds: PromoVideoDuration;
+  aspect_ratio: PromoVideoAspectRatio;
+  style: PromoVideoStyle;
+  scenes: PromoVideoScene[];
+}
+
+export interface PromoVideoAiUsageEntry {
+  stage: string;
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  is_estimate: boolean;
+  success?: boolean;
+  created_at: string;
+}
+
+export interface PromoVideoAiUsage {
+  llm_calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  is_estimate: boolean;
+  entries: PromoVideoAiUsageEntry[];
+}
+
+export interface PromoVideoJob {
+  id: string;
+  company_id: string;
+  task_id: string | null;
+  status: PromoVideoStatus;
+  goal: PromoVideoGoal;
+  duration_seconds: PromoVideoDuration;
+  aspect_ratio: PromoVideoAspectRatio;
+  style: PromoVideoStyle;
+  visual_mode: PromoVideoVisualMode;
+  voice_mode: PromoVideoVoiceMode;
+  cta: string | null;
+  brief: Record<string, unknown> | null;
+  storyboard: PromoVideoStoryboard | null;
+  capture_assets?: PromoVideoCaptureAsset[] | null;
+  ai_usage: PromoVideoAiUsage | null;
+  preview_key: string | null;
+  preview_url: string | null;
+  audio_key: string | null;
+  audio_url: string | null;
+  output_key: string | null;
+  output_url: string | null;
+  thumbnail_key: string | null;
+  thumbnail_url: string | null;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string | null;
+  completed_at: string | null;
 }
 
 // ============================================
@@ -285,6 +407,10 @@ export type EventType =
   | 'onboarding_completed'
   | 'onboarding_failed'
   | 'onboarding_issue'
+  | 'promo_video_created'
+  | 'promo_video_progress'
+  | 'promo_video_completed'
+  | 'promo_video_failed'
   | 'credit_low'
   | 'tweet_scheduled'
   | 'referral_credited'
@@ -431,6 +557,41 @@ export interface Artifact {
   content_ref: string | null;
   evidence: Record<string, unknown> | null;
   created_at: string;
+}
+
+export interface AgentRunEvent {
+  id: string;
+  session_id: string | null;
+  run_id: string | null;
+  task_id: string;
+  execution_id: string | null;
+  sequence: number;
+  turn: number | null;
+  event_type: string;
+  provider: string | null;
+  tool_name: string | null;
+  status: string | null;
+  message: string | null;
+  input: Record<string, unknown> | null;
+  output: Record<string, unknown> | null;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface AgentPatchCheckpoint {
+  id: string;
+  run_id: string | null;
+  task_id: string;
+  execution_id: string | null;
+  starting_commit: string | null;
+  last_good_commit: string | null;
+  task_commit_range: string | null;
+  failed_commit: string | null;
+  rollback_available: boolean;
+  rollback_confidence: 'none' | 'low' | 'medium' | 'high' | string | null;
+  patch_summary: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface ApprovalRecord {
@@ -633,7 +794,7 @@ export interface CompiledBriefing {
 
 export interface WatchdogEvent {
   timestamp: string;
-  type: 'progress' | 'idle_warning' | 'stuck_detected' | 'killed' | 'loop_detected' | 'cost_warning' | 'cost_kill';
+  type: 'progress' | 'heartbeat' | 'idle_warning' | 'stuck_detected' | 'killed' | 'loop_detected' | 'cost_warning' | 'cost_kill';
   tool: string | null;
   message: string;
 }
@@ -687,6 +848,7 @@ export interface TaskProposal {
   agent_name: string;       // founder-friendly label (from FOUNDER_AGENT_LABELS)
   explanation?: string;     // optional — CEO handles founder-facing communication directly
   run_link?: string;        // one-click URL to execute the task
+  promo_video_job_id?: string | null;
 }
 
 /** Internal task proposal with governance metadata (never sent to frontend) */

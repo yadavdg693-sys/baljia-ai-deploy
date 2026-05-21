@@ -3,6 +3,7 @@ import { db, tasks } from '@/lib/db';
 import { eq, and, asc, desc, sql } from 'drizzle-orm';
 import { sanitizeForFounder } from '@/lib/founder-safety/sanitize';
 import { stripLlmArtifacts } from '@/lib/text/llm-artifacts';
+import { applyTaskLaneCreateDefaults } from '@/lib/agents/task-lane';
 import type { Task, TaskSource, ExecutionMode, VerificationLevel } from '@/types';
 
 interface CreateTaskInput {
@@ -21,6 +22,7 @@ interface CreateTaskInput {
   execution_mode?: ExecutionMode;
   verification_level?: VerificationLevel;
   executability_type?: 'can_run_now' | 'needs_new_connection' | 'manual_task';
+  execution_contract?: Record<string, unknown> | null;
   related_task_ids?: string[];
   authorized_by?: string;
   authorization_reason?: string;
@@ -33,16 +35,17 @@ export type UpdateTaskFields = Partial<Pick<Task,
   'complexity' | 'execution_mode' | 'verification_level' | 'failure_class' |
   'started_at' | 'completed_at' | 'turn_count' | 'actual_credits_charged' |
   'assigned_to_agent_id' | 'authorized_by' | 'authorization_reason' |
-  'repair_attempt_count'
+  'repair_attempt_count' | 'execution_contract'
 >>;
 
 export async function createTask(input: CreateTaskInput): Promise<Task> {
+  const taskInput = applyTaskLaneCreateDefaults(input);
   // Atomic queue_order: compute next order inside the INSERT to prevent
   // race conditions where two concurrent inserts read the same MAX.
-  const queueOrder = input.queue_order ?? null;
+  const queueOrder = taskInput.queue_order ?? null;
 
-  const estimatedHoursValue = input.estimated_hours !== undefined
-    ? String(input.estimated_hours)
+  const estimatedHoursValue = taskInput.estimated_hours !== undefined
+    ? String(taskInput.estimated_hours)
     : null;
 
   // Founder-safety: task fields render on the dashboard as-is. With the
@@ -56,20 +59,20 @@ export async function createTask(input: CreateTaskInput): Promise<Task> {
   // tasks, CEO-proposed tasks, night-shift tasks, recurring tasks). Even
   // founder-typed tasks rarely contain genuine markdown — copy-paste from
   // ChatGPT does. The strip is safe to apply unconditionally here.
-  const safeTitle = stripLlmArtifacts(sanitizeForFounder(input.title, {
+  const safeTitle = stripLlmArtifacts(sanitizeForFounder(taskInput.title, {
     mode: 'soft',
-    context: { callsite: 'createTask.title', companyId: input.company_id, source: input.source ?? null },
+    context: { callsite: 'createTask.title', companyId: taskInput.company_id, source: taskInput.source ?? null },
   }).clean);
-  const safeDescription = input.description
-    ? stripLlmArtifacts(sanitizeForFounder(input.description, {
+  const safeDescription = taskInput.description
+    ? stripLlmArtifacts(sanitizeForFounder(taskInput.description, {
         mode: 'soft',
-        context: { callsite: 'createTask.description', companyId: input.company_id, source: input.source ?? null },
+        context: { callsite: 'createTask.description', companyId: taskInput.company_id, source: taskInput.source ?? null },
       }).clean, { keepLineStructure: true })
     : null;
-  const safeReasoning = input.suggestion_reasoning
-    ? stripLlmArtifacts(sanitizeForFounder(input.suggestion_reasoning, {
+  const safeReasoning = taskInput.suggestion_reasoning
+    ? stripLlmArtifacts(sanitizeForFounder(taskInput.suggestion_reasoning, {
         mode: 'soft',
-        context: { callsite: 'createTask.suggestion_reasoning', companyId: input.company_id, source: input.source ?? null },
+        context: { callsite: 'createTask.suggestion_reasoning', companyId: taskInput.company_id, source: taskInput.source ?? null },
       }).clean)
     : null;
 
@@ -78,36 +81,37 @@ export async function createTask(input: CreateTaskInput): Promise<Task> {
       id, company_id, title, description, tag, priority, source, status,
       queue_order, assigned_to_agent_id, estimated_credits, actual_credits_charged,
       max_turns, turn_count, executability_type, suggestion_reasoning,
-      execution_mode, verification_level, related_task_ids,
+      execution_mode, verification_level, execution_contract, related_task_ids,
       complexity, estimated_hours, authorized_by, authorization_reason,
       created_at, updated_at
     )
     SELECT
       gen_random_uuid(),
-      ${input.company_id},
+      ${taskInput.company_id},
       ${safeTitle},
       ${safeDescription},
-      ${input.tag},
-      ${input.priority ?? 50},
-      ${input.source ?? 'founder_requested'},
-      ${input.status ?? 'todo'},
+      ${taskInput.tag},
+      ${taskInput.priority ?? 50},
+      ${taskInput.source ?? 'founder_requested'},
+      ${taskInput.status ?? 'todo'},
       COALESCE(${queueOrder}::int, COALESCE(
-        (SELECT MAX(queue_order) FROM tasks WHERE company_id = ${input.company_id}), 0
+        (SELECT MAX(queue_order) FROM tasks WHERE company_id = ${taskInput.company_id}), 0
       ) + 1),
-      ${input.assigned_to_agent_id ?? null}::int,
-      ${input.estimated_credits ?? 1},
+      ${taskInput.assigned_to_agent_id ?? null}::int,
+      ${taskInput.estimated_credits ?? 1},
       0,
-      ${input.max_turns ?? 200},
+      ${taskInput.max_turns ?? 200},
       0,
-      ${input.executability_type ?? 'can_run_now'},
+      ${taskInput.executability_type ?? 'can_run_now'},
       ${safeReasoning},
-      ${input.execution_mode ?? null},
-      ${input.verification_level ?? null},
-      ${JSON.stringify(input.related_task_ids ?? [])}::jsonb,
-      ${input.complexity ?? null}::int,
+      ${taskInput.execution_mode ?? null},
+      ${taskInput.verification_level ?? null},
+      ${JSON.stringify(taskInput.execution_contract ?? null)}::jsonb,
+      ${JSON.stringify(taskInput.related_task_ids ?? [])}::jsonb,
+      ${taskInput.complexity ?? null}::int,
       ${estimatedHoursValue}::numeric,
-      ${input.authorized_by ?? null},
-      ${input.authorization_reason ?? null},
+      ${taskInput.authorized_by ?? null},
+      ${taskInput.authorization_reason ?? null},
       NOW(),
       NOW()
     RETURNING *
@@ -133,6 +137,11 @@ export async function getTask(taskId: string): Promise<Task | null> {
     .limit(1);
 
   return (task as unknown as Task) ?? null;
+}
+
+export function stripTaskInternalFields<T extends { execution_contract?: unknown }>(task: T): Omit<T, 'execution_contract'> {
+  const { execution_contract: _executionContract, ...safeTask } = task;
+  return safeTask;
 }
 
 export async function updateTask(taskId: string, updates: UpdateTaskFields): Promise<Task> {
@@ -235,6 +244,7 @@ export async function completeTask(taskId: string): Promise<Task> {
 export async function finalizeTask(taskId: string, passed: boolean): Promise<Task> {
   return updateTask(taskId, {
     status: passed ? 'completed' : 'failed',
+    failure_class: passed ? null : 'verification_reject',
     completed_at: new Date().toISOString(),
   });
 }

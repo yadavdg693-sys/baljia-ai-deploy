@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/api-utils';
 import * as failureService from '@/lib/services/failure.service';
-import { db, platformEvents, tasks, companies } from '@/lib/db';
-import { eq, gte, desc, count, sql } from 'drizzle-orm';
+import { db, platformEvents, tasks, companies, platformFeedback } from '@/lib/db';
+import { gte, desc, count, sql } from 'drizzle-orm';
 
 // GET /api/ops/health
 // Admin-only: returns platform health metrics for the ops monitoring surface
@@ -27,6 +27,31 @@ export async function GET() {
     )
     .orderBy(desc(platformEvents.created_at))
     .limit(20);
+
+  const onboardingIssues = await db
+    .select({
+      id: platformFeedback.id,
+      title: platformFeedback.title,
+      severity: platformFeedback.severity,
+      status: platformFeedback.status,
+      source: platformFeedback.source,
+      occurrence_count: platformFeedback.occurrence_count,
+      last_seen_at: platformFeedback.last_seen_at,
+      metadata: platformFeedback.metadata,
+    })
+    .from(platformFeedback)
+    .where(sql`${platformFeedback.area} = 'onboarding' AND ${platformFeedback.last_seen_at} >= ${since24h}`)
+    .orderBy(sql`${platformFeedback.last_seen_at} DESC NULLS LAST`)
+    .limit(20);
+
+  const [onboardingIssueStats] = await db
+    .select({
+      rows_24h: count(),
+      total_occurrences_24h: sql<number>`COALESCE(SUM(${platformFeedback.occurrence_count}), 0)::int`,
+      open: sql<number>`COUNT(*) FILTER (WHERE ${platformFeedback.status} IN ('open', 'awaiting_approval', 'approved_to_fix', 'pr_open'))::int`,
+    })
+    .from(platformFeedback)
+    .where(sql`${platformFeedback.area} = 'onboarding' AND ${platformFeedback.last_seen_at} >= ${since24h}`);
 
   // Task status distribution (last 7 days)
   const taskStats = await db
@@ -60,6 +85,12 @@ export async function GET() {
       last_seen_at: f.last_seen_at,
     })),
     recent_failures_24h: recentFailures.length,
+    onboarding_issues_24h: {
+      rows: onboardingIssueStats?.rows_24h ?? 0,
+      total_occurrences: onboardingIssueStats?.total_occurrences_24h ?? 0,
+      open: onboardingIssueStats?.open ?? 0,
+      recent: onboardingIssues,
+    },
     guardrail_events_24h: guardrailEvents,
     task_stats_7d: taskStats,
     company_execution_states: companyStates,

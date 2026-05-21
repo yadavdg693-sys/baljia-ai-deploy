@@ -1,5 +1,5 @@
-// Trial Expiry Cron — calls expire_stale_trials() PG function, then archives
-// each newly-expired trial's CF Worker to GitHub and tears it down.
+// Trial Expiry Cron — calls expire_stale_trials() PG function, then tears down
+// each newly-expired trial's live Render app while preserving the GitHub repo.
 // Frequency: daily (0 3 * * *)
 // Auth: x-cron-secret header required
 
@@ -41,7 +41,7 @@ async function handle(request: NextRequest) {
     `);
 
     // 3. Find companies that just transitioned to trial_expired and still have
-    //    a hosting_state of 'active' — these are the ones we need to archive.
+    //    a hosting_state of 'live' — these are the ones we need to archive.
     //    (If hosting_state is already 'suspended' / 'archived', archival
     //    already ran or never had a Worker.)
     const newlyExpired = await db
@@ -49,7 +49,7 @@ async function handle(request: NextRequest) {
       .from(companies)
       .where(and(
         eq(companies.lifecycle, 'trial_expired'),
-        eq(companies.hosting_state, 'active'),
+        eq(companies.hosting_state, 'live'),
         isNotNull(companies.slug),
       ))
       .limit(50);  // bound the cron's work — leftover trials get picked up next day

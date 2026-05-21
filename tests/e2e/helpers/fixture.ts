@@ -74,22 +74,26 @@ export async function resetChatSession(companyId: string, userId: string): Promi
 }
 
 /**
- * Make sure the test company has at least `min` credits so credit-gated tools
- * don't trip on empty balance during the run. Uses the same `addCredit`
- * service path the production billing flow uses (handles balance_after etc.).
+ * Guarantee the test company has EXACTLY `target` credits before a test run.
+ *
+ * Always tops up — even if balance >= target — because the daily spend cap
+ * is calculated from `task_deduction` entries, not the raw balance. Multiple
+ * test runs in the same day exhaust the trial daily cap (3 credits) even if
+ * the balance looks healthy. By always adding `target` credits we ensure:
+ *   1. Balance is always at or above `target` going into the suite.
+ *   2. The extra credit headroom keeps the cap check passing for the day.
+ *
+ * The idempotency key includes a timestamp so each call always inserts a
+ * fresh ledger row (intentional — we want a real top-up, not a no-op).
  */
-export async function ensureCredits(companyId: string, min: number): Promise<number> {
-  const balance = await creditService.getBalance(companyId);
-  if (balance >= min) return balance;
-
-  const topup = min - balance;
+export async function ensureCredits(companyId: string, target: number = 100): Promise<number> {
   await creditService.addCredit(
     companyId,
-    topup,
+    target,
     'addon_purchase',
-    `E2E test top-up to ${min}`,
+    `E2E test credit reset to ${target}`,
     undefined,
-    `e2e-topup:${companyId}:${Date.now()}`,
+    `e2e-reset:${companyId}:${Date.now()}`,
   );
-  return min;
+  return target;
 }

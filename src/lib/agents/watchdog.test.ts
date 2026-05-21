@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { Watchdog } from './watchdog';
-import { computeCostUsd, getCostCeilingForAgent } from './cost-ceilings';
+import { computeCostUsd, getCostCeilingForAgent, getCostCeilingForTask } from './cost-ceilings';
 
 const TASK_ID = 'task_test_cost';
 const COMPANY_ID = 'co_test_cost';
@@ -89,11 +89,27 @@ describe('Watchdog cost tracking', () => {
     expect(summary).not.toContain('$');
   });
 
+  it('getBudgetSummary gives controlled-stop guidance near turn or cost limits', () => {
+    const turnWd = new Watchdog(TASK_ID, 5, COMPANY_ID, null);
+    for (let i = 0; i < 4; i++) turnWd.recordTurn(null);
+    expect(turnWd.getBudgetSummary()).toContain('NEAR LIMIT');
+    expect(turnWd.getBudgetSummary()).toContain('finish only if lane-required evidence is clean');
+
+    const costWd = new Watchdog(TASK_ID, 200, COMPANY_ID, 1.20);
+    costWd.recordTokens(HEAVY_INPUT, HEAVY_OUTPUT, MODEL);
+    expect(costWd.getBudgetSummary()).toContain('NEAR LIMIT');
+  });
+
   it('DISABLE_COST_CEILING env var → getCostCeilingForAgent returns null for every agent', () => {
     const orig = process.env.DISABLE_COST_CEILING;
     try {
       process.env.DISABLE_COST_CEILING = 'true';
       expect(getCostCeilingForAgent(30, 3)).toBeNull();
+      expect(getCostCeilingForTask(30, {
+        title: 'Fix button copy',
+        description: 'Small repair.',
+        tag: 'engineering',
+      } as never)).toBeNull();
       expect(getCostCeilingForAgent(30, 10)).toBeNull();
       expect(getCostCeilingForAgent(42)).toBeNull();
       expect(getCostCeilingForAgent(0)).toBeNull();
@@ -101,6 +117,36 @@ describe('Watchdog cost tracking', () => {
       if (orig === undefined) delete process.env.DISABLE_COST_CEILING;
       else process.env.DISABLE_COST_CEILING = orig;
     }
+  });
+
+  it('resolves Engineering task cost ceilings by derived lane', () => {
+    expect(getCostCeilingForTask(30, {
+      title: 'Fix button copy',
+      description: 'Small existing UI repair.',
+      tag: 'engineering',
+      complexity: null,
+    } as never)).toBe(0.35);
+
+    expect(getCostCeilingForTask(30, {
+      title: 'Build booking dashboard',
+      description: 'Create a standard booking app with dashboard and appointments.',
+      tag: 'engineering',
+      complexity: 4,
+    } as never)).toBe(2.5);
+
+    expect(getCostCeilingForTask(30, {
+      title: 'Fix OAuth and Stripe checkout',
+      description: 'Repair OAuth session persistence and subscription billing.',
+      tag: 'engineering',
+      complexity: 9,
+    } as never)).toBe(7);
+
+    expect(getCostCeilingForTask(30, {
+      title: 'CANARY ecommerce-store strict replay',
+      description: 'World-class canary run.',
+      tag: 'engineering',
+      complexity: 10,
+    } as never)).toBe(13);
   });
 
   it('null ceiling → recordTokens never kills, getBudgetSummary omits cost', () => {
@@ -131,13 +177,59 @@ describe('Watchdog cost tracking', () => {
   it('polling tools tolerate many consecutive calls (Render builds take 2-5 min)', () => {
     const wd = new Watchdog(TASK_ID, 200, COMPANY_ID, null);
     let lastVerdict: ReturnType<typeof wd.recordToolCall> = 'continue';
-    // 20 consecutive render_get_deploy_status calls — would have killed at 8 under old rules
-    for (let i = 0; i < 20; i++) lastVerdict = wd.recordToolCall('render_get_deploy_status');
+    // POLLING_LOOP_THRESHOLD is 50 (bumped from 25 — Render queue + build +
+    // deploy can take 10+ min, status polled every ~10s).
+    for (let i = 0; i < 49; i++) lastVerdict = wd.recordToolCall('render_get_deploy_status');
     expect(lastVerdict).toBe('continue');
     expect(wd.wasKilled()).toBe(false);
 
-    // 25 should still trip the polling threshold
-    for (let i = 0; i < 5; i++) lastVerdict = wd.recordToolCall('render_get_deploy_status');
+    // 51 total should trip the polling threshold.
+    for (let i = 0; i < 2; i++) lastVerdict = wd.recordToolCall('render_get_deploy_status');
     expect(lastVerdict).toBe('kill');
+  });
+
+  it('planning retrieval tools tolerate many consecutive calls', () => {
+    const wd = new Watchdog(TASK_ID, 200, COMPANY_ID, null);
+    let lastVerdict: ReturnType<typeof wd.recordToolCall> = 'continue';
+    for (let i = 0; i < 12; i++) lastVerdict = wd.recordToolCall('get_capability_pack');
+    expect(lastVerdict).toBe('continue');
+    expect(wd.wasKilled()).toBe(false);
+  });
+
+  it('does not loop-kill repeated file listing with different paths', () => {
+    const wd = new Watchdog(TASK_ID, 200, COMPANY_ID, null);
+    let lastVerdict: ReturnType<typeof wd.recordToolCall> = 'continue';
+    for (let i = 0; i < 12; i++) {
+      lastVerdict = wd.recordToolCall('github_list_files', { path: `app/segment-${i}` });
+    }
+    expect(lastVerdict).toBe('continue');
+    expect(wd.wasKilled()).toBe(false);
+    expect(wd.getLoopToolHistory()).toEqual(Array(12).fill('github_list_files'));
+  });
+
+  it('still loop-kills repeated identical tool arguments', () => {
+    const wd = new Watchdog(TASK_ID, 200, COMPANY_ID, null);
+    let lastVerdict: ReturnType<typeof wd.recordToolCall> = 'continue';
+    for (let i = 0; i < 8; i++) {
+      lastVerdict = wd.recordToolCall('github_list_files', { path: 'app/api' });
+    }
+    expect(lastVerdict).toBe('kill');
+    expect(wd.wasKilled()).toBe(true);
+  });
+
+  it('records heartbeats without consuming turns or tool-loop budget', () => {
+    const wd = new Watchdog(TASK_ID, 200, COMPANY_ID, null);
+    wd.recordHeartbeat('Render deploy polling still active', 'render_get_deploy_status');
+
+    expect(wd.getTurnCount()).toBe(0);
+    expect(wd.getLoopToolHistory()).toEqual([]);
+    expect(wd.wasKilled()).toBe(false);
+    expect(wd.getEvents()).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'heartbeat',
+        tool: 'render_get_deploy_status',
+        message: 'Render deploy polling still active',
+      }),
+    ]));
   });
 });

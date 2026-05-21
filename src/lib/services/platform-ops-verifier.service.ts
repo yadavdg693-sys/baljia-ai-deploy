@@ -17,7 +17,7 @@ import { eq, desc, and } from 'drizzle-orm';
 import { createLogger } from '@/lib/logger';
 import {
   isAnthropicOAuthAvailable,
-  createAnthropicWithOAuth,
+  createAnthropicWithOAuthAsync,
   withClaudeCodeIdentity,
 } from '@/lib/anthropic-oauth';
 import { callAnthropicWithTimeout } from '@/lib/llm-safety';
@@ -176,7 +176,7 @@ export async function verifyOpenPr(feedbackId: string): Promise<VerifyResult> {
 
   try {
     if (!isAnthropicOAuthAvailable()) throw new Error('Anthropic OAuth not available');
-    const { client, isOAuth } = await createAnthropicWithOAuth();
+    const { client, isOAuth } = await createAnthropicWithOAuthAsync();
 
     const prDiff = await fetchPrDiff(writerRun.pr_number);
 

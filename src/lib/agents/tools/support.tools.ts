@@ -205,6 +205,20 @@ export async function handleSupportTool(
         executability_type: 'can_run_now', related_task_ids: [task.id],
       }).returning({ id: tasksTable.id });
 
+      await db.insert(platformEvents).values({
+        company_id: task.company_id,
+        event_type: 'support_engineering_escalation',
+        payload: {
+          type: 'support_engineering_escalation',
+          title: input.title,
+          summary: input.description,
+          priority: (input.priority as number) ?? 50,
+          from_task: task.id,
+          engineering_task_id: newTask.id,
+        },
+        is_public_safe: false,
+      });
+
       return `Engineering task created (ID: ${newTask.id}): "${input.title}" — awaiting founder approval.`;
     }
 

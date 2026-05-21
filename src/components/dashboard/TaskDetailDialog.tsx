@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, type ReactElement } from 'react';
 import type { Task } from '@/types';
 import {
   Dialog,
@@ -75,6 +75,50 @@ interface LogsResponse {
 // Reusable input class — mirrors ChatInput.tsx styling
 const inputClass =
   'w-full bg-surface-secondary rounded-lg px-3 py-2 text-sm text-text-primary placeholder:text-text-muted border border-border-default focus:outline-none focus:border-border-active transition-colors disabled:opacity-50';
+
+function TaskDescriptionBody({ description }: { description: string }) {
+  const blocks: ReactElement[] = [];
+  let bullets: string[] = [];
+
+  const flushBullets = () => {
+    if (bullets.length === 0) return;
+    const items = bullets;
+    bullets = [];
+    blocks.push(
+      <ul key={`ul-${blocks.length}`} className="list-disc pl-5 space-y-1.5 text-sm text-text-primary leading-relaxed">
+        {items.map((item, index) => (
+          <li key={`${item}-${index}`}>{item}</li>
+        ))}
+      </ul>,
+    );
+  };
+
+  for (const rawLine of description.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) {
+      flushBullets();
+      continue;
+    }
+
+    const bulletMatch = line.match(/^[-*•]\s+(.+)$/);
+    if (bulletMatch) {
+      bullets.push(bulletMatch[1]);
+      continue;
+    }
+
+    flushBullets();
+    blocks.push(
+      <p key={`p-${blocks.length}`} className="text-sm text-text-primary leading-relaxed">
+        {line}
+      </p>,
+    );
+  }
+
+  flushBullets();
+
+  if (blocks.length === 0) return null;
+  return <div className="space-y-3">{blocks}</div>;
+}
 
 export function TaskDetailDialog({ task, open, onOpenChange, onApprove, onReject }: TaskDetailDialogProps) {
   const [loading, setLoading] = useState<'approve' | 'reject' | 'retry' | 'save' | null>(null);
@@ -371,7 +415,7 @@ export function TaskDetailDialog({ task, open, onOpenChange, onApprove, onReject
                     aria-label="Edit task description"
                   />
                 ) : (
-                  <p className="text-sm text-text-primary leading-relaxed">{task.description}</p>
+                  <TaskDescriptionBody description={task.description ?? ''} />
                 )}
               </div>
             )}

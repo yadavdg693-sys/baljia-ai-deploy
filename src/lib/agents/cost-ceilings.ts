@@ -8,6 +8,9 @@
 // platform-ops.service.ts:91-92 — kept inline here (rather than extracted
 // into a shared pricing service) until a third consumer needs them.
 
+import type { Task } from '@/types';
+import { getTaskLanePolicy } from './task-lane';
+
 export interface ModelPricing {
   input: number;   // USD per token
   output: number;  // USD per token
@@ -66,9 +69,13 @@ const DEFAULT_AGENT_COST_CEILING_USD = 0.50;
 // commit → deploy → check_url_health → render_get_logs → fix → redeploy
 // iteration loop. The flat $1.50 ceiling fits a "Hello World deploy" but
 // truncates real MVP work mid-iteration. Scale per task complexity (1-10).
+// Bumped 2026-05-11 after the equityzen Q&A endpoint task: agent reached
+// deploy + journey-verify in 54 turns, ~$2 spend, but had no headroom for
+// the 2-3 fix iterations that would have addressed the 502 and the static-
+// scan findings. New ceilings give each complexity tier ~2 extra fix loops.
 const ENGINEERING_CEILING_BY_COMPLEXITY: Record<number, number> = {
-  1: 1.00, 2: 1.00, 3: 1.25, 4: 1.50, 5: 1.50,
-  6: 2.50, 7: 4.00, 8: 5.50, 9: 7.00, 10: 8.00,
+  1: 1.50, 2: 1.50, 3: 2.00, 4: 2.50, 5: 3.00,
+  6: 5.00, 7: 7.00, 8: 9.00, 9: 11.00, 10: 13.00,
 };
 
 /**
@@ -88,4 +95,31 @@ export function getCostCeilingForAgent(agentId: number, complexity?: number | nu
     return ENGINEERING_CEILING_BY_COMPLEXITY[Math.round(complexity)] ?? AGENT_COST_CEILINGS_USD[30];
   }
   return AGENT_COST_CEILINGS_USD[agentId] ?? DEFAULT_AGENT_COST_CEILING_USD;
+}
+
+export function getCostCeilingForTask(agentId: number, task?: Pick<Task,
+  'title' | 'description' | 'tag' | 'source' | 'complexity' |
+  'execution_mode' | 'verification_level' | 'estimated_credits' | 'max_turns'
+> | null): number | null {
+  if (process.env.DISABLE_COST_CEILING === 'true' || process.env.DISABLE_COST_CEILING === '1') {
+    return null;
+  }
+  if (agentId !== 30 || !task) {
+    return getCostCeilingForAgent(agentId, task?.complexity);
+  }
+
+  const policy = getTaskLanePolicy(task);
+  if (policy.costCeilingUsd !== 'complexity') {
+    if (policy.lane === 'standard') {
+      const complexityCeiling = getCostCeilingForAgent(agentId, task.complexity ?? policy.defaultComplexity) ?? policy.costCeilingUsd;
+      return Math.min(Math.max(complexityCeiling, 1.5), 2.5);
+    }
+    if (policy.lane === 'strict') {
+      const complexityCeiling = getCostCeilingForAgent(agentId, task.complexity ?? policy.defaultComplexity) ?? policy.costCeilingUsd;
+      return Math.min(Math.max(complexityCeiling, 5), 7);
+    }
+    return policy.costCeilingUsd;
+  }
+
+  return getCostCeilingForAgent(agentId, task.complexity ?? policy.defaultComplexity);
 }

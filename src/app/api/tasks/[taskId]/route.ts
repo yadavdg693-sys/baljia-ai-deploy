@@ -29,7 +29,7 @@ export async function GET(
   const result = await getTaskWithAuth(taskId);
   if ('error' in result) return result.error;
 
-  return NextResponse.json(result.task);
+  return NextResponse.json(taskService.stripTaskInternalFields(result.task));
 }
 
 export async function PATCH(
@@ -49,5 +49,5 @@ export async function PATCH(
   }
 
   const updated = await taskService.updateTask(taskId, parsed.data);
-  return NextResponse.json(updated);
+  return NextResponse.json(taskService.stripTaskInternalFields(updated));
 }

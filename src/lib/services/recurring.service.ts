@@ -1,6 +1,9 @@
 // Recurring Task Scheduler — migrated to Drizzle + Neon
 import * as taskService from '@/lib/services/task.service';
 import * as eventService from '@/lib/services/event.service';
+import { createTaskDraft } from '@/lib/services/task-draft.service';
+import { routeTaskStrict } from '@/lib/services/router.service';
+import { engineeringContractBlockReason } from '@/lib/agents/execution-contract';
 import { db, recurringTasks } from '@/lib/db';
 import { eq, and, lte, asc } from 'drizzle-orm';
 import { createLogger } from '@/lib/logger';
@@ -84,19 +87,53 @@ export async function processDueRecurring(companyId: string): Promise<number> {
 
   for (const recurring of dueTasks as unknown as unknown as RecurringTask[]) {
     try {
-      await taskService.createTask({
-        company_id: companyId,
-        title: recurring.title,
-        description: recurring.description ?? `Recurring ${recurring.cadence} task`,
-        tag: recurring.tag,
-        priority: 30,
-        source: 'recurring',
-        status: 'todo',
-        queue_order: 500,
-        estimated_credits: 1,
-        max_turns: 200,
-        executability_type: 'can_run_now',
-      });
+      let visibleTaskCreated = false;
+      const description = recurring.description ?? `Recurring ${recurring.cadence} task`;
+      const agentId = routeTaskStrict(recurring.tag);
+      const contractBlockReason = agentId === null
+        ? `Unknown recurring task tag "${recurring.tag}".`
+        : engineeringContractBlockReason({
+            title: recurring.title,
+            description,
+            tag: recurring.tag,
+            source: 'recurring',
+            assigned_to_agent_id: agentId,
+          }, agentId);
+
+      if (agentId === null || contractBlockReason) {
+        await createTaskDraft({
+          company_id: companyId,
+          title: recurring.title,
+          description,
+          tag: recurring.tag,
+          priority: 30,
+          source: 'recurring',
+          status: 'pending_ceo_review',
+          suggestion_reasoning: contractBlockReason,
+          proposed_task: {
+            cadence: recurring.cadence,
+            queue_order: 500,
+            estimated_credits: 1,
+            max_turns: 200,
+            executability_type: 'can_run_now',
+          },
+        });
+      } else {
+        await taskService.createTask({
+          company_id: companyId,
+          title: recurring.title,
+          description,
+          tag: recurring.tag,
+          priority: 30,
+          source: 'recurring',
+          status: 'todo',
+          queue_order: 500,
+          estimated_credits: 1,
+          max_turns: 200,
+          executability_type: 'can_run_now',
+        });
+        visibleTaskCreated = true;
+      }
 
       await db.update(recurringTasks)
         .set({ next_run_at: getNextRunDate(recurring.cadence), last_run_at: now })
@@ -104,11 +141,13 @@ export async function processDueRecurring(companyId: string): Promise<number> {
 
       created++;
 
-      await eventService.emit(companyId, 'task_created', {
-        title: recurring.title,
-        source: 'recurring',
-        cadence: recurring.cadence,
-      });
+      if (visibleTaskCreated) {
+        await eventService.emit(companyId, 'task_created', {
+          title: recurring.title,
+          source: 'recurring',
+          cadence: recurring.cadence,
+        });
+      }
     } catch (error) {
       log.error('Failed to create recurring instance', { title: recurring.title }, error);
     }

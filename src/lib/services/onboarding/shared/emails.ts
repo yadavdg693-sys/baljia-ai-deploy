@@ -1,4 +1,4 @@
-// Startup + completion email composers — Polsia parity
+// Startup + completion email composers.
 
 import { createLogger } from '@/lib/logger';
 import { trackedSendEmail as sendEmail } from './tracked-calls';
@@ -7,9 +7,16 @@ import type { PipelineContext } from '../types';
 
 const log = createLogger('OnboardingEmails');
 
-// EMAIL #1 — startup / "I'm building it RIGHT NOW"
-// Fires immediately after company name set, BEFORE long stages run. Sender is
-// {slug}@baljia.app (company identity), present tense, mood = excited.
+function baljiaEmailSignature(state: 'Excited' | 'Celebrating'): string {
+  return [
+    'Baljia AI',
+    'Your AI Angel',
+    `Status: ${state}`,
+  ].join('\n');
+}
+
+// Email #1 - startup / "I'm building it right now".
+// Fires immediately after company name set, before longer stages run.
 export async function sendStartupEmail(ctx: PipelineContext): Promise<void> {
   if (!ctx.founderEmail || !ctx.slug) return;
 
@@ -20,15 +27,6 @@ export async function sendStartupEmail(ctx: PipelineContext): Promise<void> {
     ? `I'm building ${ctx.oneLiner.toLowerCase()}`
     : `I'm setting up ${ctx.companyName} for you`;
 
-  const asciiExcited = [
-    '┌─────────┐',
-    '│  ★   ★  │',
-    '│    ▽    │',
-    '│  ◡◡◡◡◡  │',
-    '└─────────┘',
-    '    ♪ ♪',
-  ].join('\n');
-
   try {
     await sendEmail({
       to: ctx.founderEmail,
@@ -37,32 +35,30 @@ export async function sendStartupEmail(ctx: PipelineContext): Promise<void> {
       textBody: [
         `Hi ${ctx.founderName ?? 'there'},`,
         '',
-        `This is your first email from your new company: ${ctx.companyName}!`,
+        `This is your first email from your new company: ${ctx.companyName}.`,
         '',
         `You now have a company email: ${fromAddress}`,
         '',
-        `${productPhrase} right now. Check your dashboard to watch me work!`,
+        `${productPhrase} right now. Check your dashboard to watch me work.`,
         '',
-        `— Baljia (Excited)`,
-        asciiExcited,
+        baljiaEmailSignature('Excited'),
         '',
-        `View Dashboard → ${dashboardUrl}`,
+        `View Dashboard -> ${dashboardUrl}`,
       ].join('\n'),
       tag: 'startup',
       companyId: ctx.companyId,
     });
     log.info('Startup email sent', { from: fromAddress, to: ctx.founderEmail });
   } catch (err) {
-    log.warn('Startup email failed — non-blocking', {
+    log.warn('Startup email failed - non-blocking', {
       companyId: ctx.companyId,
       error: err instanceof Error ? err.message : String(err),
     });
   }
 }
 
-// EMAIL #2 — completion summary
-// Fires at end of onboarding. Sender is platform system@baljia.ai (institutional voice).
-// Past tense, lists what was researched and built, names the 3 starter tasks.
+// Email #2 - completion summary.
+// Fires at end of onboarding with what was researched, built, and prepared.
 export async function sendCompletionEmail(ctx: PipelineContext, magicLinkUrl?: string): Promise<void> {
   if (!ctx.founderEmail) return;
 
@@ -89,24 +85,14 @@ export async function sendCompletionEmail(ctx: PipelineContext, magicLinkUrl?: s
   const builtItems: string[] = [];
   if (ctx.slug) builtItems.push(`Landing page live at ${ctx.slug}.baljia.app`);
   if (ctx.slug) builtItems.push(`Company email active at ${ctx.slug}@baljia.app`);
-  if (isLateDevConfigured()) builtItems.push(`Tweeted your launch from @baljia_ai`);
-  if (ctx.marketResearch) builtItems.push(`Market research report saved`);
-  if (ctx.mission) builtItems.push(`Mission document written`);
+  if (isLateDevConfigured()) builtItems.push('Tweeted your launch from @baljia_ai');
+  if (ctx.marketResearch) builtItems.push('Market research report saved');
+  if (ctx.mission) builtItems.push('Mission document written');
 
   const taskBullets = starterTasks.map((t, i) => {
-    const desc = t.description ? ` — ${t.description.split('\n')[0].slice(0, 100)}` : '';
+    const desc = t.description ? ` - ${t.description.split('\n')[0].slice(0, 100)}` : '';
     return `  ${i + 1}. ${t.title}${desc}`;
   });
-
-  const asciiCelebrating = [
-    '┌─────────┐',
-    '│  ◠   ◠  │',
-    '│    ▽    │',
-    '│   ◡◡◡   │',
-    '├────●────┤',
-    '│   🥇    │',
-    '└─────────┘',
-  ].join('\n');
 
   try {
     await sendEmail({
@@ -118,27 +104,26 @@ export async function sendCompletionEmail(ctx: PipelineContext, magicLinkUrl?: s
         '',
         insightLine,
         '',
-        `Here's what I built today:`,
+        "Here's what I built today:",
         '',
         ...builtItems.map((b) => `  ${b}`),
         '',
-        taskBullets.length > 0 ? `${taskBullets.length} tasks queued for your first cycle:` : '',
+        taskBullets.length > 0 ? `${taskBullets.length} tasks ready for your first cycle:` : '',
         '',
         ...taskBullets,
         '',
-        `Subscribe to start your first operating cycle and I'll begin working through these tasks with daily progress.`,
+        "Subscribe to start your first operating cycle and I'll begin working through these tasks with daily progress.",
         '',
-        `— Baljia (Celebrating)`,
-        asciiCelebrating,
+        baljiaEmailSignature('Celebrating'),
         '',
-        magicLinkUrl ? `Open your dashboard → ${magicLinkUrl}` : `View Dashboard → ${dashboardUrl}`,
+        magicLinkUrl ? `Open your dashboard -> ${magicLinkUrl}` : `View Dashboard -> ${dashboardUrl}`,
       ].filter(Boolean).join('\n'),
       tag: 'completion',
       companyId: ctx.companyId,
     });
     log.info('Completion email sent', { from: fromAddress, to: ctx.founderEmail });
   } catch (err) {
-    log.warn('Completion email failed — non-blocking', {
+    log.warn('Completion email failed - non-blocking', {
       companyId: ctx.companyId,
       error: err instanceof Error ? err.message : String(err),
     });

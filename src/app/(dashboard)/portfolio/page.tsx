@@ -5,7 +5,6 @@ import { redirect } from 'next/navigation';
 import { getSessionFromCookies } from '@/lib/auth';
 import { db, companies, tasks } from '@/lib/db';
 import { desc, eq, sql } from 'drizzle-orm';
-import { LiveBanner } from '@/components/dashboard/LiveBanner';
 
 export const metadata = {
   title: 'Portfolio | Baljia AI',
@@ -19,7 +18,7 @@ export default async function PortfolioPage() {
   const rows = await db
     .select({
       id: companies.id, name: companies.name, slug: companies.slug,
-      one_liner: companies.one_liner, company_stage: companies.company_stage,
+      one_liner: companies.one_liner,
       lifecycle: companies.lifecycle, subdomain: companies.subdomain,
       custom_domain: companies.custom_domain, created_at: companies.created_at,
       onboarding_status: companies.onboarding_status, plan_tier: companies.plan_tier,
@@ -29,12 +28,6 @@ export default async function PortfolioPage() {
     .from(companies)
     .where(eq(companies.owner_id, user.id))
     .orderBy(desc(companies.created_at));
-
-  const [liveCountResult] = await db
-    .select({ count: sql<number>`count(*)::int` })
-    .from(companies)
-    .where(sql`${companies.lifecycle} IN ('trial_active', 'full_active')`);
-  const liveCompanyCount = Number(liveCountResult?.count ?? 0);
 
   const S = {
     page: { minHeight: '100vh', background: 'var(--bg)', color: 'var(--text)', fontFamily: "'Inter', system-ui, sans-serif" } as const,
@@ -57,8 +50,6 @@ export default async function PortfolioPage() {
 
   return (
     <div style={S.page}>
-      <LiveBanner liveCount={liveCompanyCount} />
-
       <header style={S.topbar}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <img src="/mascot.png" alt="Baljia" style={{ width: 32, height: 32, objectFit: 'contain', filter: 'drop-shadow(0 2px 8px rgba(225,177,44,0.3)) brightness(1.08) saturate(1.2)' }} />
@@ -103,8 +94,6 @@ export default async function PortfolioPage() {
                       </div>
                       {row.one_liner && <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 8 }}>{row.one_liner}</p>}
                       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: 12, color: 'var(--text-dim)' }}>
-                        <span style={{ textTransform: 'capitalize' }}>{String(row.company_stage).replace(/_/g, ' ')}</span>
-                        <span>·</span>
                         <span>{row.total_tasks} tasks</span>
                         {row.running_tasks > 0 && (<><span>·</span><span style={{ color: '#D97706' }}>{row.running_tasks} running</span></>)}
                         <span>·</span>

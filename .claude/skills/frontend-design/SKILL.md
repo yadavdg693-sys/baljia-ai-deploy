@@ -1,121 +1,110 @@
 # Skill: Frontend design for founder apps
 
-**READ THIS BEFORE building any UI, landing page, dashboard, or HTML output.**
+**READ THIS BEFORE building any UI, landing page, dashboard, or in-app screen.**
 
-Founder apps render straight from the Worker — there's no separate React build step in most cases. You're producing HTML strings (or Hono JSX) that ship as-is.
+The default deploy is a Git-backed Render web service. For anything a real user sees, the default stack is **Next.js 15 + shadcn/ui + Tailwind + Better Auth + Drizzle + Neon**, and the default visual foundation is **one of the 149 design-language references** in the design-systems catalog. Express + hand-rolled HTML is the fallback only for backend-only services.
 
-## Tooling — Tailwind via CDN is the default
+## Step 0 — pick your stack BEFORE writing code
 
-You will not have a build pipeline. Use Tailwind via CDN:
+| If the task is… | Stack | First tool |
+|---|---|---|
+| Any landing page, dashboard, chat UI, signup flow, founder app | **Next.js + shadcn/ui** | `github_fork_skeleton` |
+| Pure JSON API, webhook receiver, cron worker — NO user-facing pages | Express + Node | `fork_express_skeleton` |
+| Internal admin tool only the founder uses, no auth, ≤2 pages | Either — Next.js is still cleaner | `github_fork_skeleton` |
 
-```html
-<script src="https://cdn.tailwindcss.com"></script>
-```
+If you forked Express on a task that has any UI: stop, restart with `github_fork_skeleton`. The completion gate will block the task otherwise.
 
-Pros: zero setup, full Tailwind class set, works immediately.
-Cons: ~50 KB hit on first load, no purging. Acceptable for v1 founder apps; not for high-traffic production.
+## Step 1 — pick a design language
 
-For Tier 2/3 apps that warrant a real build → set up Vite + Tailwind locally, output to a single bundle, ship via R2 (`cf_deploy_app` with `with_r2_assets: true` + a route that serves the bundle).
+Call `match_design_system` with the founder app brief. Use its top matches as the shortlist, then pick ONE name whose category + tagline matches the founder's product:
 
-## The Polsia + Baljia visual language
+| Category match | Strong picks |
+|---|---|
+| Fintech / payments / banking | `stripe`, `coinbase`, `wise` |
+| AI / LLM / chat product | `linear-app`, `claude`, `openai`, `replicate` |
+| Developer tools / infra | `vercel`, `linear-app`, `github`, `hashicorp` |
+| Productivity / SaaS / project mgmt | `linear-app`, `notion`, `framer` |
+| Marketplace / consumer / e-commerce | `airbnb`, `shopify` |
+| Editorial / content / publishing | `editorial`, `notion`, `mintlify` |
+| Internal dashboard / ops tool | `dashboard`, `mission-control`, `huggingface` |
+| Bold / brutalist / creative agency | `brutalism`, `neobrutalism`, `bold` |
+| Luxury / premium / hardware | `apple`, `bmw`, `tesla` |
 
-Match the platform's tone unless the founder explicitly wants something different:
+Then call `get_design_system(name)` and READ the spec (~18KB). Apply the **conventions** — exact palette hex codes, font family + weight + letter-spacing values, shadow stacks, border-radius scale, motion vocabulary.
 
-- **Background:** dark warm (`#0E0B07` or near-black). Founder apps default to dark mode.
-- **Accent:** gold `#F5A623` (use sparingly — single CTA, key metric, focus ring)
-- **Body text:** off-white `#E8E4DD`, body font is sans (Inter / system-ui), display font is serif (Georgia / Source Serif)
-- **Mono:** for timestamps, code, data — `JetBrains Mono` or `monospace`
-- **Spacing:** 4/8/12/16/24/32 rhythm. No magic numbers.
-- **Border radius:** 8px on cards, 12px on dialogs, full on pills/badges.
+**Apply the conventions, not the brand identity.** Borrow Stripe's "weight 300 at display sizes with -1.4px letter-spacing"; do NOT reuse Stripe's exact `#533afd` on a competing fintech product. Rename palettes to fit the founder's brand. If the system lists "Stripe Purple", call it "Brand Indigo" in the founder's app.
 
-## Component patterns that work without a build step
+If no system matches, default to `linear-app` for dark SaaS or `vercel` for light dev-tools. Don't invent a palette from scratch.
 
-### Card
+## Step 2 — use the components that already exist
 
-```html
-<div class="rounded-xl border border-white/10 bg-white/[0.02] p-5">
-  <h3 class="text-sm font-medium text-white/60 mb-2">Revenue today</h3>
-  <p class="text-3xl font-semibold tabular-nums">$2,418.00</p>
-</div>
-```
+Every `github_fork_skeleton` fork ships with 14 shadcn/ui components at `components/ui/` (button, card, input, label, dialog, badge, dropdown-menu, tabs, textarea, scroll-area, skeleton, sonner, etc.).
 
-### Primary button
+- Call `list_components` to see the catalog.
+- Call `read_component(name)` to see exact props before importing.
+- **Hand-rolling `<button>` / `<div className="card">` / `<input>` is a quality-bar violation.** Import from `@/components/ui/...`.
 
-```html
-<button class="rounded-lg bg-[#F5A623] px-4 py-2 text-sm font-medium text-black hover:bg-[#FFB833] transition-colors">
-  Save
-</button>
-```
+For icons, use `lucide-react`. Monoline at 1.6-1.8px stroke, default 24px. Never emoji in `<h*>`, button text, or icon slots.
 
-### Form field
+## Step 3 — Frontend Quality Bar (hard fails)
 
-```html
-<label class="block">
-  <span class="text-sm font-medium text-white/80">Email</span>
-  <input
-    type="email"
-    required
-    class="mt-1 w-full rounded-md bg-white/5 border border-white/10 px-3 py-2 text-sm focus:border-[#F5A623] focus:outline-none focus:ring-2 focus:ring-[#F5A623]/30"
-  />
-</label>
-```
+These are P0. If any are present, `design_audit` + `design_critique` will block task completion:
 
-### Empty state
+1. **No Tailwind default indigo** (`#6366f1`, `#4f46e5`, `from-indigo-*`). Use the resolved design system's accent.
+2. **No two-stop trust gradients** (purple→blue, indigo→pink, blue→cyan on hero). Flat surface + typography wins.
+3. **No emoji in `<h1>` / `<h2>` / `<button>` / icon slots.** Use lucide-react.
+4. **No filler copy** — `lorem ipsum`, `feature one / two / three`, `placeholder text`, `sample content`. Either real product copy or rework the section.
+5. **No `text-center max-w-2xl mx-auto` hero** — the AI-default tell. Left-align with intentional anchor (illustration, code preview, screenshot) OR center only when typography justifies it.
+6. **No symmetric `grid grid-cols-3 gap-8` feature grid** — use `grid-cols-2` or asymmetric (`md:grid-cols-[2fr_1fr]`).
+7. **No "rounded card with colored left-border accent."** Drop the radius or drop the left border; keep one.
+8. **No invented metrics** — "10× faster", "99.9% uptime", "3× more productive" without a cited source.
+9. **No API documentation, curl examples, or HTTP method badges on a public user landing.** Those belong at `/docs`. The `/` route is for end users.
 
-```html
-<div class="text-center py-12">
-  <p class="text-sm text-white/50">No items yet.</p>
-  <p class="text-xs text-white/30 mt-1">Click "Create" to add your first one.</p>
-</div>
-```
+## Step 4 — soul / distinctive choice (P1, fix before stopping)
 
-## Mobile-first — always
+`design_critique` will flag this as a BLOCKER if absent: at least ONE unconventional move that identifies the page as a specific product, not a template:
 
-```html
-<div class="grid grid-cols-1 md:grid-cols-3 gap-4">...</div>
-<!-- mobile = 1 column, ≥768px = 3 columns -->
-```
+- A bold typography choice (the Stripe weight-300 effect, the Linear -1.584px tracking)
+- A non-template section (comparison-against-status-quo, inline mini-demo, kbd shortcut wall, custom microcopy block)
+- A unique micro-interaction (button depresses 2px, number counts up, focus ring shapes itself to content)
 
-If you write `grid-cols-3` without a `md:` prefix, you ship a desktop-only experience. Don't.
+The "Hero → 3-Feature-Grid → Pricing → FAQ → CTA" canonical AI template is a fail. At least one section must break it.
 
-## Accessibility — the easy wins
+## Mobile state (P0)
 
-- Every `<button>` and `<a>` gets readable text. No icon-only buttons without `aria-label`.
-- Every `<img>` has `alt`. If decorative, `alt=""` (empty, not missing).
-- Form labels: use `<label>` (visible) or `aria-label` (icon buttons). Never placeholder-only.
-- Focus states: don't `outline: none` without replacing it. Tailwind's `focus:ring-2` is fine.
-- Color contrast: gold on near-black hits AAA. Pure white on near-black is fine. White/40 on near-black fails AA — only use it for low-priority text.
+- Test at 390×844 in your head. No horizontal scroll. CTAs reachable with thumb. Font size ≥ 16px for body to prevent iOS zoom.
+- One column on mobile, columns added at `md:` / `lg:` breakpoints — never the other direction.
+- Tap targets ≥ 40px high. No hover-only primary actions.
+- Long titles wrap cleanly; no clipped button text.
 
-## Layout primitives
+## Accessibility minimums
 
-- **Page max width:** `max-w-7xl mx-auto px-4 sm:px-6 lg:px-8`
-- **Card grid:** `grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6`
-- **Stack:** `flex flex-col gap-4`
-- **Toolbar:** `flex items-center justify-between gap-4`
+- Every input has a `<Label htmlFor>`. Every button has readable text or `aria-label`.
+- Every visible button/link-button, select, dropdown trigger, and native `option` row must have readable foreground/background contrast. White text on white/light buttons, black text on dark cards, and default white native dropdown menus in dark UIs are blocker bugs.
+- For dark themes, style both `select` and `option` explicitly, for example dark option background plus light foreground. Do not rely on browser default dropdown colors.
+- Focus state must be visible (`focus-visible:ring-ring` is built into shadcn — don't override).
+- Error messages say what failed AND how to recover.
+- Keyboard-only navigation must work end-to-end.
 
-## Don't do these
+## Verification — when is the task done
 
-- ❌ External CSS files via `<link rel="stylesheet">` — every extra request slows first paint and Workers caching adds complexity. Inline Tailwind via the CDN tag is fine.
-- ❌ `<img>` without `width`/`height` — causes layout shift. Set them or use `aspect-ratio: 16/9`.
-- ❌ Custom font files via `@font-face { src: url(...) }` — extra requests + CORS. Use system stacks or Google Fonts CDN if you must.
-- ❌ Heavy JS frameworks (React, Vue) without a real build step — Tailwind CDN can't bundle them. If you need React, use a Tier 2 deploy with a proper bundle.
-- ❌ Building a "complete design system" before shipping the feature. Use these primitives, ship, iterate.
+A frontend task is done when ALL of:
 
-## What "done" looks like for a UI task
+1. `render_get_deploy_status` returns `live`.
+2. `render_get_logs` shows no `error` / `fatal` lines on startup or first request.
+3. `check_url_health` returns 2xx on `/` (and `/api/health` if it exists).
+4. `verify_user_journey` returns PASS on the highest-value flow (register → reach dashboard → submit form → see result → log out → log in → still there).
+5. `design_audit` returns CLEAN (0 HIGH findings) on the deployed URL.
+6. `design_critique` returns score ≥ 7 with 0 BLOCKERs on the deployed URL.
 
-A frontend task is verified when:
-1. The page loads (status 200, body > 500 bytes — the platform checks this automatically)
-2. The intended elements are present in the rendered HTML (your verify script does `fetch + check for marker text/IDs`)
-3. The page renders without console errors (you can't directly check this from a Worker; mention in your report that visual QA is needed)
-4. Mobile viewport doesn't break (test in DevTools or note "needs mobile review" in your report)
+If any of (4)-(6) fails: read the failure detail, fix the underlying code, push, redeploy, re-run. Do NOT mark complete with open BLOCKERs.
 
-You CANNOT verify visually from the Worker. Be honest in your task report — say "API and HTML structure verified; visual review needed" rather than "shipping ✅."
+## Common anti-patterns this skill defends against
 
-## Reference: existing platform UI components
-
-If the founder app should match the platform's look, mirror these classes from `src/components/dashboard/`:
-- `.dashboard-shell` — page background + topbar
-- `.task-preview-card` — content card
-- `.chrome-button` — primary CTA
-- `.micro-pill` — status badge
-- `.thought-row` — chat bubble
+- **Hand-rolled buttons / cards / inputs** with inline `style="..."` → use `@/components/ui/...`.
+- **Default Tailwind palette as accent** → use the design system's resolved accent token.
+- **Bare centered hero `<h1>` + `<p>` + `<button>`** → introduce a visual anchor or left-align.
+- **`<div className="border rounded-lg p-4">` content block** → use `<Card>`.
+- **`<input>` without `<Label>`** → import both, every time.
+- **Emoji as feature icons** → `lucide-react` monoline.
+- **"Coming soon" or "feature one" placeholder content** → don't ship the section until you have real copy.

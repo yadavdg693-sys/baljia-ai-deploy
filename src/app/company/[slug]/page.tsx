@@ -26,7 +26,7 @@ export default async function PublicCompanyPage({ params }: Props) {
 
   const [company] = await db.select({
     id: companies.id, name: companies.name, slug: companies.slug,
-    one_liner: companies.one_liner, company_stage: companies.company_stage, created_at: companies.created_at,
+    one_liner: companies.one_liner, created_at: companies.created_at,
   }).from(companies).where(eq(companies.slug, slug)).limit(1);
 
   if (!company) notFound();
@@ -51,7 +51,6 @@ export default async function PublicCompanyPage({ params }: Props) {
         name: company.name,
         slug: company.slug,
         one_liner: company.one_liner,
-        stage: company.company_stage ?? 'early',
         created_at: company.created_at ? new Date(company.created_at).toISOString() : new Date().toISOString(),
       }}
       stats={{

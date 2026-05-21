@@ -55,6 +55,14 @@ and prepares for v4.1.1. Anything below 2.2 AA is craft debt.
 Thresholds are **inclusive** — exactly 4.5:1 or 3:1 passes. Don't round
 up: 2.999:1 fails because rounding is not a permitted mechanism.
 
+Founder-app runtime rule: every visible button/link-button, input,
+select, dropdown trigger, and native `option` row must clear the same
+contrast floor in the rendered browser. White text/icons on white or
+very-light button fills, black row titles on dark cards, and default
+white native dropdown menus in dark themes are blocker bugs, not polish.
+When using a dark theme, style both the closed `select` control and its
+`option` rows with explicit foreground/background colors.
+
 "Large text" means **18 pt** regular, not 18 px. 18 px regular needs
 4.5:1; 14 pt bold (≈18.5 px) qualifies for 3:1, 14 px bold does not.
 

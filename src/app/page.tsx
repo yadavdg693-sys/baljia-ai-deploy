@@ -55,12 +55,12 @@ export default function LandingPage() {
             fontSize: 'clamp(40px, 5.5vw, 68px)', lineHeight: 1.04, letterSpacing: '-2px',
             color: 'var(--ink)', marginBottom: 16,
           }}>
-            AI That{' '}
+            Launch and Grow{' '}
             <em style={{
               fontStyle: 'italic', fontWeight: 500,
               background: 'linear-gradient(135deg, #FFB800, #D97706)',
               WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
-            }}>Runs Your Company</em>{' '}While You Sleep
+            }}>Your Company</em>{' '}with AI Angel
           </h2>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
@@ -69,7 +69,7 @@ export default function LandingPage() {
           </div>
 
           <p style={{ fontSize: 16, color: 'var(--text-muted)', maxWidth: 500, lineHeight: 1.65, marginBottom: 28 }}>
-            One AI workspace that <strong style={{ color: 'var(--ink-2)' }}>builds your product</strong>, runs your marketing, and handles daily operations — so one founder can move like a full team.
+            One AI workspace that <strong style={{ color: 'var(--ink-2)' }}>helps you launch and grow your company</strong> with product, marketing, research, and daily execution in one place.
           </p>
 
           <Link href="/login" style={{
@@ -82,8 +82,8 @@ export default function LandingPage() {
           <p style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 10 }}>✓ No credit card required · Free to start</p>
 
           {/* Stats */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginTop: 36, maxWidth: 480 }}>
-            {[{ v: '9', l: 'AI Agents' }, { v: '24/7', l: 'Autonomous' }, { v: '1,200+', l: 'Waitlist' }, { v: '$0', l: 'To Start' }].map((s, i) => (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginTop: 36, maxWidth: 480 }}>
+            {[{ v: '9', l: 'AI Agents' }, { v: '24/7', l: 'Autonomous' }, { v: '$0', l: 'To Start' }].map((s, i) => (
               <div key={i} style={{ borderLeft: i ? '1px solid var(--border-strong)' : 'none', paddingLeft: i ? 12 : 0 }}>
                 <div style={{ fontFamily: 'var(--font-display)', fontSize: 26, fontWeight: 500, color: 'var(--ink)', lineHeight: 1, letterSpacing: '-.5px' }}>{s.v}</div>
                 <div style={{ fontSize: 10, color: 'var(--text-dim)', textTransform: 'uppercase' as const, letterSpacing: 1.2, marginTop: 4, fontWeight: 600 }}>{s.l}</div>
@@ -173,7 +173,7 @@ export default function LandingPage() {
         <div style={{ display: 'grid', gap: 24 }}>
           {[
             { n: '01', title: 'Describe your vision', desc: 'Tell Baljia your idea — or let it surprise you with one based on your background.' },
-            { n: '02', title: 'AI Angel builds', desc: 'Research, naming, landing page, market analysis, and starter tasks — all in 60 seconds.' },
+            { n: '02', title: 'AI Angel builds', desc: 'Research, naming, landing page, market analysis, and a first operating plan — all in 60 seconds.' },
             { n: '03', title: 'Approve & grow', desc: 'Review tasks, chat with Baljia, and watch your company grow autonomously.' },
           ].map((s, i) => (
             <div key={i} style={{ display: 'flex', gap: 20, alignItems: 'start' }}>

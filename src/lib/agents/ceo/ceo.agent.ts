@@ -1,7 +1,7 @@
 // CEO Agent — Streaming conversation with tool use
 // Primary: Claude Sonnet 4 (Anthropic direct or AWS Bedrock)
 // Fallback: OpenAI GPT-4o (Codex OAuth or OPENAI_API_KEY)
-// Fallback: OpenRouter (GLM-4/Qwen via OpenAI-compatible API)
+// Fallback: OpenRouter (DeepSeek/GLM/Qwen via OpenAI-compatible API)
 // Fallback: Gemini Flash (Google) — if all else fails
 
 import Anthropic from '@anthropic-ai/sdk';
@@ -10,8 +10,8 @@ import type { CEOStreamEvent, ChatMessage } from '@/types';
 import { assembleCEOPrompt } from './ceo.prompt';
 import { CEO_TOOLS, handleToolCall } from './ceo.tools';
 import type { ToolResult } from './ceo.tools';
-import { isAnthropicAvailable, isBedrockAvailable, isDirectAnthropicAvailable, isOpenAIAvailable, getOpenAIApiKey, isOpenRouterAvailable, OPENROUTER_MODELS, OPENAI_MODELS, getPreferredProvider, isAnthropicOAuthAvailable } from '@/lib/llm-provider';
-import { createAnthropicWithOAuth, withClaudeCodeIdentity } from '@/lib/anthropic-oauth';
+import { isAnthropicAvailable, isBedrockAvailable, isDirectAnthropicAvailable, isOpenAIAvailable, getOpenAIApiKey, isOpenRouterAvailable, OPENROUTER_MODELS, OPENAI_MODELS, getProviderOrder, isAnthropicOAuthAvailable } from '@/lib/llm-provider';
+import { createAnthropicWithOAuthAsync, withClaudeCodeIdentity } from '@/lib/anthropic-oauth';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('CEO');
@@ -36,8 +36,8 @@ export async function* streamCEOResponse(input: {
   message: string;
   sessionHistory: ChatMessage[];
 }): AsyncGenerator<CEOStreamEvent> {
-  // Provider-ordered fallback: respects PRIMARY_LLM_PROVIDER env var
-  // Default: OpenAI (o4-mini) → Claude → OpenRouter → Gemini
+  // Provider-ordered fallback: respects LLM_PROVIDER_ORDER or PRIMARY_LLM_PROVIDER.
+  // Default: OpenAI -> Claude -> OpenRouter -> Gemini.
   type StreamFn = typeof streamWithOpenAI;
   const providers: { name: string; available: () => boolean; stream: StreamFn }[] = [
     { name: 'openai',     available: isOpenAIAvailable,     stream: streamWithOpenAI },
@@ -46,11 +46,10 @@ export async function* streamCEOResponse(input: {
     { name: 'gemini',     available: () => true,            stream: streamWithGemini },
   ];
 
-  const preferred = getPreferredProvider();
-  const sorted = [
-    providers.find(p => p.name === preferred)!,
-    ...providers.filter(p => p.name !== preferred),
-  ];
+  const providerByName = new Map(providers.map((provider) => [provider.name, provider]));
+  const sorted = getProviderOrder()
+    .map((providerName) => providerByName.get(providerName))
+    .filter((provider): provider is typeof providers[number] => Boolean(provider));
 
   for (const p of sorted) {
     if (!p.available()) continue;
@@ -81,10 +80,10 @@ export async function* streamCEOResponse(input: {
  * their system prompt with `withClaudeCodeIdentity()` or the API rejects
  * the request.
  */
-function createAnthropicClient(): { client: Anthropic; isOAuth: boolean } {
+async function createAnthropicClient(): Promise<{ client: Anthropic; isOAuth: boolean }> {
   // Option 1: Claude Code OAuth (preferred — uses the operator's Pro/Max session)
   if (isAnthropicOAuthAvailable()) {
-    const { client, isOAuth } = createAnthropicWithOAuth();
+    const { client, isOAuth } = await createAnthropicWithOAuthAsync();
     if (isOAuth) {
       log.info('Using Claude Code OAuth');
       return { client, isOAuth };
@@ -147,7 +146,7 @@ async function* streamWithClaude(input: {
   message: string;
   sessionHistory: ChatMessage[];
 }): AsyncGenerator<CEOStreamEvent> {
-  const { client: anthropic, isOAuth } = createAnthropicClient();
+  const { client: anthropic, isOAuth } = await createAnthropicClient();
   const rawSystemPrompt = await assembleCEOPrompt(input.companyId);
   // OAuth path requires the Claude Code identity prefix as a separate text
   // block — the API rejects requests whose first system block isn't it.
@@ -475,7 +474,7 @@ async function* streamWithCodex(
 }
 
 // ══════════════════════════════════════════════
-// OPENROUTER (Third fallback — GLM-4, Qwen)
+// OPENROUTER (fallback via DeepSeek/GLM/Qwen)
 // Uses OpenAI-compatible API with streaming
 // ══════════════════════════════════════════════
 

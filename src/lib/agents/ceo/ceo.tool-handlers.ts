@@ -1,7 +1,16 @@
 // CEO Tool Handlers � execute tool calls from the CEO agent
 // Split from definitions for maintainability
 
-import type { ChatAction, Task } from '@/types';
+import type {
+  ChatAction,
+  PromoVideoAspectRatio,
+  PromoVideoDuration,
+  PromoVideoGoal,
+  PromoVideoStyle,
+  PromoVideoVisualMode,
+  PromoVideoVoiceMode,
+  Task,
+} from '@/types';
 import * as taskService from '@/lib/services/task.service';
 import * as creditService from '@/lib/services/credit.service';
 import * as memoryService from '@/lib/services/memory.service';
@@ -9,8 +18,10 @@ import * as documentService from '@/lib/services/document.service';
 import * as governanceService from '@/lib/services/governance.service';
 import * as failureService from '@/lib/services/failure.service';
 import * as eventService from '@/lib/services/event.service';
-import { routeTask, getAgentName, getCreditCostForTask } from '@/lib/services/router.service';
-import { db, tasks as tasksTable, taskExecutions, recurringTasks, companies, reports, emailThreads, tweets, dashboardLinks, adCampaigns, platformFeedback, platformEvents, users, subscriptions } from '@/lib/db';
+import * as taskDraftService from '@/lib/services/task-draft.service';
+import { routeTaskStrict, getKnownTaskTags, getAgentName, getCreditCostForTask } from '@/lib/services/router.service';
+import { validateExecutionContract, requiresExecutionContractForEngineering } from '@/lib/agents/execution-contract';
+import { db, tasks as tasksTable, taskExecutions, recurringTasks, companies, reports, emailThreads, tweets, dashboardLinks, adCampaigns, platformFeedback, platformEvents, users, subscriptions, promoVideoJobs } from '@/lib/db';
 import { eq, and, desc, ilike, sql } from 'drizzle-orm';
 import { createLogger } from '@/lib/logger';
 
@@ -37,6 +48,9 @@ export async function handleToolCall(
 
     // -- Tasks --
     case 'get_tasks': return handleGetTasks(companyId);
+    case 'get_task_drafts': return handleGetTaskDrafts(companyId);
+    case 'finalize_task_draft': return handleFinalizeTaskDraft(toolInput, companyId);
+    case 'discard_task_draft': return handleDiscardTaskDraft(toolInput, companyId);
     case 'create_task': return handleCreateTask(toolInput, companyId);
     case 'reject_task': return handleRejectTask(toolInput, companyId);
     case 'get_task_details': return handleGetTaskDetails(toolInput, companyId);
@@ -139,7 +153,7 @@ function handleGetModuleCapabilities(input: Record<string, unknown>): ToolResult
     33: { can: ['SQL queries', 'Schema inspection', 'Metrics collection', 'Trend analysis', 'Founder app health checks (status / list services / preview URL)'], cant: ['Write/modify data', 'Infrastructure changes'], tools: ['query_database', 'inspect_schema', 'get_metrics', 'analyze_trends', 'query_company_db', 'get_database_info', 'get_company_tech', 'render_get_logs', 'get_service_status', 'list_company_services', 'get_preview_url'] },
     32: { can: ['Read/reply emails', 'Escalate to owner', 'Create engineering tickets', 'Search contacts'], cant: ['Refund processing', 'Account modifications', 'Customer history search'], tools: ['get_inbox', 'send_email', 'get_email_thread', 'escalate_to_owner', 'escalate_to_engineering', 'get_contacts'] },
     40: { can: ['Post tweets', 'Schedule tweets', 'Read brand voice', 'Dedup against history'], cant: ['Instagram/LinkedIn posting', 'Engagement/reply monitoring', 'Trend search'], tools: ['post_tweet', 'get_twitter_account', 'get_recent_tweets', 'schedule_tweet'] },
-    41: { can: ['Create campaigns/adsets/ads', 'Activate/pause campaigns', 'Get performance insights', 'Auto-evaluate health', 'Upload video creatives', 'Add captions to videos', 'Save ad creatives'], cant: ['Customer audience import', 'Custom conversion tracking'], tools: ['create_campaign','create_adset','create_ad','activate_campaign','pause_campaign','list_campaigns','get_campaign_insights','evaluate_ad_performance','get_ad_account','update_ad_metrics','upload_ad_video','create_video_creative','save_ad','add_captions','create_image_creative','launch_ad'] },
+  41: { can: ['Create campaigns/adsets/ads', 'Activate/pause campaigns', 'Get performance insights', 'Auto-evaluate health', 'Generate video ads', 'Store creatives in R2', 'Upload video creatives', 'Add captions to videos', 'Save ad creatives'], cant: ['Customer audience import', 'Custom conversion tracking'], tools: ['create_campaign','create_adset','create_ad','activate_campaign','pause_campaign','list_campaigns','get_campaign_insights','evaluate_ad_performance','get_ad_account','update_ad_metrics','generate_ad_video','save_ad_creative_to_r2','upload_ad_video','create_video_creative','save_ad','add_captions','create_image_creative','launch_ad'] },
     54: { can: ['Find/verify emails (Hunter.io)', 'Send cold outreach', 'Track lead pipeline', 'Check replies'], cant: ['LinkedIn outreach', 'Phone calls', 'Meeting scheduling'], tools: ['find_email', 'verify_email', 'send_outreach_email', 'check_replies', 'add_contact', 'update_contact_status', 'get_contacts', 'get_outreach_stats'] },
   };
 
@@ -162,10 +176,16 @@ function handleGetAgentCapabilities(input: Record<string, unknown>): ToolResult 
 
 function handleFindAgentForTask(input: Record<string, unknown>): ToolResult {
   const tag = (input.tag as string) ?? '';
-  const agentId = routeTask(tag || (input.task_description as string));
+  if (!tag) {
+    return { content: 'I need a canonical task tag before recommending an agent. I will not infer the worker from free-text task descriptions.' };
+  }
+  const agentId = routeTaskStrict(tag);
+  if (agentId === null) {
+    return { content: `Unknown task tag "${tag}". Choose a canonical tag before assigning a worker.` };
+  }
   const agentName = getAgentName(agentId);
   const agent = AGENT_REGISTRY.find(a => a.id === agentId);
-  return { content: `**Recommended: ${agentName}** (Agent #${agentId})\nRole: ${agent?.role ?? 'Unknown'}\nTools: ${agent?.tools ?? 0}\nMax turns: ${agent?.maxTurns ?? 200}\n\nThis agent was selected based on the task tag "${tag || 'auto-detected'}".` };
+  return { content: `**Recommended: ${agentName}** (Agent #${agentId})\nRole: ${agent?.role ?? 'Unknown'}\nTools: ${agent?.tools ?? 0}\nMax turns: ${agent?.maxTurns ?? 200}\n\nThis agent was selected from the canonical task tag "${tag}".` };
 }
 
 // ----------------------------------------------
@@ -194,6 +214,59 @@ async function handleGetTasks(companyId: string): Promise<ToolResult> {
 // Priority labels (founder-facing, Polsia-style) → integer used by tasks.priority.
 // Defaults to medium when omitted. edit_task still takes a raw 1-100 integer —
 // it's a separate path used for fine-tuning after creation.
+async function handleGetTaskDrafts(companyId: string): Promise<ToolResult> {
+  const drafts = await taskDraftService.getPendingTaskDrafts(companyId);
+  if (drafts.length === 0) return { content: 'No internal task drafts are waiting for CEO review.' };
+
+  const lines = drafts.map((draft) => [
+    `- [${draft.id}] ${draft.title} (${draft.tag})`,
+    `  source: ${draft.source}`,
+    draft.description ? `  scope: ${String(draft.description).slice(0, 280)}` : null,
+    draft.suggestion_reasoning ? `  reason: ${String(draft.suggestion_reasoning).slice(0, 220)}` : null,
+  ].filter(Boolean).join('\n'));
+
+  return {
+    content: `Internal task drafts waiting for CEO review. Rewrite/split before finalizing; do not expose raw draft metadata to the founder.\n${lines.join('\n')}`,
+  };
+}
+
+async function handleFinalizeTaskDraft(input: Record<string, unknown>, companyId: string): Promise<ToolResult> {
+  const draftId = input.draft_id as string;
+  const draft = await taskDraftService.getTaskDraft(draftId);
+  if (!draft || draft.company_id !== companyId || draft.status !== 'pending_ceo_review') {
+    return { content: 'Task draft not found or already reviewed.' };
+  }
+
+  const result = await handleCreateTask({
+    title: input.title ?? draft.title,
+    description: input.description ?? draft.description ?? '',
+    tag: input.tag ?? draft.tag,
+    complexity: input.complexity ?? 5,
+    estimated_hours: input.estimated_hours,
+    priority: input.priority ?? 'medium',
+    execution_contract: input.execution_contract ?? draft.proposed_execution_contract ?? undefined,
+    related_task_ids: input.related_task_ids,
+  }, companyId);
+
+  const taskId = result.action?.type === 'task_proposal' ? result.action.data.task_id : null;
+  if (taskId) {
+    await taskDraftService.markTaskDraftFinalized(draftId, taskId);
+    return result;
+  }
+  return result;
+}
+
+async function handleDiscardTaskDraft(input: Record<string, unknown>, companyId: string): Promise<ToolResult> {
+  const draftId = input.draft_id as string;
+  const draft = await taskDraftService.getTaskDraft(draftId);
+  if (!draft || draft.company_id !== companyId || draft.status !== 'pending_ceo_review') {
+    return { content: 'Task draft not found or already reviewed.' };
+  }
+
+  await taskDraftService.discardTaskDraft(draftId);
+  return { content: `Internal task draft ${draftId} discarded. It was never shown to the founder or queued for execution.` };
+}
+
 const PRIORITY_LABEL_TO_NUMBER: Record<string, number> = {
   low: 25,
   medium: 50,
@@ -201,10 +274,80 @@ const PRIORITY_LABEL_TO_NUMBER: Record<string, number> = {
   critical: 100,
 };
 
+interface InferredPromoVideoOptions {
+  goal: PromoVideoGoal;
+  duration_seconds: PromoVideoDuration;
+  aspect_ratio: PromoVideoAspectRatio;
+  style: PromoVideoStyle;
+  visual_mode: PromoVideoVisualMode;
+  voice_mode: PromoVideoVoiceMode;
+}
+
+function isPromoVideoTask(tag: string, title: string, description: string): boolean {
+  const text = `${tag} ${title} ${description}`.toLowerCase();
+  return tag.trim().toLowerCase() === 'promo-video' || /\bpromo\s+video\b/.test(text);
+}
+
+function inferPromoVideoOptions(title: string, description: string): InferredPromoVideoOptions {
+  const text = `${title}\n${description}`.toLowerCase();
+  const durationMatch = text.match(/\b(15|30|60|90)\s*(?:s|sec|secs|second|seconds)\b/);
+  const duration = durationMatch ? Number(durationMatch[1]) as PromoVideoDuration : 30;
+  const wantsActualSite = /\b(actual|real|live)\s+(?:site|website|app|product)\b/.test(text)
+    || /\buse\s+(?:my|the)\s+(?:site|website|app|product)\b/.test(text)
+    || /\b(no|not|dont|don't)\s+cinematic\b/.test(text)
+    || /\bwithout\s+cinematic\b/.test(text);
+
+  return {
+    goal: /\bproduct\s*hunt|producthunt|\bph\s+launch\b/.test(text) ? 'product_hunt'
+      : /\bpitch|investor|customer\b/.test(text) ? 'pitch'
+        : /\blaunch|announce\b/.test(text) ? 'launch'
+        : /\bexplain\b/.test(text) ? 'explain'
+          : /\battention|hook|viral\b/.test(text) ? 'attention'
+            : 'demo',
+    duration_seconds: /\bproduct\s*hunt|producthunt|\bph\s+launch\b/.test(text) && !durationMatch ? 60 : duration,
+    aspect_ratio: /\bproduct\s*hunt|producthunt|\bph\s+launch\b/.test(text) && !/\b(square|1:1|landscape|youtube|16:9|vertical|9:16)\b/.test(text) ? '16:9'
+      : /\b(square|1:1)\b/.test(text) ? '1:1'
+      : /\b(landscape|youtube|16:9)\b/.test(text) ? '16:9'
+        : '9:16',
+    style: /\bclean|saas\b/.test(text) ? 'clean_saas'
+      : /\bcinematic\b/.test(text) && !wantsActualSite ? 'cinematic_ui'
+        : 'product_demo',
+    visual_mode: wantsActualSite || /\bproduct\s*hunt|producthunt|\bph\s+launch\b/.test(text) ? 'actual_site' : 'cinematic',
+    voice_mode: /\b(founder avatar|avatar voice|my voice|founder voice)\b/.test(text) ? 'founder_avatar' : 'deepgram',
+  };
+}
+
+async function createPromoVideoJobForTask(input: {
+  companyId: string;
+  taskId: string;
+  title: string;
+  description: string;
+}): Promise<string | null> {
+  const [company] = await db.select({ name: companies.name })
+    .from(companies)
+    .where(eq(companies.id, input.companyId))
+    .limit(1);
+  const options = inferPromoVideoOptions(input.title, input.description);
+  const [job] = await db.insert(promoVideoJobs).values({
+    company_id: input.companyId,
+    task_id: input.taskId,
+    status: 'queued',
+    goal: options.goal,
+    duration_seconds: options.duration_seconds,
+    aspect_ratio: options.aspect_ratio,
+    style: options.style,
+    visual_mode: options.visual_mode,
+    voice_mode: options.voice_mode,
+    cta: company?.name ? `Try ${company.name}` : 'Try the product',
+  }).returning({ id: promoVideoJobs.id });
+  return job?.id ?? null;
+}
+
 async function handleCreateTask(input: Record<string, unknown>, companyId: string): Promise<ToolResult> {
   const title = input.title as string;
   const description = input.description as string;
   const tag = input.tag as string;
+  const executionContract = input.execution_contract as Record<string, unknown> | undefined;
   const relatedTaskIds = (input.related_task_ids as string[] | undefined) ?? [];
   // Complexity 1-10. CEO must pass this; clamp into range and default to 5 if missing.
   const rawComplexity = typeof input.complexity === 'number' ? input.complexity : 5;
@@ -236,6 +379,14 @@ async function handleCreateTask(input: Record<string, unknown>, companyId: strin
   const rawPriority = typeof input.priority === 'string' ? input.priority.toLowerCase() : 'medium';
   const priority = PRIORITY_LABEL_TO_NUMBER[rawPriority] ?? 50;
 
+  const agentId = routeTaskStrict(tag);
+  if (agentId === null) {
+    const examples = getKnownTaskTags().slice(0, 18).join(', ');
+    return {
+      content: `Unknown task tag "${tag}". I did not queue this because unknown tags must not silently route to Engineering. Choose a canonical tag first. Examples: ${examples}.`,
+    };
+  }
+
   // Step 1 — Classify execution mode + check prerequisites (NOT credits)
   const decision = await governanceService.evaluateTask({ title, description, tag, companyId });
 
@@ -254,9 +405,25 @@ async function handleCreateTask(input: Record<string, unknown>, companyId: strin
   } catch { /* non-blocking */ }
 
   // Step 3 — Route to agent + compute credit cost (Browser+heavy = 2, else 1)
-  const agentId = routeTask(tag);
   const agentName = getAgentName(agentId);
   const creditCost = getCreditCostForTask(tag, complexity);
+  const taskDraft = {
+    title,
+    description,
+    tag,
+    source: 'ceo_suggested',
+    execution_mode: decision.execution_mode,
+    assigned_to_agent_id: agentId,
+    execution_contract: executionContract,
+  };
+  if (requiresExecutionContractForEngineering(taskDraft, agentId)) {
+    const validation = validateExecutionContract(executionContract, { expectedAgentId: agentId });
+    return {
+      content: validation.ok
+        ? 'Engineering handoff needs a complete internal execution_contract before I queue this.'
+        : `Engineering handoff blocked: ${validation.reason} Ask or confirm scope once, then call create_task again with open_questions: [].`,
+    };
+  }
 
   const task = await taskService.createTask({
     company_id: companyId, title, description, tag,
@@ -265,6 +432,7 @@ async function handleCreateTask(input: Record<string, unknown>, companyId: strin
     execution_mode: decision.execution_mode,
     verification_level: decision.verification_level,
     assigned_to_agent_id: agentId,
+    execution_contract: executionContract ?? null,
     estimated_credits: creditCost,
     complexity,
     estimated_hours: safeHours,
@@ -274,8 +442,12 @@ async function handleCreateTask(input: Record<string, unknown>, companyId: strin
   });
 
   // Step 4 — Emit event for real-time dashboard update
+  const promoVideoJobId = isPromoVideoTask(tag, title, description)
+    ? await createPromoVideoJobForTask({ companyId, taskId: task.id, title, description })
+    : null;
+
   await eventService.emit(companyId, 'task_created', {
-    task_id: task.id, title: task.title, tag: task.tag, source: 'ceo_suggested',
+    task_id: task.id, title: task.title, tag: task.tag, source: 'ceo_suggested', promo_video_job_id: promoVideoJobId,
   });
 
   // Step 5 — Return clean confirmation with run link
@@ -297,6 +469,7 @@ async function handleCreateTask(input: Record<string, unknown>, companyId: strin
       type: 'task_proposal',
       data: {
         task_id: task.id, title: task.title, description: task.description, tag: task.tag,
+        promo_video_job_id: promoVideoJobId,
         estimated_credits: creditCost, priority,
         // NOTE: estimated_hours intentionally NOT in action data. It's
         // internal scoping metadata (drives the 4-hour cap). The DB row
@@ -490,7 +663,10 @@ async function handleGetActiveExecutions(companyId: string): Promise<ToolResult>
 
 function handleFindBestAgent(input: Record<string, unknown>): ToolResult {
   const query = input.query as string;
-  const agentId = routeTask(query);
+  const agentId = routeTaskStrict(query);
+  if (agentId === null) {
+    return { content: `Unknown task tag "${query}". Use a canonical tag before assigning a worker; free text is not auto-routed.` };
+  }
   const agentName = getAgentName(agentId);
   const agent = AGENT_REGISTRY.find(a => a.id === agentId);
   return { content: `Best agent for "${query}": **${agentName}** (#${agentId})\n${agent?.role ?? ''}` };
@@ -738,7 +914,12 @@ async function handlePauseAds(companyId: string): Promise<ToolResult> {
     return { content: 'Meta Ads is not connected. No active campaigns to pause.' };
   }
 
-  const campaigns = await db.select({ id: adCampaigns.id, meta_campaign_id: adCampaigns.meta_campaign_id, name: adCampaigns.platform })
+  const campaigns = await db.select({
+    id: adCampaigns.id,
+    meta_campaign_id: adCampaigns.meta_campaign_id,
+    external_id: adCampaigns.external_id,
+    name: adCampaigns.platform,
+  })
     .from(adCampaigns).where(and(eq(adCampaigns.company_id, companyId), eq(adCampaigns.status, 'active')));
 
   if (!campaigns.length) return { content: 'No active ad campaigns to pause.' };
@@ -746,8 +927,11 @@ async function handlePauseAds(companyId: string): Promise<ToolResult> {
   const token = process.env.META_ADS_ACCESS_TOKEN;
   let paused = 0;
   for (const c of campaigns) {
+    const metaCampaignId = c.meta_campaign_id ?? c.external_id;
+    if (!metaCampaignId) continue;
+
     try {
-      await fetch(`https://graph.facebook.com/v21.0/${c.meta_campaign_id}?access_token=${token}`, {
+      await fetch(`https://graph.facebook.com/v21.0/${metaCampaignId}?access_token=${token}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: 'PAUSED' }),
       });

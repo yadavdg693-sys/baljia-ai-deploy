@@ -59,11 +59,19 @@ vi.mock('@/lib/services/memory.service', () => ({
 
 vi.mock('@/lib/services/router.service', () => ({
   routeTask: vi.fn().mockReturnValue(29),
+  routeTaskStrict: vi.fn().mockReturnValue(29),
+  getKnownTaskTags: vi.fn().mockReturnValue(['feature', 'mvp', 'research']),
   getAgentName: vi.fn().mockReturnValue('Research'),
 }));
 
 // Tool-handlers `import * as` these — provide empty modules so resolution succeeds.
 vi.mock('@/lib/services/task.service', () => ({}));
+vi.mock('@/lib/services/task-draft.service', () => ({
+  getPendingTaskDrafts: vi.fn().mockResolvedValue([]),
+  getTaskDraft: vi.fn().mockResolvedValue(null),
+  markTaskDraftFinalized: vi.fn(),
+  discardTaskDraft: vi.fn(),
+}));
 vi.mock('@/lib/services/governance.service', () => ({}));
 vi.mock('@/lib/services/failure.service', () => ({}));
 vi.mock('@/lib/services/event.service', () => ({}));
@@ -168,7 +176,6 @@ describe('CEO tool handlers — company context (11 tools)', () => {
             name: 'Acme Inc',
             slug: 'acme',
             one_liner: 'We do things',
-            company_stage: 'validation',
             lifecycle: 'trial_active',
             plan_tier: 'trial',
             custom_domain: null,
@@ -501,8 +508,8 @@ describe('CEO tool handlers — company context (11 tools)', () => {
       vi.mocked(db.select).mockReturnValueOnce(
         mockSelectReturning(
           [
-            { id: 'c1', meta_campaign_id: 'mc1', name: 'meta' },
-            { id: 'c2', meta_campaign_id: 'mc2', name: 'meta' },
+            { id: 'c1', meta_campaign_id: 'mc1', external_id: null, name: 'meta' },
+            { id: 'c2', meta_campaign_id: null, external_id: 'ext2', name: 'meta' },
           ],
           'where',
         ) as never,
@@ -521,6 +528,7 @@ describe('CEO tool handlers — company context (11 tools)', () => {
       // First call should hit the Meta Graph URL with mc1
       expect(fetchMock.mock.calls[0]?.[0]).toContain('graph.facebook.com');
       expect(fetchMock.mock.calls[0]?.[0]).toContain('mc1');
+      expect(fetchMock.mock.calls[1]?.[0]).toContain('ext2');
     });
   });
 

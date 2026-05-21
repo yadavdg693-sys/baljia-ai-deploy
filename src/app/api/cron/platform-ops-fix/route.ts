@@ -1,13 +1,12 @@
-// Hourly cron: drives the writer + verifier loop.
-// 1. Run writer agent on bugs in status='approved_to_fix' → opens PR
-// 2. Run verifier agent on bugs in status='pr_open' that don't yet have
-//    a verifier vote → posts independent review on the PR
+// Hourly cron: drives the support-auto-PR + writer + verifier loop.
+// 1. Aggregate repeated support escalations into platform_feedback rows
+// 2. Run GPT-5.5 + Opus 4.7 debate on support-sourced rows; safe consensus
+//    rows become status='approved_to_fix'
+// 3. Run writer agent on approved bugs → opens PR
+// 4. Run verifier agent on open PRs without a vote → posts independent review
 
 import { NextRequest, NextResponse } from 'next/server';
-import { db, platformFeedback, platformOpsRuns } from '@/lib/db';
-import { eq, and, isNull, sql } from 'drizzle-orm';
-import { processApprovedBugs } from '@/lib/services/platform-ops-writer.service';
-import { verifyOpenPr } from '@/lib/services/platform-ops-verifier.service';
+import { runPlatformOpsFixCycle } from '@/lib/services/platform-ops-fix-cycle.service';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('Cron:PlatformOpsFix');
@@ -30,47 +29,21 @@ async function handle(request: NextRequest) {
     return NextResponse.json({ ok: true, skipped: true, reason: 'PLATFORM_OPS_WRITE_DISABLED' });
   }
 
-  const start = Date.now();
-
-  // 1. Writer pass — pick up approved bugs
-  const writerResults = await processApprovedBugs({ maxBugs: 3 });
-
-  // 2. Verifier pass — find PRs that don't have a verifier verdict yet
-  const prOpenBugs = await db
-    .select({ id: platformFeedback.id })
-    .from(platformFeedback)
-    .where(eq(platformFeedback.status, 'pr_open'))
-    .limit(5);
-
-  const verifierResults = [];
-  for (const b of prOpenBugs) {
-    // Skip if a verifier run already exists with a vote
-    const [existingVerifier] = await db.select({ id: platformOpsRuns.id })
-      .from(platformOpsRuns)
-      .where(and(
-        eq(platformOpsRuns.feedback_id, b.id),
-        eq(platformOpsRuns.agent_role, 'verifier'),
-        sql`${platformOpsRuns.verifier_vote} IS NOT NULL`,
-      ))
-      .limit(1);
-    if (existingVerifier) continue;
-
-    const r = await verifyOpenPr(b.id);
-    verifierResults.push(r);
-    await new Promise((r) => setTimeout(r, 1000));
-  }
-
-  const elapsed = Math.round((Date.now() - start) / 1000);
+  const summary = await runPlatformOpsFixCycle();
   log.info('Fix cron complete', {
-    writer: { processed: writerResults.length, succeeded: writerResults.filter((r) => r.status === 'done').length },
-    verifier: { processed: verifierResults.length, succeeded: verifierResults.filter((r) => r.status === 'done').length },
-    elapsed_seconds: elapsed,
+    support_aggregation: summary.support_aggregation,
+    support_debate: summary.support_debate,
+    writer: summary.writer,
+    verifier: summary.verifier,
+    elapsed_seconds: summary.elapsed_seconds,
   });
 
   return NextResponse.json({
     ok: true,
-    writer_runs: writerResults.map((r) => ({ feedback_id: r.feedbackId, status: r.status, pr_url: r.prUrl, cost_cents: r.costCents })),
-    verifier_runs: verifierResults.map((r) => ({ feedback_id: r.feedbackId, status: r.status, vote: r.vote, cost_cents: r.costCents })),
-    elapsed_seconds: elapsed,
+    support_aggregation: summary.support_aggregation,
+    support_debate: summary.support_debate,
+    writer_runs: summary.writer.results.map((r) => ({ feedback_id: r.feedbackId, status: r.status, pr_url: r.prUrl, cost_cents: r.costCents })),
+    verifier_runs: summary.verifier.results.map((r) => ({ feedback_id: r.feedbackId, status: r.status, vote: r.vote, cost_cents: r.costCents })),
+    elapsed_seconds: summary.elapsed_seconds,
   });
 }

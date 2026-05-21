@@ -19,7 +19,7 @@ const STEPS: OnboardingStep[] = [
   { key: 'market_researched',   label: 'Market researched',       description: 'Opportunity mapped' },
   { key: 'infrastructure',      label: 'Infrastructure live',     description: 'Repo + deploy + DB ready' },
   { key: 'mission_saved',       label: 'Mission documented',      description: 'Documents written' },
-  { key: 'starter_tasks',       label: 'Tasks created',           description: 'Initial work queue ready' },
+  { key: 'starter_tasks',       label: 'Plan prepared',           description: 'Initial priorities scoped' },
   { key: 'completed',           label: 'Ready',                   description: 'Company launched 🚀' },
 ];
 

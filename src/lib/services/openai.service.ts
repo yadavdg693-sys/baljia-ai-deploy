@@ -1,7 +1,8 @@
 // OpenAI Service — LLM fallback + image generation + embeddings + TTS
-// NOT used for video (use Fal.ai's Kling/Minimax instead)
+// NOT used for ad video (use HeyGen Video Agent, with Fal.ai as fallback)
 //
-// Env: OPENAI_API_KEY
+// Env: OPENAI_API_KEY, or AI_GATEWAY_URL + AI_GATEWAY_TOKEN/GEMINI_API_KEY for
+// OpenAI-compatible gateways.
 
 import OpenAI from 'openai';
 import { createLogger } from '@/lib/logger';
@@ -14,16 +15,34 @@ const log = createLogger('OpenAI');
 
 let client: OpenAI | null = null;
 
+function isGoogleOpenAICompatibleGateway(env: NodeJS.ProcessEnv = process.env): boolean {
+  return /generativelanguage\.googleapis\.com\/v1beta\/openai/i.test(String(env.AI_GATEWAY_URL ?? ''));
+}
+
+function openAIClientConfig(env: NodeJS.ProcessEnv = process.env): { apiKey: string; baseURL?: string } | null {
+  if (env.OPENAI_API_KEY) {
+    return { apiKey: env.OPENAI_API_KEY, baseURL: env.AI_GATEWAY_URL || undefined };
+  }
+  if (env.AI_GATEWAY_TOKEN) {
+    return { apiKey: env.AI_GATEWAY_TOKEN, baseURL: env.AI_GATEWAY_URL || undefined };
+  }
+  if (env.GEMINI_API_KEY && isGoogleOpenAICompatibleGateway(env)) {
+    return { apiKey: env.GEMINI_API_KEY, baseURL: env.AI_GATEWAY_URL };
+  }
+  return null;
+}
+
 export function isOpenAIConfigured(): boolean {
-  return !!process.env.OPENAI_API_KEY;
+  return openAIClientConfig() !== null;
 }
 
 function getClient(): OpenAI {
   if (client) return client;
-  if (!process.env.OPENAI_API_KEY) {
-    throw new Error('OPENAI_API_KEY not configured');
+  const config = openAIClientConfig();
+  if (!config) {
+    throw new Error('OpenAI-compatible client is not configured');
   }
-  client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  client = new OpenAI(config);
   return client;
 }
 
@@ -104,11 +123,22 @@ export async function generateImage(
 // EMBEDDINGS — for semantic search
 // ══════════════════════════════════════════════
 
+export function embeddingGuidanceForGateway(env: NodeJS.ProcessEnv = process.env): {
+  model: 'gemini-embedding-001' | 'text-embedding-3-small';
+  dimensions: 3072 | 1536;
+} {
+  if (isGoogleOpenAICompatibleGateway(env)) {
+    return { model: 'gemini-embedding-001', dimensions: 3072 };
+  }
+  return { model: 'text-embedding-3-small', dimensions: 1536 };
+}
+
 export async function createEmbedding(text: string): Promise<number[]> {
   const oai = getClient();
+  const guidance = embeddingGuidanceForGateway();
 
   const response = await oai.embeddings.create({
-    model: 'text-embedding-3-small',
+    model: guidance.model,
     input: text,
   });
 
@@ -117,9 +147,10 @@ export async function createEmbedding(text: string): Promise<number[]> {
 
 export async function createEmbeddings(texts: string[]): Promise<number[][]> {
   const oai = getClient();
+  const guidance = embeddingGuidanceForGateway();
 
   const response = await oai.embeddings.create({
-    model: 'text-embedding-3-small',
+    model: guidance.model,
     input: texts,
   });
 

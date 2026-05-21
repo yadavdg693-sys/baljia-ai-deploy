@@ -1,11 +1,12 @@
 // Auto-Remediation — migrated to Drizzle + Neon
-import { db, tasks } from '@/lib/db';
-import { eq, and, gte } from 'drizzle-orm';
+import { db, tasks, taskExecutions } from '@/lib/db';
+import { eq, and, gte, desc } from 'drizzle-orm';
 import * as taskService from '@/lib/services/task.service';
 import * as failureService from '@/lib/services/failure.service';
 import * as eventService from '@/lib/services/event.service';
 import * as creditService from '@/lib/services/credit.service';
 import { createLogger } from '@/lib/logger';
+import { hasRenderPipelineQuotaSignal } from '@/lib/failure-classification';
 
 const log = createLogger('Remediation');
 
@@ -13,6 +14,10 @@ const log = createLogger('Remediation');
 const MAX_REPAIR_ATTEMPTS = 100;
 
 type RemediationStrategy = 'retry' | 'simplify' | 'escalate' | 'skip';
+
+export function isRenderPipelineQuotaRemediationBlocked(failureClass: string | null | undefined, context: string): boolean {
+  return failureClass === 'external_block' && hasRenderPipelineQuotaSignal(context);
+}
 
 // Maps all 8 canonical failure classes (SPEC-CTRL-106) to remediation strategies
 function determineStrategy(failureClass: string | null, occurrenceCount: number): { strategy: RemediationStrategy; reason: string } {
@@ -53,6 +58,31 @@ export async function remediateFailed(taskId: string): Promise<{
     return { strategy: 'skip' as RemediationStrategy, remediationTaskId: null, reason: `Max repair attempts (${MAX_REPAIR_ATTEMPTS}) reached` };
   }
 
+  const [latestExecution] = await db.select({
+    error_summary: taskExecutions.error_summary,
+    execution_log: taskExecutions.execution_log,
+  })
+    .from(taskExecutions)
+    .where(eq(taskExecutions.task_id, taskId))
+    .orderBy(desc(taskExecutions.started_at))
+    .limit(1);
+
+  const failureContext = [
+    task.title,
+    task.description,
+    task.authorization_reason,
+    latestExecution?.error_summary,
+    latestExecution?.execution_log ? JSON.stringify(latestExecution.execution_log).slice(0, 5000) : '',
+  ].filter(Boolean).join('\n');
+
+  if (isRenderPipelineQuotaRemediationBlocked(task.failure_class, failureContext)) {
+    return {
+      strategy: 'skip' as RemediationStrategy,
+      remediationTaskId: null,
+      reason: 'Render pipeline/build minutes are exhausted; auto-remediation must not retry until an operator confirms quota restoration.',
+    };
+  }
+
   // Check credits before creating remediation task
   const balance = await creditService.getBalance(task.company_id);
   if (balance <= 0) {
@@ -63,7 +93,7 @@ export async function remediateFailed(taskId: string): Promise<{
   const fingerprint = await failureService.captureFailure({
     taskId,
     companyId: task.company_id,
-    errorMessage: 'Unknown error',
+    errorMessage: failureContext || 'Unknown error',
     tag: task.tag,
     agentId: task.assigned_to_agent_id ?? 0,
   });

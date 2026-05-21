@@ -113,11 +113,19 @@ export async function uploadFile(options: UploadOptions): Promise<UploadResult> 
 
   const size = body.byteLength;
   log.info('File uploaded to R2', { key, size, contentType: options.contentType });
+  const publicUrl = options.isPublic
+    ? process.env.R2_PUBLIC_URL
+      ? getPublicUrl(key)
+      : await getSignedUrl(client, new GetObjectCommand({
+          Bucket: getBucket(),
+          Key: key,
+        }), { expiresIn: 60 * 60 * 24 * 7 })
+    : undefined;
 
   return {
     key,
     url: getPublicUrl(key),
-    publicUrl: options.isPublic ? getPublicUrl(key) : undefined,
+    publicUrl,
     size,
   };
 }

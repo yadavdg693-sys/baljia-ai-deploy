@@ -1,18 +1,17 @@
 // Landing Deploy Service — pushes the generated landing page to the configured
 // deploy target and makes it live at {slug}.baljia.app.
 //
-// Per ADR-002 (split hosting): Cloudflare Workers + R2 is the PRIMARY target.
-// Render static sites remain as a LEGACY fallback for environments where CF is
-// not yet configured (dev, CI without CF creds). The primary `deployLandingPage`
-// function is tier-dispatching: it calls the CF path when configured, else falls
-// through to the legacy Render flow.
+// Onboarding landing pages use Cloudflare + R2. Founder app engineering tasks
+// deploy separately to Render web services.
 //
 // Called from the onboarding pipeline AFTER generate_landing_page and BEFORE
 // send_welcome_email, so the welcome email's "Company website" link is live.
 //
 // Required env (CF primary):     CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID,
 //                                CLOUDFLARE_ZONE_ID_APP, R2_* (see cf-deploy.service)
-// Required env (Render legacy):  GITHUB_TOKEN, GITHUB_ORG, RENDER_API_KEY, RENDER_OWNER_ID
+// Optional dev-only Render fallback: ALLOW_RENDER_LANDING_FALLBACK=true plus
+//                                  GITHUB_TOKEN, GITHUB_ORG, RENDER_API_KEY,
+//                                  RENDER_OWNER_ID
 //
 // Idempotent on both paths.
 
@@ -56,6 +55,7 @@ function githubOrg(): string {
 }
 
 function isRenderLandingConfigured(): boolean {
+  if (process.env.ALLOW_RENDER_LANDING_FALLBACK !== 'true') return false;
   return !!(
     process.env.GITHUB_TOKEN &&
     process.env.RENDER_API_KEY &&
@@ -64,8 +64,8 @@ function isRenderLandingConfigured(): boolean {
 }
 
 /**
- * Returns true if at least one deploy path (CF primary or Render legacy) is
- * configured. Callers should check this before calling deployLandingPage.
+ * Returns true if Cloudflare landing deploy is configured, or an explicit
+ * dev-only Render fallback is enabled. Production onboarding should use CF/R2.
  */
 export function isLandingDeployConfigured(): boolean {
   return isCloudflareDeployConfigured() || isRenderLandingConfigured();
@@ -109,11 +109,11 @@ export async function deployLandingPage(params: DeployParams): Promise<DeployRes
     return deployLandingPageCF(params);
   }
   if (target === 'render') {
-    log.info('CF not configured — using Render legacy landing deploy', { slug: params.slug });
+    log.info('CF not configured — using explicitly enabled Render landing fallback', { slug: params.slug });
     return deployLandingPageRender(params);
   }
 
-  log.warn('Landing deploy not configured (neither CF nor Render) — skipping', { slug: params.slug });
+  log.warn('Landing deploy not configured (Cloudflare missing, Render fallback disabled) — skipping', { slug: params.slug });
   return null;
 }
 

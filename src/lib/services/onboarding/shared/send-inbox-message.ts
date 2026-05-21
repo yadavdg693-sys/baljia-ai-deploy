@@ -20,7 +20,7 @@ export async function sendInboxMessage(ctx: PipelineContext): Promise<void> {
     '',
     ctx.oneLiner ? `_${ctx.oneLiner}_` : '',
     '',
-    `I built your landing page, tweeted your launch, and queued 3 starter tasks.`,
+    `I built your landing page, tweeted your launch, and prepared your first operating plan.`,
     '',
     `👉 [Open your dashboard](${dashboardLink})`,
     '',

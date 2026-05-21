@@ -5,6 +5,7 @@ const TAG_ROUTES: Record<string, number> = {
   // ── Engineering (ID: 30) ──
   // Source: Domain 2.4 "Build, fix, deploy, integrate"
   // Day 1-30: landing pages, dashboards, admin panels, auth, Stripe, APIs, webhooks, cron, DB schemas, SEO fixes
+  'engineering': 30,
   'landing-page': 30,
   'auth': 30,
   'billing': 30,
@@ -70,6 +71,7 @@ const TAG_ROUTES: Record<string, number> = {
   // ── Browser (ID: 42) ──
   // Source: Domain 2.4 "Interactive web execution, credential management"
   // Day 7-14: "scrape 20 SaaS companies", Day 14-21: "research pricing of top 5 competitors"
+  'browser': 42,
   'browse': 42,
   'scrape': 42,
   'screenshot': 42,
@@ -114,15 +116,22 @@ const TAG_ROUTES: Record<string, number> = {
   // ── MetaAds (ID: 41) ──
   // Source: Domain 2.4 "Ad creation, optimization, campaign control"
   // Day 14-21: "Meta Ads setup ($10/day campaign)"
+  'meta': 41,
   'meta-ads': 41,
+  'meta_ads': 41,
+  'metaads': 41,
   'facebook-ads': 41,
   'instagram-ads': 41,
   'ad-campaign': 41,
   'ad-creative': 41,
   'audience-strategy': 41,
+  'promo-video': 30,
+  'promo': 30,
 
   // ── ColdOutreach (ID: 54) ──
   // Source: Domain 2.4 "Outbound email, verification, follow-ups"
+  'cold-outreach': 54,
+  'coldoutreach': 54,
   'outreach': 54,
   'cold-email': 54,
   'lead-gen': 54,
@@ -139,25 +148,30 @@ const TAG_ROUTES: Record<string, number> = {
 
 const DEFAULT_AGENT_ID = 30; // Engineering
 
+export function routeTaskStrict(tag: string): number | null {
+  const normalized = tag.toLowerCase().trim();
+  return TAG_ROUTES[normalized] ?? null;
+}
+
+export function getKnownTaskTags(): string[] {
+  return Object.keys(TAG_ROUTES).sort();
+}
+
 /**
  * Route a task tag to the appropriate agent ID.
- * Exact match first, then substring fallback.
+ * Exact match only.
+ *
+ * Legacy fallback: old queued tasks may have arbitrary historical tags. New task
+ * creation should use routeTaskStrict() and reject unknown tags before enqueue.
  */
 export function routeTask(tag: string): number {
   const normalized = tag.toLowerCase().trim();
 
-  // Exact match
   if (TAG_ROUTES[normalized] !== undefined) {
     return TAG_ROUTES[normalized];
   }
 
-  // Substring match — check if any known tag is contained in the input
-  for (const [knownTag, agentId] of Object.entries(TAG_ROUTES)) {
-    if (normalized.includes(knownTag) || knownTag.includes(normalized)) {
-      return agentId;
-    }
-  }
-
+  // Unknown tags default to Engineering.
   return DEFAULT_AGENT_ID;
 }
 
@@ -195,6 +209,12 @@ export function getAgentName(agentId: number): string {
  * Everything else → 1 credit. ~80% of tasks stay at 1 credit.
  */
 export function getCreditCostForTask(tag: string, complexity: number): number {
+  const normalized = tag.toLowerCase().trim();
+  if (normalized.includes('promo-video') || normalized === 'promo') {
+    if (complexity >= 9) return 4;
+    if (complexity >= 7) return 3;
+    return 2;
+  }
   const agentId = routeTask(tag);
   if (agentId === 42 && complexity >= 7) return 2;
   return 1;

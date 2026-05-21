@@ -7,6 +7,7 @@ import { deleteLandingHtml } from '@/lib/services/cf-deploy.service';
 const log = createLogger('Domain');
 const RENDER_API = 'https://api.render.com/v1';
 const CF_API = 'https://api.cloudflare.com/client/v4';
+const RENDER_CUSTOM_DOMAIN_MAX_LENGTH = 64;
 
 export function isDomainServiceConfigured(): boolean {
   return !!(process.env.RENDER_API_KEY && process.env.CLOUDFLARE_API_TOKEN && process.env.CLOUDFLARE_ZONE_ID_APP);
@@ -334,6 +335,16 @@ export async function provisionSubdomain(companyId: string, slug: string, render
     return { domain, status: 'parking' };
   }
 
+  if (domain.length > RENDER_CUSTOM_DOMAIN_MAX_LENGTH) {
+    log.warn('Skipping Render custom domain attachment because domain exceeds Render length limit', {
+      companyId,
+      domain,
+      length: domain.length,
+      maxLength: RENDER_CUSTOM_DOMAIN_MAX_LENGTH,
+    });
+    return null;
+  }
+
   // The CNAME must target the actual Render-assigned hostname (e.g.
   // "threadpulse-wdpq.onrender.com"), NOT the slug-based pattern
   // "<slug>.onrender.com" — Render appends a unique suffix per service and
@@ -389,6 +400,16 @@ export async function attachCustomDomain(companyId: string, customDomain: string
   if (!company?.render_service_id) { log.error('No Render service found', { companyId }); return null; }
 
   const cleanDomain = customDomain.replace(/^https?:\/\//, '').replace(/\/+$/, '').replace(/^www\./, '').toLowerCase().trim();
+  if (cleanDomain.length > RENDER_CUSTOM_DOMAIN_MAX_LENGTH) {
+    log.warn('Skipping custom domain attachment because domain exceeds Render length limit', {
+      companyId,
+      domain: cleanDomain,
+      length: cleanDomain.length,
+      maxLength: RENDER_CUSTOM_DOMAIN_MAX_LENGTH,
+    });
+    return null;
+  }
+
   const renderResult = await renderAddCustomDomain(company.render_service_id, cleanDomain);
   if (!renderResult) return null;
 

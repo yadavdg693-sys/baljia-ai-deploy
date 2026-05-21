@@ -1,22 +1,14 @@
 'use client';
 
+import Link from 'next/link';
 import type { Company } from '@/types';
-import { Badge } from '@/components/ui/Badge';
 
 interface CompanyHeaderProps {
   company: Company;
 }
 
 export function CompanyHeader({ company }: CompanyHeaderProps) {
-  const stageVariants: Record<string, 'default' | 'planning' | 'running' | 'success'> = {
-    early: 'planning',
-    validation: 'planning',
-    monetization: 'running',
-    retention: 'running',
-    scale: 'success',
-    compounding: 'success',
-  };
-
+  const settingsHref = `/dashboard/${company.slug ?? company.id}/settings/payments`;
   return (
     <div className="flex items-start justify-between gap-4 mb-6">
       <div>
@@ -25,9 +17,13 @@ export function CompanyHeader({ company }: CompanyHeaderProps) {
           <p className="text-text-secondary mt-1 text-sm">{company.one_liner}</p>
         )}
       </div>
-      <Badge variant={stageVariants[company.company_stage] ?? 'default'} size="md" className="capitalize shrink-0">
-        {company.company_stage}
-      </Badge>
+      <Link
+        href={settingsHref}
+        className="text-xs text-text-muted hover:text-text-primary border border-border-default rounded-md px-2.5 py-1.5"
+        title="Connect Stripe / Razorpay to accept payments in your app"
+      >
+        Payments →
+      </Link>
     </div>
   );
 }

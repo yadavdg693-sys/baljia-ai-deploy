@@ -44,8 +44,6 @@ interface TestCase {
 const NOT_CONFIGURED_PATTERNS = [
   /not configured/i,
   /not set/i,
-  /CLOUDFLARE_API_TOKEN/,
-  /CLOUDFLARE_ACCOUNT_ID/,
   /R2_/,
   /NEON_API_KEY/,
   /GITHUB_TOKEN/,
@@ -54,6 +52,7 @@ const NOT_CONFIGURED_PATTERNS = [
   /Invalid API Key/i,                  // Stripe placeholder key returns this — wired correctly
   /URI not available/i,                // query_company_db when company DB isn't fully provisioned
   /Database connection URI/i,
+  /not found/i,
 ];
 
 function classify(tool: string, output: string, expectNote: string | null, destructive: boolean): Result {
@@ -95,6 +94,7 @@ async function main() {
     name: companies.name,
     github_repo: companies.github_repo,
     custom_domain: companies.custom_domain,
+    render_service_id: companies.render_service_id,
   })
     .from(companies)
     .where(eq(companies.onboarding_status, 'completed'))
@@ -108,6 +108,7 @@ async function main() {
 
   console.log(`Target company: ${company.name} [${company.slug}] ${company.id}`);
   console.log(`  github_repo:   ${company.github_repo ?? '(none)'}`);
+  console.log(`  render_service_id: ${company.render_service_id ?? '(none)'}`);
   console.log(`  custom_domain: ${company.custom_domain ?? '(none)'}`);
   console.log(`  destructive:   ${includeDestructive ? 'INCLUDED (will hit external APIs!)' : 'skipped (default)'}\n`);
 
@@ -119,6 +120,7 @@ async function main() {
   } as unknown as Task;
 
   const repo = company.github_repo ?? 'baljia-ai/missing-repo';
+  const serviceId = company.render_service_id ?? 'srv_missing';
 
   // ── Read-only / safe tools ──────────────────────────────────────────────
   const cases: TestCase[] = [
@@ -126,14 +128,14 @@ async function main() {
     {
       tool: 'list_skills',
       input: {},
-      expect: (out) => /cloudflare-workers/i.test(out) && /neon-postgres/i.test(out)
+      expect: (out) => /frontend-design/i.test(out) && /neon-postgres/i.test(out) && /r2-storage/i.test(out)
         ? null
         : `expected skills index but got: ${out.slice(0, 80)}`,
     },
     {
       tool: 'read_skill',
-      input: { skill: 'cloudflare-workers' },
-      expect: (out) => /Hono/i.test(out) && /nodejs_compat/i.test(out)
+      input: { skill: 'frontend-design' },
+      expect: (out) => /Render/i.test(out) && /founder/i.test(out)
         ? null
         : `expected SKILL.md content but got: ${out.slice(0, 80)}`,
     },
@@ -148,10 +150,12 @@ async function main() {
     { tool: 'github_read_file', input: { repo, path: 'README.md' } },
     { tool: 'github_search_code', input: { repo, query: 'fetch' } },
 
-    // Cloudflare — gated by CLOUDFLARE_* env vars
-    { tool: 'cf_verify_founder_app', input: {} },
-    { tool: 'cf_get_app_info', input: {} },
-    { tool: 'cf_get_logs', input: { tail: 20 } },
+    // Render diagnostics
+    { tool: 'render_get_service', input: { service_id: serviceId } },
+    { tool: 'render_get_deploy_status', input: { service_id: serviceId } },
+    { tool: 'render_get_logs', input: { service_id: serviceId, log_type: 'deploy', num_lines: 20 } },
+    { tool: 'render_list_services', input: { limit: 5 } },
+    { tool: 'render_list_databases', input: { limit: 5 } },
 
     // Custom domain
     { tool: 'verify_custom_domain', input: {} },
@@ -176,10 +180,9 @@ async function main() {
     { tool: 'github_create_commit', input: { repo, branch: 'eng-test-branch', message: 'test', files: [] }, destructive: true },
     { tool: 'github_create_pr', input: { repo, head: 'eng-test-branch', base: 'main', title: 'eng test', body: 'test' }, destructive: true },
     { tool: 'github_delete_file', input: { repo, path: 'TEST.md', message: 'cleanup' }, destructive: true },
-    { tool: 'cf_deploy_landing', input: { html: '<h1>eng test</h1>' }, destructive: true },
-    { tool: 'cf_deploy_app', input: { script_content: 'export default { fetch: () => new Response("ok") }' }, destructive: true },
-    { tool: 'cf_delete_founder_app', input: {}, destructive: true },
-    { tool: 'cf_delete_app', input: {}, destructive: true },
+    { tool: 'render_create_service', input: { repo, plan: 'free' }, destructive: true },
+    { tool: 'render_deploy', input: { service_id: serviceId }, destructive: true },
+    { tool: 'render_delete_service', input: { service_id: serviceId, confirm: false }, destructive: true },
     { tool: 'attach_custom_domain', input: { domain: 'eng-test.example.com' }, destructive: true },
     { tool: 'provision_database', input: {}, destructive: true },
     { tool: 'run_migration', input: { sql: 'CREATE TABLE eng_test (id int)' }, destructive: true },

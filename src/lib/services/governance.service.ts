@@ -40,7 +40,7 @@ const TEMPLATE_TAGS = new Set([
 ]);
 
 const FULL_AGENT_TAGS = new Set([
-  'bug-fix', 'fix', 'onboarding', 'dashboard', 'reporting', 'admin',
+  'bug', 'bug-fix', 'fix', 'onboarding', 'dashboard', 'reporting', 'admin',
   'automation', 'lead-scoring', 'multi-user', 'activity-log',
   'enrichment', 'email-tracking', 'duplicate-detection', 'custom-fields',
   'calendar', 'integration', 'a-b-test', 'performance', 'referral',
@@ -78,7 +78,7 @@ const BROWSER_VERIFY_TAGS = new Set([
   'calendar', 'a-b-test', 'multi-user', 'activity-log', 'custom-fields',
   'client-portal', 'onboarding-flow', 'redesign', 'rebrand', 'offboarding',
   'css', 'seo', 'seo-meta', 'favicon', 'domain', 'feature', 'complex-feature',
-  'mvp', 'full-crud', 'bug-fix', 'fix', 'enrichment', 'product-hunt',
+  'mvp', 'full-crud', 'bug', 'bug-fix', 'fix', 'enrichment', 'product-hunt',
   'automation', 'lead-scoring', 'gdpr',
 ]);
 
@@ -181,8 +181,8 @@ function validateClassification(parsed: LLMClassification): LLMClassification {
 }
 
 async function classifyWithHaiku(input: { title: string; description: string; tag: string }): Promise<LLMClassification> {
-  const { createAnthropicWithOAuth, withClaudeCodeIdentity } = await import('@/lib/anthropic-oauth');
-  const { client: anthropic, isOAuth } = createAnthropicWithOAuth();
+  const { createAnthropicWithOAuthAsync, withClaudeCodeIdentity } = await import('@/lib/anthropic-oauth');
+  const { client: anthropic, isOAuth } = await createAnthropicWithOAuthAsync();
   const response = await callAnthropicWithTimeout(
     anthropic,
     {

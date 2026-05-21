@@ -17,7 +17,6 @@ export async function GET() {
     one_liner: companies.one_liner,
     plan_tier: companies.plan_tier,
     lifecycle: companies.lifecycle,
-    company_stage: companies.company_stage,
   }).from(companies).where(eq(companies.owner_id, auth.user.id));
 
   return NextResponse.json(rows);

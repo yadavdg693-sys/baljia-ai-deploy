@@ -8,6 +8,7 @@ import { db, companies, tasks, recurringTasks } from '@/lib/db';
 import { eq, and, asc, desc } from 'drizzle-orm';
 import type { Task } from '@/types';
 import { TaskManagementBoard } from '@/components/dashboard/TaskManagementBoard';
+import { stripTaskInternalFields } from '@/lib/services/task.service';
 
 interface Props {
   params: Promise<{ companyId: string }>;
@@ -52,7 +53,7 @@ export default async function CompanyTasksPage({ params }: Props) {
     <TaskManagementBoard
       companyId={company.id}
       companyName={company.name}
-      tasks={taskList as unknown as Task[]}
+      tasks={taskList.map(stripTaskInternalFields) as unknown as Task[]}
       recurring={recurringList.map((r) => ({
         id: r.id,
         title: r.title,

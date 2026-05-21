@@ -64,6 +64,42 @@ const TASK_TOOLS = [
     input_schema: { type: 'object' as const, properties: {} },
   },
   {
+    name: 'get_task_drafts',
+    description: 'Internal only: list onboarding/night-shift/recurring task drafts waiting for CEO review. Do not show raw drafts to the founder; use them to decide, rewrite, split, or discard before creating visible tasks.',
+    input_schema: { type: 'object' as const, properties: {} },
+  },
+  {
+    name: 'finalize_task_draft',
+    description: 'Internal only: convert one task draft into a founder-visible executable task after CEO rewrites/splits it and adds any required Engineering execution_contract.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        draft_id: { type: 'string' as const, description: 'Internal task draft UUID' },
+        title: { type: 'string' as const, description: 'Final founder-safe task title' },
+        description: { type: 'string' as const, description: 'Final worker-ready task description with scope and acceptance criteria' },
+        tag: { type: 'string' as const, description: 'Canonical task tag' },
+        complexity: { type: 'number' as const, description: 'Task complexity 1-10' },
+        estimated_hours: { type: 'number' as const, description: 'Decimal hours, max 4' },
+        priority: { type: 'string' as const, enum: ['low', 'medium', 'high', 'critical'], description: 'Queue priority' },
+        execution_contract: { type: 'object' as const, description: 'Required for Engineering app/feature/integration tasks. Optional repo_layout may name where code should go; omit it when unsure because Engineering has default layout rules.' },
+        related_task_ids: { type: 'array' as const, items: { type: 'string' as const }, description: 'Optional upstream task IDs' },
+      },
+      required: ['draft_id', 'title', 'description', 'tag', 'complexity', 'estimated_hours'],
+    },
+  },
+  {
+    name: 'discard_task_draft',
+    description: 'Internal only: discard a task draft so it never reaches the founder queue.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        draft_id: { type: 'string' as const, description: 'Internal task draft UUID' },
+        reason: { type: 'string' as const, description: 'Why the CEO discarded it' },
+      },
+      required: ['draft_id'],
+    },
+  },
+  {
     name: 'create_task',
     description: 'Create ONE task — max 4 hours of work per call. If the scope is bigger, do NOT bundle: call create_task once per piece in dependency order, linking sequential pieces via related_task_ids. The server rejects estimated_hours > 4. Routes to the right agent based on tag. Credits deducted when execution starts. Most tasks cost 1 credit; heavy Browser-agent tasks (complexity ≥ 7 with browser tag) cost 2 credits. Task needs founder approval before execution.',
     input_schema: {
@@ -75,6 +111,7 @@ const TASK_TOOLS = [
         complexity: { type: 'number' as const, description: 'Task complexity 1-10. 1-3 = trivial (single API call, status check). 4-6 = typical (login + form fill, single-page scrape). 7-10 = heavy (full SaaS signup with verification, multi-step flows, anti-bot-heavy sites). Drives credit cost for Browser-routed tasks.' },
         estimated_hours: { type: 'number' as const, description: 'Honest one-shot agent work estimate in decimal hours. Range 0.5–4. The server REJECTS values > 4 — for bigger scope you MUST split into multiple create_task calls. Guide: trivial API check = 0.5; single-page scrape or short content = 1; typical CRUD page = 2–3; full feature slice with API + UI + persistence = 4 (and nothing more in one task).' },
         priority: { type: 'string' as const, enum: ['low', 'medium', 'high', 'critical'], description: 'Queue priority. Defaults to medium. Use critical only for fixes that block other work or live-site outages.' },
+        execution_contract: { type: 'object' as const, description: 'Internal CEO-to-worker contract for Engineering app/feature/integration tasks. Do not show this JSON to the founder. Required before Engineering receives product-building work: version, intent, assigned_agent_id, confirmation_source, founder_visible_summary, product_scope, assumptions, open_questions:[], user_flow, screens, data_fields, api_actions, integrations, acceptance_criteria, out_of_scope, ui_freedom. Optional repo_layout is only file-placement guidance, not extra product scope.' },
         related_task_ids: { type: 'array' as const, items: { type: 'string' as const }, description: 'IDs of related tasks. Use for: (a) retries — link the failed task so the agent knows what was already tried; (b) sequential pieces of a split — link the upstream task this one depends on.' },
       },
       required: ['title', 'description', 'tag', 'complexity', 'estimated_hours'],

@@ -2,6 +2,7 @@
 import { db, memoryLayers, learnings, tasks, companies, reports, failureFingerprints } from '@/lib/db';
 import { eq, and, desc, ilike, sql, gte } from 'drizzle-orm';
 import { createLogger } from '@/lib/logger';
+import { routeTask } from '@/lib/services/router.service';
 import type { MemoryLayerNumber, MemoryLayer, Learning, LearningConfidence, ContextPacket, Lifecycle, BillingState } from '@/types';
 
 const log = createLogger('Memory');
@@ -60,6 +61,12 @@ function evictToFit(content: string, maxTokens: number, layer: number): string {
   }
 
   return kept.join('');
+}
+
+function boundedEnvInt(name: string, fallback: number, min: number, max: number): number {
+  const parsed = Number(process.env[name]);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, Math.trunc(parsed)));
 }
 
 // ══════════════════════════════════════════════
@@ -509,7 +516,7 @@ export async function getMemoryLayers(companyId: string): Promise<MemoryLayer[]>
 
 export async function buildContextPacket(
   companyId: string,
-  task: { id: string; title: string; tag: string; description?: string | null },
+  task: { id: string; title: string; tag: string; description?: string | null; assigned_to_agent_id?: number | null },
 ): Promise<ContextPacket> {
   // 1. Memory layers
   const layers = await db.select({ layer: memoryLayers.layer, content: memoryLayers.content })
@@ -521,33 +528,41 @@ export async function buildContextPacket(
     layerMap[l.layer] = (l.content as string) ?? '';
   }
 
-  // 2. Prior reports (last 3)
-  const priorReports = await db.select({
-    id: reports.id,
-    title: reports.title,
-    content: reports.content,
-    task_id: reports.task_id,
-  }).from(reports)
-    .where(eq(reports.company_id, companyId))
-    .orderBy(desc(reports.created_at))
-    .limit(3);
+  // 2. Prior reports. Long repair chains can otherwise overflow cheaper
+  // provider prompt budgets with stale report text before the task starts.
+  const priorReportLimit = boundedEnvInt('WORKER_CONTEXT_PRIOR_REPORTS_LIMIT', 3, 0, 3);
+  const priorReportChars = boundedEnvInt('WORKER_CONTEXT_PRIOR_REPORT_CHARS', 500, 0, 1_500);
+  const priorReports = priorReportLimit > 0
+    ? await db.select({
+      id: reports.id,
+      title: reports.title,
+      content: reports.content,
+      task_id: reports.task_id,
+    }).from(reports)
+      .where(eq(reports.company_id, companyId))
+      .orderBy(desc(reports.created_at))
+      .limit(priorReportLimit)
+    : [];
 
   // 3. Recent failure fingerprints (last 7 days)
   const since7d = new Date(Date.now() - 7 * 24 * 3600_000);
+  const failureFingerprintLimit = boundedEnvInt('WORKER_CONTEXT_FAILURE_FINGERPRINTS_LIMIT', 10, 0, 10);
   let fingerprints: Array<{ fingerprint: string; category: string; description: string }> = [];
   try {
-    const fpData = await db.select({
-      fingerprint: failureFingerprints.fingerprint,
-      category: failureFingerprints.category,
-      description: failureFingerprints.description,
-    }).from(failureFingerprints)
-      .where(gte(failureFingerprints.last_seen_at, since7d))
-      .limit(10);
-    fingerprints = fpData.map(f => ({
-      fingerprint: f.fingerprint ?? '',
-      category: f.category ?? '',
-      description: f.description ?? '',
-    }));
+    if (failureFingerprintLimit > 0) {
+      const fpData = await db.select({
+        fingerprint: failureFingerprints.fingerprint,
+        category: failureFingerprints.category,
+        description: failureFingerprints.description,
+      }).from(failureFingerprints)
+        .where(gte(failureFingerprints.last_seen_at, since7d))
+        .limit(failureFingerprintLimit);
+      fingerprints = fpData.map(f => ({
+        fingerprint: f.fingerprint ?? '',
+        category: f.category ?? '',
+        description: f.description ?? '',
+      }));
+    }
   } catch { /* non-blocking */ }
 
   // 4. Company state — stage column deprecated 2026-05-02; only lifecycle + billing_state are read.
@@ -562,7 +577,8 @@ export async function buildContextPacket(
   // app's stack, schema, routes, and shipped features so extends don't go
   // blind on what's already there. Null on first build or non-engineering tasks.
   let codebaseMapSection: string | null = null;
-  if (task.tag === 'engineering') {
+  const routedAgentId = task.assigned_to_agent_id ?? routeTask(task.tag);
+  if (routedAgentId === 30) {
     try {
       const { getCodebaseMap, formatCodebaseMapForPrompt } = await import('./codebase-map.service');
       const map = await getCodebaseMap(companyId);
@@ -589,7 +605,7 @@ export async function buildContextPacket(
     prior_reports: priorReports.map(r => ({
       id: r.id,
       title: r.title ?? 'Untitled',
-      content: (r.content ?? '').substring(0, 500),
+      content: (r.content ?? '').substring(0, priorReportChars),
       task_id: r.task_id ?? '',
     })),
     failure_fingerprints: fingerprints,

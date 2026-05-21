@@ -1,9 +1,8 @@
-// Cloudflare Deploy Service — the Engineering agent's deploy target for
-// founder apps hosted at *.baljia.app on Cloudflare Workers + R2.
+// Cloudflare Deploy Service — onboarding landing pages and legacy Worker apps
+// hosted at *.baljia.app on Cloudflare Workers + R2.
 //
-// This service replaces the Render-specific deploy path in
-// landing-deploy.service.ts and the engineering.tools.ts Render tools for
-// founder-app deploys. The platform itself stays on Render (see ADR-002).
+// Engineering founder apps deploy to Render. This module remains for
+// onboarding and legacy/admin compatibility.
 //
 // Required env:
 //   CLOUDFLARE_API_TOKEN       — scoped: Workers Scripts Write, Workers Routes, DNS

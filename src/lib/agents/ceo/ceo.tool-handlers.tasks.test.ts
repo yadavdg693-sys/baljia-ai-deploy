@@ -113,6 +113,13 @@ vi.mock('@/lib/services/task.service', () => ({
   updateTask: vi.fn(),
 }));
 
+vi.mock('@/lib/services/task-draft.service', () => ({
+  getPendingTaskDrafts: vi.fn().mockResolvedValue([]),
+  getTaskDraft: vi.fn().mockResolvedValue(null),
+  markTaskDraftFinalized: vi.fn(),
+  discardTaskDraft: vi.fn(),
+}));
+
 vi.mock('@/lib/services/governance.service', () => ({
   evaluateTask: vi.fn(),
 }));
@@ -132,6 +139,8 @@ vi.mock('@/lib/services/failure.service', () => ({
 
 vi.mock('@/lib/services/router.service', () => ({
   routeTask: vi.fn().mockReturnValue(29),
+  routeTaskStrict: vi.fn().mockReturnValue(29),
+  getKnownTaskTags: vi.fn().mockReturnValue(['feature', 'mvp', 'landing-page', 'research']),
   getAgentName: vi.fn().mockReturnValue('Research'),
   getCreditCostForTask: vi.fn().mockReturnValue(1),
 }));
@@ -221,6 +230,25 @@ function makeTask(over: Record<string, unknown> = {}) {
     ...over,
   };
 }
+
+const completeEngineeringExecutionContract = {
+  version: 1,
+  intent: 'feature',
+  assigned_agent_id: 30,
+  confirmation_source: 'founder_confirmed',
+  founder_visible_summary: 'Build the project dashboard slice.',
+  product_scope: 'Authenticated users can create projects and see the saved project dashboard.',
+  assumptions: ['Founder confirmed this as the next Engineering slice.'],
+  open_questions: [],
+  user_flow: ['Sign in', 'Open dashboard', 'Create project', 'See saved project on dashboard'],
+  screens: ['Login', 'Dashboard', 'Create project form'],
+  data_fields: ['project.name', 'project.status', 'project.created_at'],
+  api_actions: ['GET /api/projects', 'POST /api/projects'],
+  integrations: [],
+  acceptance_criteria: ['Created project persists and is visible after refresh.'],
+  out_of_scope: ['Payments', 'Admin roles'],
+  ui_freedom: true,
+};
 
 // ── 1. get_tasks ───────────────────────────────────────────────────────────
 
@@ -365,6 +393,105 @@ describe('CEO tool handlers — create_task', () => {
     }
   });
 
+  it('rejects unknown tags instead of silently assigning Engineering', async () => {
+    const governance = await import('@/lib/services/governance.service');
+    const taskService = await import('@/lib/services/task.service');
+    const router = await import('@/lib/services/router.service');
+
+    vi.mocked(governance.evaluateTask).mockResolvedValueOnce({
+      can_execute: true,
+      execution_mode: 'template_plus_params',
+      verification_level: 'browser_flow',
+    });
+    vi.mocked(router.routeTaskStrict).mockReturnValueOnce(null);
+
+    const { handleToolCall } = await import('@/lib/agents/ceo/ceo.tools');
+    const result = await handleToolCall(
+      'create_task',
+      {
+        title: 'Build weird thing',
+        description: 'A vague task with a non-canonical tag',
+        tag: 'scrape-dashboard',
+        estimated_hours: 1,
+      },
+      COMPANY_ID,
+    );
+
+    expect(result.content).toContain('Unknown task tag');
+    expect(result.content).toContain('scrape-dashboard');
+    expect(taskService.createTask).not.toHaveBeenCalled();
+  });
+
+  it('blocks Engineering product work when CEO did not provide an execution contract', async () => {
+    const governance = await import('@/lib/services/governance.service');
+    const taskService = await import('@/lib/services/task.service');
+    const router = await import('@/lib/services/router.service');
+
+    vi.mocked(governance.evaluateTask).mockResolvedValueOnce({
+      can_execute: true,
+      execution_mode: 'full_agent',
+      verification_level: 'browser_flow',
+    });
+    vi.mocked(router.routeTaskStrict).mockReturnValueOnce(30);
+    vi.mocked(router.getAgentName).mockReturnValueOnce('Engineering');
+
+    const { handleToolCall } = await import('@/lib/agents/ceo/ceo.tools');
+    const result = await handleToolCall(
+      'create_task',
+      {
+        title: 'Build project dashboard',
+        description: 'Create project CRUD and dashboard UI.',
+        tag: 'engineering',
+        complexity: 5,
+        estimated_hours: 3,
+      },
+      COMPANY_ID,
+    );
+
+    expect(result.content).toContain('Engineering handoff blocked');
+    expect(result.content).toContain('execution_contract');
+    expect(taskService.createTask).not.toHaveBeenCalled();
+  });
+
+  it('allows Engineering product work when CEO provides a complete execution contract', async () => {
+    const governance = await import('@/lib/services/governance.service');
+    const taskService = await import('@/lib/services/task.service');
+    const events = await import('@/lib/services/event.service');
+    const router = await import('@/lib/services/router.service');
+
+    vi.mocked(governance.evaluateTask).mockResolvedValueOnce({
+      can_execute: true,
+      execution_mode: 'full_agent',
+      verification_level: 'browser_flow',
+    });
+    vi.mocked(router.routeTaskStrict).mockReturnValueOnce(30);
+    vi.mocked(router.getAgentName).mockReturnValueOnce('Engineering');
+    vi.mocked(taskService.createTask).mockResolvedValueOnce(
+      makeTask({ id: 't-eng', title: 'Build project dashboard', tag: 'engineering' }) as never,
+    );
+    vi.mocked(events.emit).mockResolvedValueOnce({} as never);
+
+    const { handleToolCall } = await import('@/lib/agents/ceo/ceo.tools');
+    await handleToolCall(
+      'create_task',
+      {
+        title: 'Build project dashboard',
+        description: 'Create project CRUD and dashboard UI.',
+        tag: 'engineering',
+        complexity: 5,
+        estimated_hours: 3,
+        execution_contract: completeEngineeringExecutionContract,
+      },
+      COMPANY_ID,
+    );
+
+    expect(taskService.createTask).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(taskService.createTask).mock.calls[0]![0]).toMatchObject({
+      assigned_to_agent_id: 30,
+      execution_contract: completeEngineeringExecutionContract,
+    });
+  });
+
   it('passes complexity through to getCreditCostForTask, charges 2 credits for heavy Browser task', async () => {
     const governance = await import('@/lib/services/governance.service');
     const taskService = await import('@/lib/services/task.service');
@@ -382,7 +509,7 @@ describe('CEO tool handlers — create_task', () => {
       makeTask({ id: 't-heavy', title: 'Sign up for OpenAI and get API key', tag: 'account-setup' }) as never,
     );
     vi.mocked(events.emit).mockResolvedValueOnce({} as never);
-    vi.mocked(router.routeTask).mockReturnValueOnce(42);
+    vi.mocked(router.routeTaskStrict).mockReturnValueOnce(42);
     vi.mocked(router.getAgentName).mockReturnValueOnce('Browser');
     vi.mocked(router.getCreditCostForTask).mockReturnValueOnce(2);
 
@@ -423,7 +550,7 @@ describe('CEO tool handlers — create_task', () => {
     vi.mocked(failure.getKnownIssuesForTag).mockResolvedValue([]);
     vi.mocked(taskService.createTask).mockResolvedValue(makeTask({ id: 't-c' }) as never);
     vi.mocked(events.emit).mockResolvedValue({} as never);
-    vi.mocked(router.routeTask).mockReturnValue(42);
+    vi.mocked(router.routeTaskStrict).mockReturnValue(42);
     vi.mocked(router.getAgentName).mockReturnValue('Browser');
     vi.mocked(router.getCreditCostForTask).mockReturnValue(1);
 
@@ -1226,29 +1353,27 @@ describe('CEO tool handlers — find_best_agent', () => {
     resetChains();
   });
 
-  it('uses routeTask + getAgentName and surfaces the recommendation', async () => {
+  it('uses strict canonical tag routing and surfaces the recommendation', async () => {
     const router = await import('@/lib/services/router.service');
-    vi.mocked(router.routeTask).mockReturnValueOnce(30);
+    vi.mocked(router.routeTaskStrict).mockReturnValueOnce(30);
     vi.mocked(router.getAgentName).mockReturnValueOnce('Engineering');
 
     const { handleToolCall } = await import('@/lib/agents/ceo/ceo.tools');
     const result = await handleToolCall(
       'find_best_agent',
-      { query: 'build a webhook' },
+      { query: 'webhook' },
       COMPANY_ID,
     );
 
-    expect(router.routeTask).toHaveBeenCalledWith('build a webhook');
-    expect(result.content).toContain('Best agent for "build a webhook"');
+    expect(router.routeTaskStrict).toHaveBeenCalledWith('webhook');
+    expect(result.content).toContain('Best agent for "webhook"');
     expect(result.content).toContain('Engineering');
     expect(result.content).toContain('#30');
   });
 
-  it('falls back to id+name even when router returns an unknown agent ID', async () => {
+  it('refuses free-text or unknown tags instead of defaulting to Engineering', async () => {
     const router = await import('@/lib/services/router.service');
-    // routeTask returns an id NOT in the AGENT_REGISTRY (e.g. 0 = CEO)
-    vi.mocked(router.routeTask).mockReturnValueOnce(0);
-    vi.mocked(router.getAgentName).mockReturnValueOnce('CEO');
+    vi.mocked(router.routeTaskStrict).mockReturnValueOnce(null);
 
     const { handleToolCall } = await import('@/lib/agents/ceo/ceo.tools');
     const result = await handleToolCall(
@@ -1257,8 +1382,8 @@ describe('CEO tool handlers — find_best_agent', () => {
       COMPANY_ID,
     );
 
-    expect(result.content).toContain('CEO');
-    expect(result.content).toContain('#0');
+    expect(result.content).toContain('Unknown task tag');
+    expect(result.content).toContain('free text is not auto-routed');
   });
 });
 

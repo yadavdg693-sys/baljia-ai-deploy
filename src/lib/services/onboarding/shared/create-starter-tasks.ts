@@ -5,7 +5,7 @@
 // should create three independent first moves, with engineering focused on one
 // sellable feature only.
 
-import * as taskService from '@/lib/services/task.service';
+import { createTaskDraft, finalizeTaskDraftIds } from '@/lib/services/task-draft.service';
 import { getCapabilitiesBulletsOnly } from '@/lib/platform-capabilities';
 import { ONBOARDING_TASK_FRAMEWORK } from '@/lib/agents/ceo/ceo-framework';
 import { createLogger } from '@/lib/logger';
@@ -361,7 +361,7 @@ Field rules:
     - Use plain language. No filler ("comprehensive outreach campaign", "robust pipeline", "strategic engagement").
 - outreach.reasoning: string, max 260 characters. Explain why this gets useful signal.`;
 
-  await emitActivity(ctx, 'Generating 3 starter tasks', 'llm');
+  await emitActivity(ctx, 'Preparing first operating plan', 'llm');
 
   let raw: Partial<StarterTasksResult> = {};
   try {
@@ -385,7 +385,7 @@ Field rules:
       message: 'Starter task generation failed, so onboarding used journey-aware fallback tasks.',
       fallbackUsed: true,
     });
-    await emitActivity(ctx, 'LLM unavailable - using journey-aware defaults for starter tasks', 'llm');
+    await emitActivity(ctx, 'LLM unavailable - using journey-aware defaults for first plan', 'llm');
   }
 
   // Critic pass — catch the "engineering task is a bundle of 2-3 features"
@@ -504,58 +504,67 @@ export async function persistStarterTasks(
   // Strip every LLM artifact (em/en-dashes, **bold**, *italic*, leftover
   // separators) from title + description + reasoning BEFORE writing to the
   // DB. The renderer cannot un-pollute persisted text.
-  await Promise.all([
-    taskService.createTask({
+  const drafts = await Promise.all([
+    createTaskDraft({
       company_id: ctx.companyId,
       title: normalizeTaskTitle(result.engineering.title),
       description: normalizeTaskDescription(result.engineering.description),
       tag: 'engineering',
       source: 'onboarding',
-      status: 'todo',
+      status: 'pending_ceo_review',
       priority: 100,
-      queue_order: 1,
-      complexity: clampComplexity(result.engineering.complexity ?? 6),
-      estimated_hours: '4',
-      estimated_credits: 1,
       suggestion_reasoning: stripInlineMarkdown(result.engineering.reasoning || ENGINEERING_FALLBACK_REASONING),
-      authorized_by: 'system',
-      authorization_reason: starterAuthReason,
+      proposed_task: {
+        queue_order: 1,
+        complexity: clampComplexity(result.engineering.complexity ?? 6),
+        estimated_hours: 4,
+        estimated_credits: 1,
+        authorized_by: 'system',
+        authorization_reason: starterAuthReason,
+      },
     }),
-    taskService.createTask({
+    createTaskDraft({
       company_id: ctx.companyId,
       title: normalizeTaskTitle(result.research.title),
       description: normalizeTaskDescription(result.research.description),
       tag: 'research',
       source: 'onboarding',
-      status: 'todo',
+      status: 'pending_ceo_review',
       priority: 70,
-      queue_order: 2,
-      complexity: 3,
-      estimated_hours: '4',
-      estimated_credits: 1,
       suggestion_reasoning: stripInlineMarkdown(result.research.reasoning || RESEARCH_FALLBACK_REASONING),
-      authorized_by: 'system',
-      authorization_reason: starterAuthReason,
+      proposed_task: {
+        queue_order: 2,
+        complexity: 3,
+        estimated_hours: 4,
+        estimated_credits: 1,
+        authorized_by: 'system',
+        authorization_reason: starterAuthReason,
+      },
     }),
-    taskService.createTask({
+    createTaskDraft({
       company_id: ctx.companyId,
       title: normalizeTaskTitle(result.outreach.title),
       description: normalizeTaskDescription(result.outreach.description),
       tag: 'outreach',
       source: 'onboarding',
-      status: 'todo',
+      status: 'pending_ceo_review',
       priority: 70,
-      queue_order: 3,
-      complexity: 4,
-      estimated_hours: '4',
-      estimated_credits: 1,
       suggestion_reasoning: stripInlineMarkdown(result.outreach.reasoning || OUTREACH_FALLBACK_REASONING),
-      authorized_by: 'system',
-      authorization_reason: starterAuthReason,
+      proposed_task: {
+        queue_order: 3,
+        complexity: 4,
+        estimated_hours: 4,
+        estimated_credits: 1,
+        authorized_by: 'system',
+        authorization_reason: starterAuthReason,
+      },
     }),
   ]);
 
-  await emitActivity(ctx, '3 tasks queued: engineering, research, outreach (each scoped <=4h)', 'task');
+  await finalizeTaskDraftIds(ctx.companyId, drafts.map((draft) => draft.id), {
+    authorizedBy: 'system',
+    authorizationReason: starterAuthReason,
+  });
 }
 
 function clampComplexity(value: unknown): number {

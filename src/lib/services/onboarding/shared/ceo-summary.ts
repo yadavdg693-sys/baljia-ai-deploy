@@ -19,7 +19,7 @@ export async function generateCeoSummary(ctx: PipelineContext): Promise<void> {
   if (ctx.slug) checklistItems.push(`✅ Landing page built at ${ctx.slug}.baljia.app`);
   checklistItems.push('✅ Mission created');
   if (ctx.marketResearch) checklistItems.push('✅ Market research saved');
-  checklistItems.push('✅ 3 tasks queued for cycle 1');
+  checklistItems.push('✅ First operating plan prepared');
 
   const companyTasks = await taskService.getTasks(ctx.companyId);
   const starterTasks = companyTasks
@@ -27,22 +27,23 @@ export async function generateCeoSummary(ctx: PipelineContext): Promise<void> {
     .sort((a, b) => (a.queue_order ?? 0) - (b.queue_order ?? 0))
     .slice(0, 3);
 
-  const taskList = starterTasks.length > 0
+  const hasVisibleStarterTasks = starterTasks.length > 0;
+  const taskList = hasVisibleStarterTasks
     ? starterTasks.map((t, i) => `${i + 1}. **${t.title}**`).join('\n')
-    : '(starter tasks pending)';
+    : 'I’m scoping the first tasks before they appear in your queue.';
 
   const ceoMessage = [
     `I've set up everything for ${ctx.companyName}:`,
     '',
     ...checklistItems,
     '',
-    `Here are your first 3 tasks:`,
+    hasVisibleStarterTasks ? `Here are your first tasks:` : `Next up:`,
     '',
     taskList,
     '',
     `To continue building, subscribe to start your first operating cycle.`,
     '',
-    `**Your free trial includes:** 3 days, 10 credits, and 3 night shifts.`,
+    `**Your free trial includes:** 3 days, 10 credits, and 3 autopilot runs.`,
     `I'll send you a daily progress report so you always know what's happening.`,
   ].join('\n');
 

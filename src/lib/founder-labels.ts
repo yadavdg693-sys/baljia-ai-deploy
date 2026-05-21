@@ -63,7 +63,7 @@ export const ONBOARDING_STAGE_LABELS: Record<string, string> = {
   send_startup_email: 'Sending your first company email',
   generate_market_research: 'Analyzing your market',
   save_mission: 'Crafting your mission',
-  create_starter_tasks: 'Creating first tasks',
+  create_starter_tasks: 'Preparing first plan',
   generate_landing_page: 'Designing your website',
   post_launch_tweet: 'Announcing your launch',
   generate_ceo_summary: 'Preparing your briefing',

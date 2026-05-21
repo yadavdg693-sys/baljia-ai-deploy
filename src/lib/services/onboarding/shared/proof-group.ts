@@ -17,7 +17,7 @@ import type { PipelineContext } from '../types';
 
 export async function proofGroup(ctx: PipelineContext): Promise<void> {
   await stage(ctx, 'post_launch_tweet', () => postLaunchTweet(ctx), { optional: true });
-  await stage(ctx, 'generate_ceo_summary', () => generateCeoSummary(ctx));
+  await stage(ctx, 'generate_ceo_summary', () => generateCeoSummary(ctx), { optional: true });
   // Phase 6: collect the Neon DB + GitHub repo that were kicked off in infra-group.
   // Placed late so their ~20s background work had plenty of time to finish during
   // market-research + mission + tasks. Optional — deferred to engineering agent on failure.

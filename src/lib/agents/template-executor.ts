@@ -25,7 +25,7 @@ Rules:
 2. Customize with company branding, naming, and specific requirements from the briefing
 3. Don't over-engineer — follow the well-known solution path
 4. Complete in under ${MAX_TEMPLATE_TURNS} turns
-5. Create a report summarizing what was built and any customizations applied
+5. Summarize what was built and any customizations in your final answer; call create_report only if the Task Lane Policy explicitly requires it
 
 Efficiency over novelty. Follow the template, apply the params.`;
 

@@ -16,7 +16,7 @@ interface CreateCompanyInput {
 }
 
 export type UpdateCompanyFields = Partial<Pick<Company,
-  'name' | 'one_liner' | 'onboarding_status' | 'company_stage' | 'lifecycle' |
+  'name' | 'one_liner' | 'onboarding_status' | 'lifecycle' |
   'execution_state' | 'billing_state' | 'hosting_state' | 'subdomain' |
   'email_identity' | 'github_repo' | 'render_service_id' | 'neon_database_id' | 'custom_domain'
 >>;
@@ -45,7 +45,7 @@ export async function createCompany(input: CreateCompanyInput): Promise<Company>
     execution_state: 'active',
     billing_state: 'trial',
     hosting_state: 'live',
-    company_stage: 'early',
+    // company_stage intentionally not set — column deprecated 2026-05-02.
   }).returning();
 
   // Provision a trial subscription row so the night-shift cron's INNER JOIN

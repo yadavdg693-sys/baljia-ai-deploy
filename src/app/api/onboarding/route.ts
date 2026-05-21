@@ -37,8 +37,7 @@ export async function POST(request: NextRequest) {
     const company = existing[0];
 
     // Resumable states: pending_auth (quick-start), failed (retry), initializing (stuck before claim).
-    // The orchestrator's atomic CAS in runOnboardingPipeline only claims rows in
-    // ['initializing', 'failed'], and pending_auth is special-cased above that path.
+    // The orchestrator's atomic CAS in runOnboardingPipeline claims this same set.
     const RESUMABLE = ['pending_auth', 'failed', 'initializing'] as const;
     if (RESUMABLE.includes(company.onboarding_status as typeof RESUMABLE[number])) {
       const resolvedJourney = company.onboarding_journey ?? parsed.data.journey;
@@ -73,6 +72,9 @@ export async function POST(request: NextRequest) {
 
   // Welcome credits + creation event (independent — run in parallel)
   await Promise.all([
+    db.update(companies)
+      .set({ onboarding_journey: parsed.data.journey })
+      .where(eq(companies.id, company.id)),
     creditService.addCredit(company.id, 10, 'welcome_bonus', 'Welcome bonus — 10 trial credits'),
     eventService.emit(company.id, 'company_created', {
       journey: parsed.data.journey,

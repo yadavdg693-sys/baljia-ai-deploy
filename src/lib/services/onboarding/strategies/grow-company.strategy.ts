@@ -1,21 +1,13 @@
-// Grow My Company — founder has an existing business; distribution research + optimization tasks
-//
-// Parallel execution map (60-90s target):
-//   fetch_business_url
-//   ├─ name_company          ┐ parallel — naming hidden behind research
-//   └─ market_research       ┘
-//   infraGroup (provision + kickoff + startup email)
-//   save_mission             (~5s — sets ctx.oneLiner needed by tasks + landing)
-//   ├─ create_starter_tasks  ┐ parallel — both need mission+research, not each other
-//   └─ generate_landing_page ┘
-//   proofGroup (tweet + ceo + magic link + emails + celebrate)
+// Grow My Company - founder has an existing business; research growth,
+// sharpen mission, publish a growth page, then prepare starter task drafts.
 
 import { stage } from '../stage-runner';
 import { leanHeader } from '../shared/headers';
 import { fetchBusinessUrl } from '../shared/fetch-business-url';
 import { nameCompany } from '../shared/naming';
-import { generateGrowMarketResearch } from '../shared/market-research-grow';
-import { saveMission3Section } from '../shared/mission-3-section';
+import { runGrowPlanningAgent, type GrowPlanningArtifacts } from '../shared/grow-planning-agent';
+import { persistMarketResearch, renderGrowMarkdown } from '../shared/market-research-render';
+import { persistMissionDoc } from '../shared/mission-3-section';
 import { createStarterTasks } from '../shared/create-starter-tasks';
 import { generateLandingPage } from '../shared/landing';
 import { infraGroup } from '../shared/infra-group';
@@ -27,24 +19,23 @@ export class GrowCompanyStrategy implements OnboardingStrategy {
   async run(ctx: PipelineContext): Promise<void> {
     await leanHeader(ctx);
     await stage(ctx, 'fetch_business_url', () => fetchBusinessUrl(ctx));
+    await stage(ctx, 'name_company', () => nameCompany(ctx));
 
-    // Naming + market research in parallel — both only need the business profile
-    await Promise.all([
-      stage(ctx, 'name_company', () => nameCompany(ctx)),
-      stage(ctx, 'generate_market_research', () => generateGrowMarketResearch(ctx)),
-    ]);
+    let artifacts!: GrowPlanningArtifacts;
+    await stage(ctx, 'generate_market_research', async () => {
+      artifacts = await runGrowPlanningAgent(ctx);
+      const markdown = renderGrowMarkdown(artifacts.market_research, ctx.companyName);
+      await persistMarketResearch(ctx, artifacts.market_research, markdown);
+    });
 
-    // Infra needs slug (set by name_company above)
+    if (!artifacts) {
+      throw new Error('Grow planning did not return artifacts');
+    }
+
     await infraGroup(ctx);
-
-    // Mission is fast (~5s) and sets ctx.oneLiner — must complete before tasks + landing
-    await stage(ctx, 'save_mission', () => saveMission3Section(ctx));
-
-    // Tasks + landing in parallel — both have research + mission, neither needs the other
-    await Promise.all([
-      stage(ctx, 'create_starter_tasks', () => createStarterTasks(ctx)),
-      stage(ctx, 'generate_landing_page', () => generateLandingPage(ctx), { optional: true }),
-    ]);
+    await stage(ctx, 'generate_landing_page', () => generateLandingPage(ctx), { optional: true });
+    await stage(ctx, 'save_mission', () => persistMissionDoc(ctx, artifacts.mission_doc));
+    await stage(ctx, 'create_starter_tasks', () => createStarterTasks(ctx));
 
     await proofGroup(ctx);
   }

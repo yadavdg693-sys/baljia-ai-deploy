@@ -6,8 +6,10 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { createTaskMock, llmJsonMock } = vi.hoisted(() => ({
+const { createTaskMock, createTaskDraftMock, finalizeTaskDraftIdsMock, llmJsonMock } = vi.hoisted(() => ({
   createTaskMock: vi.fn(async (input: unknown) => ({ id: 'fake', ...(input as object) })),
+  createTaskDraftMock: vi.fn(async (input: unknown) => ({ id: 'draft', ...(input as object) })),
+  finalizeTaskDraftIdsMock: vi.fn(async () => ({ finalized: 3, skipped: [], task_ids: ['t1', 't2', 't3'] })),
   llmJsonMock: vi.fn(),
 }));
 
@@ -15,8 +17,14 @@ vi.mock('@/lib/services/task.service', () => ({
   createTask: createTaskMock,
 }));
 
+vi.mock('@/lib/services/task-draft.service', () => ({
+  createTaskDraft: createTaskDraftMock,
+  finalizeTaskDraftIds: finalizeTaskDraftIdsMock,
+}));
+
 vi.mock('@/lib/services/onboarding/stage-runner', () => ({
   emitActivity: vi.fn(async () => undefined),
+  recordOnboardingIssue: vi.fn(async () => undefined),
 }));
 
 vi.mock('@/lib/logger', () => ({
@@ -33,8 +41,7 @@ vi.mock('@/lib/platform-capabilities', () => ({
 }));
 
 vi.mock('@/lib/agents/ceo/ceo-framework', () => ({
-  CEO_TEN_SKILLS: '(skills elided)',
-  TASK_SCOPING_RULES: '(rules elided)',
+  ONBOARDING_TASK_FRAMEWORK: '(onboarding task framework elided)',
 }));
 
 vi.mock('@/lib/services/onboarding/shared/json-mode', () => ({
@@ -74,6 +81,8 @@ function makeCtx(over: Partial<PipelineContext> = {}): PipelineContext {
 describe('createStarterTasks — Bug 2 fallback', () => {
   beforeEach(() => {
     createTaskMock.mockClear();
+    createTaskDraftMock.mockClear();
+    finalizeTaskDraftIdsMock.mockClear();
     llmJsonMock.mockReset();
   });
 
@@ -94,9 +103,22 @@ describe('createStarterTasks — Bug 2 fallback', () => {
     });
 
     await expect(createStarterTasks(makeCtx())).resolves.not.toThrow();
-    expect(createTaskMock).toHaveBeenCalledTimes(3);
+    expect(createTaskMock).not.toHaveBeenCalled();
+    expect(createTaskDraftMock).toHaveBeenCalledTimes(3);
+    expect(finalizeTaskDraftIdsMock).toHaveBeenCalledWith(
+      '00000000-0000-0000-0000-000000000001',
+      ['draft', 'draft', 'draft'],
+      expect.objectContaining({ authorizedBy: 'system' }),
+    );
+    for (const [draft] of createTaskDraftMock.mock.calls) {
+      expect(draft).toMatchObject({
+        company_id: '00000000-0000-0000-0000-000000000001',
+        source: 'onboarding',
+        status: 'pending_ceo_review',
+      });
+    }
 
-    const outreachCall = createTaskMock.mock.calls.find(([arg]) => (arg as { tag: string }).tag === 'outreach');
+    const outreachCall = createTaskDraftMock.mock.calls.find(([arg]) => (arg as { tag: string }).tag === 'outreach');
     expect(outreachCall).toBeTruthy();
     const arg = outreachCall![0] as { title: string; description: string };
     expect(arg.title.length).toBeGreaterThan(0);
@@ -109,13 +131,15 @@ describe('createStarterTasks — Bug 2 fallback', () => {
     llmJsonMock.mockRejectedValueOnce(new Error('LLM unavailable'));
 
     await expect(createStarterTasks(makeCtx())).resolves.not.toThrow();
-    expect(createTaskMock).toHaveBeenCalledTimes(3);
+    expect(createTaskMock).not.toHaveBeenCalled();
+    expect(createTaskDraftMock).toHaveBeenCalledTimes(3);
+    expect(finalizeTaskDraftIdsMock).toHaveBeenCalledTimes(1);
 
     // every slot now uses fallback
-    const tags = createTaskMock.mock.calls.map(([arg]) => (arg as { tag: string }).tag).sort();
+    const tags = createTaskDraftMock.mock.calls.map(([arg]) => (arg as { tag: string }).tag).sort();
     expect(tags).toEqual(['engineering', 'outreach', 'research']);
 
-    for (const [arg] of createTaskMock.mock.calls) {
+    for (const [arg] of createTaskDraftMock.mock.calls) {
       const t = arg as { title: string; description: string };
       expect(t.title.trim().length).toBeGreaterThan(0);
       expect(t.description.trim().length).toBeGreaterThan(0);
@@ -130,7 +154,7 @@ describe('createStarterTasks — Bug 2 fallback', () => {
     });
 
     await createStarterTasks(makeCtx({ journey: 'grow_my_company', strategy: 'grow_my_company' }));
-    const outreachCall = createTaskMock.mock.calls.find(([arg]) => (arg as { tag: string }).tag === 'outreach')!;
+    const outreachCall = createTaskDraftMock.mock.calls.find(([arg]) => (arg as { tag: string }).tag === 'outreach')!;
     const arg = outreachCall[0] as { title: string };
     expect(arg.title).toMatch(/^Cold outreach: Find 20 prospects/);
   });
@@ -143,7 +167,7 @@ describe('createStarterTasks — Bug 2 fallback', () => {
     });
 
     await createStarterTasks(makeCtx({ journey: 'surprise_me', strategy: 'surprise_me' }));
-    const outreachCall = createTaskMock.mock.calls.find(([arg]) => (arg as { tag: string }).tag === 'outreach')!;
+    const outreachCall = createTaskDraftMock.mock.calls.find(([arg]) => (arg as { tag: string }).tag === 'outreach')!;
     const arg = outreachCall[0] as { title: string };
     expect(arg.title).toMatch(/^Validation outreach: Gauge interest/);
   });
@@ -156,7 +180,7 @@ describe('createStarterTasks — Bug 2 fallback', () => {
     });
 
     await createStarterTasks(makeCtx());
-    const outreachCall = createTaskMock.mock.calls.find(([arg]) => (arg as { tag: string }).tag === 'outreach')!;
+    const outreachCall = createTaskDraftMock.mock.calls.find(([arg]) => (arg as { tag: string }).tag === 'outreach')!;
     const arg = outreachCall[0] as { title: string; description: string };
     // title was empty → fallback. description was non-empty → preserved.
     expect(arg.title).toMatch(/^User discovery: Find 15 prospects/);

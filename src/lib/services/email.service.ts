@@ -62,7 +62,7 @@ export async function sendWelcomeEmail(to: string, founderName: string | null, c
   if (!process.env.POSTMARK_SERVER_TOKEN) return;
   await sendEmail({
     to, from: 'Baljia <hello@baljia.app>', subject: `Welcome to Baljia — your AI Angel is ready`,
-    textBody: `Hi ${founderName ?? 'there'},\n\nYour company "${companyName}" is ready. Your AI Angel has set up the team and created your first tasks.\n\nHead to your dashboard to see what's been built and approve your first task.\n\n— Baljia AI`,
+    textBody: `Hi ${founderName ?? 'there'},\n\nYour company "${companyName}" is ready. Your AI Angel has set up the team and prepared your first operating plan.\n\nHead to your dashboard to see what's been built and choose the first task to run.\n\n— Baljia AI`,
     tag: 'welcome', companyId: 'platform',
   });
 }

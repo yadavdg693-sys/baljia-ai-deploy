@@ -26,7 +26,7 @@ import { eq, and, inArray, asc, sql } from 'drizzle-orm';
 import { createLogger } from '@/lib/logger';
 import {
   isAnthropicOAuthAvailable,
-  createAnthropicWithOAuth,
+  createAnthropicWithOAuthAsync,
   withClaudeCodeIdentity,
 } from '@/lib/anthropic-oauth';
 import { callAnthropicWithTimeout } from '@/lib/llm-safety';
@@ -323,7 +323,7 @@ export async function triageBug(feedbackId: string): Promise<TriageResult> {
     if (!isAnthropicOAuthAvailable()) {
       throw new Error('Anthropic OAuth not available — run claude login');
     }
-    const { client, isOAuth } = await createAnthropicWithOAuth();
+    const { client, isOAuth } = await createAnthropicWithOAuthAsync();
 
     const userPrompt = [
       `BUG REPORT (id: ${bug.id})`,

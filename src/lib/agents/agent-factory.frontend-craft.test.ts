@@ -85,4 +85,55 @@ describe('Engineering agent prompt — Frontend Quality Bar', () => {
   it('caps accent token usage at 2 per screen', () => {
     expect(promptSource).toMatch(/2 (visible )?(uses?|times?) per screen/i);
   });
+
+  it('treats unreadable buttons and dropdowns as blocker bugs', () => {
+    expect(promptSource).toContain('white-on-white buttons');
+    expect(promptSource).toContain('select/dropdown options');
+    expect(promptSource).toContain('low-contrast buttons/text/selects/dropdowns');
+  });
+
+  it('uses match_design_system before loading a design spec', () => {
+    expect(promptSource).toContain('match_design_system');
+    expect(promptSource).toContain('get_design_system(name)');
+  });
+
+  it('requires capability planning before build implementation', () => {
+    expect(promptSource).toContain('match_capabilities');
+    expect(promptSource).toContain('get_capability_pack');
+    expect(promptSource).toContain('compose_app_architecture');
+    expect(promptSource).toContain('match_reference_repos');
+    expect(promptSource).toContain('get_reference_repo_patterns');
+    expect(promptSource).toContain('retrieve_component_examples');
+    expect(promptSource).toContain('The template is only the chassis');
+    expect(promptSource).toContain('hybrid retrieval');
+    expect(promptSource).toContain('vertical slices');
+    expect(promptSource).toContain('Component examples');
+    expect(promptSource).toContain('do not replace \\`match_reference_repos\\`');
+    expect(promptSource).toContain('PRE_CODE_PLANNING_GATE');
+    expect(promptSource).toContain('engineeringPreToolGate');
+  });
+
+  it('names UI-craft references for strict/canary frontend planning', () => {
+    expect(promptSource).toContain('open-codesign-design-agent-patterns');
+    expect(promptSource).toContain('onlook-visual-repair-patterns');
+    expect(promptSource).toContain('radix-accessibility-primitives');
+    expect(promptSource).toContain('tremor-analytics-dashboard-patterns');
+    expect(promptSource).toContain('dub-saas-dashboard-patterns');
+    expect(promptSource).toContain('midday-business-ops-patterns');
+    expect(promptSource).toContain('twenty-crm-workspace-patterns');
+    expect(promptSource).toContain('UI-craft/accessibility/dashboard-craft reference');
+  });
+
+  it('tells design critique remediation to prefer build-safe typography fixes', () => {
+    expect(promptSource).toContain('Safe remediation rule');
+    expect(promptSource).toContain('Georgia, "Times New Roman", serif');
+    expect(promptSource).toContain('A typography fix that breaks deploy is not a fix');
+  });
+
+  it('completion gate requires clean Render logs after deploy-shaped tools', () => {
+    expect(promptSource).toContain('COMPLETION_LOG_TRIGGER_TOOLS');
+    expect(promptSource).toContain("tool === 'render_get_logs'");
+    expect(promptSource).toContain('lastRenderLogsAt < lastDeployOrPushAt');
+    expect(promptSource).toContain('contains error signatures');
+  });
 });

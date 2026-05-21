@@ -21,12 +21,30 @@ interface NeonProject {
   connection_uris?: Array<{ connection_uri: string; role_name: string }>;
 }
 
+interface NeonBranch {
+  id: string;
+  name: string;
+  primary?: boolean;
+  default?: boolean;
+}
+
+interface NeonDatabaseRef {
+  projectId: string;
+  branchId?: string;
+  databaseName: string;
+  roleName: string;
+}
+
 export interface NeonDatabase {
   projectId: string;
   connectionUri: string;
   host: string;
   name: string;
 }
+
+const DEFAULT_DATABASE_NAME = 'neondb';
+const DEFAULT_ROLE_NAME = 'neondb_owner';
+const SHARED_REF_PREFIX = 'shared:';
 
 // ══════════════════════════════════════════════
 // PROVISION — create a new Neon project for a company
@@ -50,6 +68,200 @@ async function resolveNeonOrgId(apiKey: string): Promise<string | undefined> {
   } catch {
     return undefined;
   }
+}
+
+function parseNeonDatabaseRef(rawProjectId: string): NeonDatabaseRef {
+  if (rawProjectId.startsWith(SHARED_REF_PREFIX)) {
+    const [, projectId, branchId, databaseName, roleName] = rawProjectId.split(':');
+    if (projectId && branchId && databaseName) {
+      return {
+        projectId,
+        branchId,
+        databaseName,
+        roleName: roleName || DEFAULT_ROLE_NAME,
+      };
+    }
+  }
+
+  return {
+    projectId: rawProjectId,
+    databaseName: DEFAULT_DATABASE_NAME,
+    roleName: DEFAULT_ROLE_NAME,
+  };
+}
+
+function encodeSharedNeonDatabaseRef(ref: Required<Pick<NeonDatabaseRef, 'projectId' | 'branchId' | 'databaseName' | 'roleName'>>): string {
+  return `${SHARED_REF_PREFIX}${ref.projectId}:${ref.branchId}:${ref.databaseName}:${ref.roleName}`;
+}
+
+function normalizeDatabaseName(companySlug: string, companyId: string): string {
+  const base = `c_${companySlug}_${companyId.slice(0, 6)}`
+    .toLowerCase()
+    .replace(/[^a-z0-9_]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return base.slice(0, 60) || `c_${companyId.replace(/-/g, '').slice(0, 16)}`;
+}
+
+async function readErrorMessage(response: Response): Promise<string> {
+  try {
+    const data = await response.clone().json() as { message?: string; error?: string };
+    return data.message ?? data.error ?? response.statusText;
+  } catch {
+    return (await response.text().catch(() => response.statusText)) || response.statusText;
+  }
+}
+
+async function fetchConnectionUri(apiKey: string, ref: NeonDatabaseRef): Promise<string> {
+  const connUrl = new URL(`${NEON_API}/projects/${ref.projectId}/connection_uri`);
+  connUrl.searchParams.set('database_name', ref.databaseName);
+  connUrl.searchParams.set('role_name', ref.roleName);
+  connUrl.searchParams.set('pooled', 'true');
+  if (ref.branchId) connUrl.searchParams.set('branch_id', ref.branchId);
+
+  const connRes = await fetch(connUrl.toString(), {
+    headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
+  });
+  if (!connRes.ok) {
+    throw new Error(`Neon connection_uri fetch failed: ${await readErrorMessage(connRes)}`);
+  }
+  const connData = await connRes.json() as { uri?: string };
+  return connData.uri ?? '';
+}
+
+async function getPrimaryBranch(apiKey: string, projectId: string): Promise<NeonBranch> {
+  const response = await fetch(`${NEON_API}/projects/${projectId}/branches`, {
+    headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
+  });
+  if (!response.ok) {
+    throw new Error(`Neon branch lookup failed: ${await readErrorMessage(response)}`);
+  }
+  const data = await response.json() as { branches?: NeonBranch[] };
+  const branch = data.branches?.find((item) => item.primary || item.default) ?? data.branches?.[0];
+  if (!branch) throw new Error(`Neon project ${projectId} has no branch to reuse`);
+  return branch;
+}
+
+async function findReusableNeonProject(apiKey: string, orgId: string | undefined): Promise<NeonProject | null> {
+  const explicitProjectId = process.env.NEON_SHARED_PROJECT_ID || process.env.NEON_REUSE_PROJECT_ID;
+  if (explicitProjectId) {
+    const response = await fetch(`${NEON_API}/projects/${explicitProjectId}`, {
+      headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
+    });
+    if (!response.ok) throw new Error(`Configured shared Neon project ${explicitProjectId} is unavailable: ${await readErrorMessage(response)}`);
+    const data = await response.json() as { project: NeonProject };
+    return data.project;
+  }
+
+  const url = new URL(`${NEON_API}/projects`);
+  url.searchParams.set('limit', '100');
+  if (orgId) url.searchParams.set('org_id', orgId);
+  const response = await fetch(url.toString(), {
+    headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
+  });
+  if (!response.ok) throw new Error(`Neon reusable project lookup failed: ${await readErrorMessage(response)}`);
+  const data = await response.json() as { projects?: NeonProject[] };
+  const projects = data.projects ?? [];
+  return projects.find((project) => project.name === 'baljia-superai-testing')
+    ?? projects.find((project) => project.name.startsWith('baljia-canary-'))
+    ?? null;
+}
+
+async function persistCompanyDatabaseRef(
+  companyId: string,
+  persistedRef: string,
+  infra: { projectId: string; branchId?: string; databaseName: string; host: string },
+): Promise<void> {
+  await db.update(companies).set({ neon_database_id: persistedRef }).where(eq(companies.id, companyId));
+
+  const [memLayer] = await db.select({ content: memoryLayers.content })
+    .from(memoryLayers)
+    .where(and(eq(memoryLayers.company_id, companyId), eq(memoryLayers.layer, 1)))
+    .limit(1);
+
+  const infraSection = [
+    '## Infrastructure',
+    `Neon DB Project: ${infra.projectId}`,
+    infra.branchId ? `Neon Branch: ${infra.branchId}` : '',
+    `Host: ${infra.host}`,
+    `Database: ${infra.databaseName}`,
+  ].filter(Boolean).join('\n');
+  const existingContent = (memLayer?.content as string) ?? '';
+  const infraRegex = /## Infrastructure[\s\S]*?(?=\n## |$)/g;
+  const newContent = infraRegex.test(existingContent)
+    ? existingContent.replace(infraRegex, infraSection)
+    : existingContent ? `${existingContent}\n\n${infraSection}` : infraSection;
+
+  await db.update(memoryLayers).set({ content: newContent, updated_at: new Date() })
+    .where(and(eq(memoryLayers.company_id, companyId), eq(memoryLayers.layer, 1)));
+}
+
+async function provisionCompanyDatabaseInSharedProject(
+  apiKey: string,
+  orgId: string | undefined,
+  companyId: string,
+  companySlug: string,
+  cause: string,
+): Promise<NeonDatabase> {
+  const reusableProject = await findReusableNeonProject(apiKey, orgId);
+  if (!reusableProject) {
+    throw new Error(`${cause}; no reusable Neon project found for shared-database fallback`);
+  }
+
+  const branch = await getPrimaryBranch(apiKey, reusableProject.id);
+  const databaseName = normalizeDatabaseName(companySlug, companyId);
+  const createResponse = await fetch(`${NEON_API}/projects/${reusableProject.id}/branches/${branch.id}/databases`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify({
+      database: {
+        name: databaseName,
+        owner_name: DEFAULT_ROLE_NAME,
+      },
+    }),
+  });
+
+  if (!createResponse.ok) {
+    const message = await readErrorMessage(createResponse);
+    if (createResponse.status !== 409 && !/already exists/i.test(message)) {
+      throw new Error(`${cause}; shared Neon database creation failed: ${message}`);
+    }
+  }
+
+  const ref: Required<Pick<NeonDatabaseRef, 'projectId' | 'branchId' | 'databaseName' | 'roleName'>> = {
+    projectId: reusableProject.id,
+    branchId: branch.id,
+    databaseName,
+    roleName: DEFAULT_ROLE_NAME,
+  };
+  const connectionUri = await fetchConnectionUri(apiKey, ref);
+  const host = new URL(connectionUri).hostname;
+  const persistedRef = encodeSharedNeonDatabaseRef(ref);
+
+  await persistCompanyDatabaseRef(companyId, persistedRef, {
+    projectId: reusableProject.id,
+    branchId: branch.id,
+    databaseName,
+    host,
+  });
+
+  log.warn('Neon project quota reached; provisioned shared-project database fallback', {
+    companyId,
+    projectId: reusableProject.id,
+    branchId: branch.id,
+    databaseName,
+  });
+
+  return {
+    projectId: persistedRef,
+    connectionUri,
+    host,
+    name: databaseName,
+  };
 }
 
 export async function provisionCompanyDatabase(
@@ -88,8 +300,17 @@ export async function provisionCompanyDatabase(
   });
 
   if (!response.ok) {
-    const error = await response.json() as { message?: string };
-    throw new Error(`Neon project creation failed: ${error.message ?? response.statusText}`);
+    const message = await readErrorMessage(response);
+    if (/projects? limit|limit of \d+|exceeded/i.test(message)) {
+      return provisionCompanyDatabaseInSharedProject(
+        apiKey,
+        orgId,
+        companyId,
+        companySlug,
+        `Neon project creation failed: ${message}`,
+      );
+    }
+    throw new Error(`Neon project creation failed: ${message}`);
   }
 
   const data = await response.json() as { project: NeonProject; connection_uris?: Array<{ connection_uri: string }> };
@@ -116,24 +337,11 @@ export async function provisionCompanyDatabase(
     host = url.hostname;
   } catch { /* leave empty */ }
 
-  // Persist to company record
-  await db.update(companies).set({ neon_database_id: project.id }).where(eq(companies.id, companyId));
-
-  // Append infra info to Layer 1
-  const [memLayer] = await db.select({ content: memoryLayers.content })
-    .from(memoryLayers)
-    .where(and(eq(memoryLayers.company_id, companyId), eq(memoryLayers.layer, 1)))
-    .limit(1);
-
-  const infraSection = `## Infrastructure\nNeon DB Project: ${project.id}\nHost: ${host}\nDatabase: provisioned`;
-  const existingContent = (memLayer?.content as string) ?? '';
-  const infraRegex = /## Infrastructure[\s\S]*?(?=\n## |$)/g;
-  const newContent = infraRegex.test(existingContent)
-    ? existingContent.replace(infraRegex, infraSection)
-    : existingContent ? `${existingContent}\n\n${infraSection}` : infraSection;
-
-  await db.update(memoryLayers).set({ content: newContent, updated_at: new Date() })
-    .where(and(eq(memoryLayers.company_id, companyId), eq(memoryLayers.layer, 1)));
+  await persistCompanyDatabaseRef(companyId, project.id, {
+    projectId: project.id,
+    databaseName: DEFAULT_DATABASE_NAME,
+    host,
+  });
 
   log.info('Neon database provisioned', { companyId, projectId: project.id, host });
 
@@ -158,7 +366,9 @@ export async function getCompanyDatabase(companyId: string): Promise<NeonDatabas
 
   if (!company?.neon_database_id) return null;
 
-  const response = await fetch(`${NEON_API}/projects/${company.neon_database_id}`, {
+  const ref = parseNeonDatabaseRef(company.neon_database_id);
+
+  const response = await fetch(`${NEON_API}/projects/${ref.projectId}`, {
     headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
   });
 
@@ -176,11 +386,12 @@ export async function getCompanyDatabase(companyId: string): Promise<NeonDatabas
   // get 400 here and the caller can fall back to the createProjectAndDatabase
   // response (which includes the URI inline).
   const connUrl = new URL(`${NEON_API}/projects/${project.id}/connection_uri`);
-  connUrl.searchParams.set('database_name', 'neondb');
-  connUrl.searchParams.set('role_name', 'neondb_owner');
+  connUrl.searchParams.set('database_name', ref.databaseName);
+  connUrl.searchParams.set('role_name', ref.roleName);
   // Pooled connection — what app code actually wants. Falls back to direct
   // if the project doesn't have a pooler.
   connUrl.searchParams.set('pooled', 'true');
+  if (ref.branchId) connUrl.searchParams.set('branch_id', ref.branchId);
 
   const connRes = await fetch(connUrl.toString(), {
     headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
@@ -203,7 +414,7 @@ export async function getCompanyDatabase(companyId: string): Promise<NeonDatabas
     host = new URL(connectionUri).hostname;
   } catch { /* leave empty */ }
 
-  return { projectId: project.id, connectionUri, host, name: project.name };
+  return { projectId: company.neon_database_id, connectionUri, host, name: ref.databaseName };
 }
 
 // ══════════════════════════════════════════════

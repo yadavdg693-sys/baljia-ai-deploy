@@ -5,8 +5,9 @@
 //
 // Integration: orchestrator creates Watchdog, calls start(), and stops it in
 // finally. stage-runner calls watchdog.tick(stageName) on every stage entry via
-// setWatchdogTick(). If stall/timeout fires, Watchdog throws inside its tick
-// handler, which propagates up to the orchestrator's catch block.
+// a company-scoped setWatchdogTick handler. If stall/timeout fires, Watchdog
+// throws inside its tick handler, which propagates up to the orchestrator's
+// catch block.
 
 import { createLogger } from '@/lib/logger';
 import * as eventService from '@/lib/services/event.service';
@@ -42,7 +43,7 @@ export class OnboardingWatchdog {
     this.interval = setInterval(() => {
       this.check();
     }, TICK_MS);
-    setWatchdogTick((stage) => this.tick(stage));
+    setWatchdogTick(this.ctx.companyId, (stage) => this.tick(stage));
     log.info('Watchdog started', {
       companyId: this.ctx.companyId,
       stallMs: STALL_MS,
@@ -67,7 +68,7 @@ export class OnboardingWatchdog {
       clearInterval(this.interval);
       this.interval = null;
     }
-    setWatchdogTick(null);
+    setWatchdogTick(this.ctx.companyId, null);
     log.info('Watchdog stopped', { companyId: this.ctx.companyId });
   }
 

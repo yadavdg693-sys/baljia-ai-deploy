@@ -39,6 +39,8 @@ const ENV_KEYS: Array<{ key: string; staticValue?: string }> = [
   { key: 'GOOGLE_CLIENT_ID' },
   { key: 'GOOGLE_CLIENT_SECRET' },
   { key: 'ANTHROPIC_API_KEY' },
+  { key: 'OPENROUTER_API_KEY' },
+  { key: 'OPENROUTER_REASONING_EFFORT', staticValue: 'xhigh' },
   { key: 'OPENAI_API_KEY' },
   { key: 'POSTMARK_SERVER_TOKEN' },
   { key: 'POSTMARK_ACCOUNT_TOKEN' },

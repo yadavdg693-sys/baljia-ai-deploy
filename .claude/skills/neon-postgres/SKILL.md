@@ -1,141 +1,208 @@
-# Skill: Neon Postgres on Cloudflare Workers
+# Skill: Neon Postgres for Render founder apps
 
 **READ THIS BEFORE writing any database code, schema, migration, or query.**
 
-## The driver — there is only one that works
+Founder engineering apps deploy on Render and connect to a company-specific Neon Postgres database. Render can use normal Node.js Postgres clients.
 
-**Use `@neondatabase/serverless` (HTTP driver).** That's the only Postgres client that works on Cloudflare Workers (no TCP available).
+## Provisioning
 
-```js
-import { neon } from '@neondatabase/serverless';
+Use the platform tool first:
 
-export default {
-  async fetch(request, env, ctx) {
-    const sql = neon(env.NEON_URL);
-
-    const users = await sql`SELECT id, email FROM users WHERE active = true LIMIT 10`;
-    // sql is a tagged template — interpolations are PARAMETERIZED, not concatenated
-    // → SQL-injection-safe by default
-
-    return Response.json(users);
-  },
-};
+```text
+provision_database({})
 ```
 
-## Drivers that DO NOT work (never try these)
+That creates or returns the company Neon database. Pass the returned connection string to Render as `DATABASE_URL` or `NEON_CONNECTION_STRING` when calling `render_create_service`.
 
-| Driver | Why broken on Workers |
-|---|---|
-| `pg` / `pg-pool` | TCP connection — Workers has no raw socket support |
-| `postgres` (the package) | Same — TCP only |
-| `mysql2`, `mariadb` | Different DB anyway, but same TCP issue |
-| `sequelize`, `typeorm` (default config) | Default to `pg`/`mysql2` adapters which use TCP |
+## Recommended Node client
 
-## Drizzle ORM — works great with Neon HTTP
-
-If you want type-safe schema + migrations, Drizzle is the right choice:
+For simple Express apps, use `pg`:
 
 ```js
-import { drizzle } from 'drizzle-orm/neon-http';
-import { neon } from '@neondatabase/serverless';
-import { eq } from 'drizzle-orm';
-import { pgTable, uuid, varchar, timestamp } from 'drizzle-orm/pg-core';
+import pg from 'pg';
 
-const sql = neon(env.NEON_URL);
-const db = drizzle(sql);
-
-const users = pgTable('users', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  email: varchar('email', { length: 255 }).notNull().unique(),
-  created_at: timestamp('created_at').defaultNow(),
+const pool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
+  max: 5,
 });
 
-const result = await db.select().from(users).where(eq(users.email, email)).limit(1);
+export async function query(text, params = []) {
+  const result = await pool.query(text, params);
+  return result.rows;
+}
 ```
 
-## Provisioning a database — the platform does this
+Use parameterized queries. Never build SQL by concatenating user input.
 
-You don't manually create the Neon project. Use `provision_database` (one of your tools):
+## Drizzle
 
+Use Drizzle when the task benefits from typed schema and coordinated migrations. On Render Node, use the Node Postgres adapter:
+
+```js
+import pg from 'pg';
+import { drizzle } from 'drizzle-orm/node-postgres';
+
+const pool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
+});
+
+export const db = drizzle(pool);
 ```
-provision_database({})  // creates a Neon project for this company, returns connection URI
+
+## Migrations
+
+Use the platform `run_migration` tool for schema changes:
+
+```sql
+CREATE TABLE IF NOT EXISTS leads (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text NOT NULL,
+  email text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
 ```
 
-After that, `cf_deploy_app({ ..., with_neon_db: true })` injects the URI as `env.NEON_URL`.
+Rules:
 
-## Migrations — three options, pick by complexity
+- Use `IF NOT EXISTS` for creates.
+- Use `IF EXISTS` for drops.
+- Add indexes for lookup fields and foreign keys.
+- Do not run migrations from app startup on every deploy.
 
-| Tool | When to use |
-|---|---|
-| `run_migration({ sql: 'CREATE TABLE ...' })` | Simple one-off DDL. The platform runs it directly against the company DB. |
-| Drizzle migration files | When the founder app has multiple coordinated schema changes. Generate via `drizzle-kit generate` locally, ship the SQL via `run_migration`. |
-| Raw SQL in app code (DON'T) | NEVER run migrations from inside the Worker on every cold start. They WILL race + corrupt schema. |
+## Vector search (pgvector)
 
-Always use `IF NOT EXISTS` on `CREATE TABLE` and `IF EXISTS` on `DROP` — migrations are sometimes re-run.
+For semantic search, RAG, similarity matching — store Gemini embeddings as
+vectors directly in Postgres. Neon ships with the `vector` extension; you just
+have to enable it. Founder/user apps use the fixed Gemini provider:
+`gemini-embedding-001` with `vector(3072)` on
+`https://generativelanguage.googleapis.com/v1beta/openai`.
+
+### 1. Enable extension + add column (one-time, via `run_migration`)
+
+```sql
+CREATE EXTENSION IF NOT EXISTS vector;
+
+CREATE TABLE IF NOT EXISTS documents (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  content     text NOT NULL,
+  embedding   vector(3072) NOT NULL,        -- Google gateway gemini-embedding-001 = 3072 dims
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+
+-- Exact search for small canary/founder datasets
+-- lists ≈ sqrt(rows). For < 100k rows, lists=100 is fine. Re-tune later.
+-- Do NOT create ivfflat/hnsw indexes on vector(3072); pgvector vector indexes
+-- support <=2000 dimensions. For small founder/canary data, exact ORDER BY is
+-- fine. If you need an ANN index, use a <=2000-dim representation or halfvec.
+```
+
+### 2. Insert with embedding
+
+```js
+import { openai } from '@/lib/ai';
+import { sql } from 'drizzle-orm';
+
+const EMBEDDING_MODEL = process.env.AI_EMBEDDING_MODEL || 'gemini-embedding-001';
+
+async function indexDocument(content) {
+  const { data: [{ embedding }] } = await openai.embeddings.create({
+    model: EMBEDDING_MODEL,
+    input: content,
+  });
+  await db.execute(sql`
+    INSERT INTO documents (content, embedding)
+    VALUES (${content}, ${JSON.stringify(embedding)}::vector)
+  `);
+}
+```
+
+Pass embeddings as `JSON.stringify(array)::vector` — pgvector parses the JSON
+array literal. Don't try to send a Postgres array.
+
+### 3. Query — top-k similar documents
+
+```js
+async function searchSimilar(query, k = 5) {
+  const { data: [{ embedding }] } = await openai.embeddings.create({
+    model: EMBEDDING_MODEL,
+    input: query,
+  });
+  // <=> is the cosine-distance operator (smaller = more similar)
+  return db.execute(sql`
+    SELECT id, content, 1 - (embedding <=> ${JSON.stringify(embedding)}::vector) AS similarity
+    FROM documents
+    ORDER BY embedding <=> ${JSON.stringify(embedding)}::vector
+    LIMIT ${k}
+  `);
+}
+```
+
+### Operators (pick one and stick with it)
+
+| Operator | Distance | Index op-class |
+|---|---|---|
+| `<=>` | Cosine (most common for OpenAI embeddings) | `vector_cosine_ops` |
+| `<->` | L2 / Euclidean | `vector_l2_ops` |
+| `<#>` | Negative inner product | `vector_ip_ops` |
+
+OpenAI embeddings are L2-normalized → use `<=>` (cosine).
+
+### Pitfalls
+
+- **Do not ANN-index vector(3072).** `ivfflat`/`hnsw` indexes on pgvector's `vector` type support <=2000 dimensions. For Google `gemini-embedding-001` use exact scan on small datasets, lower dimensions, or `halfvec` if you truly need an index.
+
+- **Don't query millions of rows without an index.** For small founder/canary data exact scan is acceptable; for large data, add an ANN index only after choosing a <=2000-dim vector representation or `halfvec`.
+- **Don't mix dimension sizes.** Founder/user apps use `gemini-embedding-001` with `vector(3072)`.
+- **`ivfflat` needs training when you do use it.** After bulk-inserting many rows, run `REINDEX` once to rebuild centroids.
+- **Filter THEN search, not the other way.** `WHERE user_id = $1 ORDER BY embedding <=> $2 LIMIT 5` is far slower than restricting candidates first via a CTE — pgvector's index doesn't combine well with WHERE filters at small `lists` values.
 
 ## Query patterns
 
-### Parameterized (always do this)
+Parameterized query:
 
 ```js
-// ✓ safe
-await sql`SELECT * FROM tasks WHERE company_id = ${companyId} AND status = ${status}`;
-
-// ✗ never — SQL injection
-await sql.unsafe(`SELECT * FROM tasks WHERE company_id = '${companyId}'`);
+await pool.query(
+  'SELECT * FROM leads WHERE email = $1 LIMIT 1',
+  [email]
+);
 ```
 
-### Pagination
+Insert and return:
 
 ```js
-const PAGE = 50;
-const offset = page * PAGE;
-const rows = await sql`
-  SELECT id, title, created_at
-  FROM tasks
-  WHERE company_id = ${companyId}
-  ORDER BY created_at DESC
-  LIMIT ${PAGE} OFFSET ${offset}
-`;
+const { rows } = await pool.query(
+  'INSERT INTO leads (name, email) VALUES ($1, $2) RETURNING *',
+  [name, email]
+);
 ```
 
-### Bulk insert (avoid N+1)
+Pagination:
 
 ```js
-// ✗ slow — 100 round-trips
-for (const item of items) {
-  await sql`INSERT INTO items (name) VALUES (${item.name})`;
-}
-
-// ✓ one round-trip
-await sql`
-  INSERT INTO items (name)
-  SELECT * FROM ${sql(items.map(i => [i.name]))}
-`;
-// Or with drizzle:
-// await db.insert(items).values(items);
+const limit = 50;
+const offset = page * limit;
+await pool.query(
+  'SELECT * FROM leads ORDER BY created_at DESC LIMIT $1 OFFSET $2',
+  [limit, offset]
+);
 ```
 
 ## Common pitfalls
 
-- **Forgetting `with_neon_db: true` on `cf_deploy_app`** — `env.NEON_URL` will be `undefined`, the Worker will crash on first query. The platform tries to validate this; double-check.
-- **Using `sql.transaction()` on Neon HTTP** — the HTTP driver doesn't support multi-statement transactions. For atomicity, use `WITH` CTEs or `INSERT ... RETURNING` + chain queries with explicit error handling. Drizzle's `db.transaction()` calls fail silently on the HTTP adapter.
-- **Long-running SELECTs** — Workers has 30s CPU per request. A query that takes 25s leaves 5s for everything else. Add `LIMIT` and indices early.
-- **Connection pooling** — Neon already does pooling at the edge. Don't try to pool inside the Worker (you can't anyway — no persistent state across requests).
-- **`SELECT *` in production code** — return only the columns you use. Adding a column later breaks downstream code that expected fewer fields.
+- Missing `DATABASE_URL` in Render env vars.
+- Using a masked connection string instead of the real Neon URL.
+- Running destructive migrations without checking existing data.
+- Creating a new Neon DB when the company already has one.
+- Marking the task done without inserting and reading back test data.
 
-## Schema conventions used across Baljia
+## Verification
 
-- All tables use `uuid` primary keys with `defaultRandom()`
-- Timestamps: `created_at` and `updated_at`, both `timestamp with time zone`, `defaultNow()`
-- Foreign keys to `companies.id` are common — index them: `index('idx_<table>_company').on(t.company_id)`
-- Soft-delete: prefer status enum (`active|archived|rejected`) over `deleted_at`
+After DB work:
 
-## Verify after writing DB code
-
-After your migration runs, write a verify step that:
-1. SELECTs from the new table to confirm it exists
-2. INSERTs a row and SELECTs it back
-3. DELETEs the test row
-
-Don't trust "migration ran without error" as proof — Postgres lies politely.
+1. Run the migration.
+2. Insert one test row.
+3. Read it back through the app or API route.
+4. Delete the test row if it should not remain.
+5. Report the exact route or query that proved persistence works.

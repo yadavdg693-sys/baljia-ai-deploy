@@ -3,17 +3,17 @@
 // TWO AUDIENCES, CAREFULLY SEPARATED:
 //
 // 1. FOUNDER-FACING (PLATFORM_CAPABILITIES, getCapabilityConstraint,
-//    getPlatformCapabilitiesPrompt) — used in onboarding (refine_idea,
-//    invent_idea, market_research, mission, starter tasks) and CEO chat.
-//    MUST NOT mention implementation details (Cloudflare Workers, Hono, Neon,
-//    Postgres, specific drivers). Founders care about WHAT can be built, not
+//    getPlatformCapabilitiesPrompt) — used in onboarding (Surprise idea generation,
+//    invent_idea and starter tasks) and CEO chat.
+//    Market research and mission planning should not receive capability context.
+//    MUST NOT mention implementation details (hosting provider, framework,
+//    database driver, specific services). Founders care about WHAT can be built, not
 //    HOW it's hosted. Leaking "Cloudflare Worker" into the refined idea
 //    contaminates market research, mission, and landing copy downstream.
 //
-// 2. ENGINEERING-INTERNAL (WORKERS_RUNTIME, getEngineeringStackPrompt) — used
+// 2. ENGINEERING-INTERNAL (RENDER_RUNTIME, getEngineeringStackPrompt) — used
 //    by the Engineering agent's system prompt only, when writing code.
-//    Contains the full technical stack (Hono, Neon HTTP, Workers limits,
-//    supported frameworks, nodejs_compat matrix). Never injected into
+//    Contains the deploy/runtime defaults for founder apps. Never injected into
 //    founder-visible content.
 
 // ──────────────────────────────────────────────
@@ -22,7 +22,7 @@
 
 export const PLATFORM_CAPABILITIES = {
   build: [
-    'Landing pages with live subdomain ({company}.baljia.app) at the edge',
+    'Landing pages with live subdomain ({company}.baljia.app)',
     'Full-stack web apps with a dedicated database per company',
     'APIs, webhooks, server-rendered pages, auth flows (magic link, OAuth, password)',
     'Dashboards, admin panels, internal tools',
@@ -76,7 +76,7 @@ export const PLATFORM_LIMITATIONS = [
   'No connecting to existing external codebases',
   'No generic third-party API connectors unless explicitly supported',
   'No real-time video/audio streaming apps',
-  'No long-running server processes — request handlers must complete within 30 seconds',
+  'Individual build tasks must fit inside a 4-hour execution window',
 ] as const;
 
 /** Capabilities summary for CEO prompts. Includes "you dispatch work to workers"
@@ -122,15 +122,15 @@ ${cantDo}`;
  *  you put here ends up in the refined_idea string which seeds market research and downstream
  *  outputs the founder reads. Keep it product-shaped. */
 export function getCapabilityConstraint(): string {
-  return `IMPORTANT: The idea MUST be buildable as a web app. Baljia can build: full-stack web apps with a database, APIs, webhooks, dashboards, scheduled jobs, Stripe payments (subscriptions/one-time/Connect), browser automation (scraping/form-filling), web research, email outreach, Twitter posting, Meta ads. Baljia CANNOT build: mobile apps, browser extensions, desktop apps, hardware/IoT, real-time video/audio streaming, apps requiring Instagram/LinkedIn/TikTok APIs, or long-running server processes (request handlers capped at 30 seconds). Frame the idea around the PRODUCT and its customers — do NOT name infrastructure (hosting provider, frameworks, databases).`;
+  return `IMPORTANT: The idea MUST be buildable as a web app. Baljia can build: full-stack web apps with a database, APIs, webhooks, dashboards, scheduled jobs, Stripe payments (subscriptions/one-time/Connect), browser automation (scraping/form-filling), web research, email outreach, Twitter posting, Meta ads. Baljia CANNOT build: mobile apps, browser extensions, desktop apps, hardware/IoT, real-time video/audio streaming, or apps requiring Instagram/LinkedIn/TikTok APIs. The full company may be large, but each initial build task must be executable within a 4-hour agent run. Frame the idea around the PRODUCT and its customers — do NOT name infrastructure (hosting provider, frameworks, databases).`;
 }
 
 // ──────────────────────────────────────────────
 // ENGINEERING-INTERNAL STACK (for Engineering agent code-writing prompts only)
 // ──────────────────────────────────────────────
 
-/** CF Workers runtime specifics — technical constraints the Engineering agent
- *  must respect when writing code. This is NEVER surfaced to founders. */
+/** Legacy Cloudflare runtime specifics for onboarding-only deploy helpers.
+ *  Engineering founder apps use Render; do not inject this into engineering prompts. */
 export const WORKERS_RUNTIME = {
   // Hard limits (Paid plan)
   cpu_http_request_ms: 30_000,          // 30 sec per HTTP request
@@ -178,50 +178,29 @@ export const WORKERS_RUNTIME = {
  *  NEVER used in onboarding or CEO prompts — founder outputs stay
  *  infrastructure-agnostic. */
 export function getEngineeringStackPrompt(): string {
-  const r = WORKERS_RUNTIME;
-  return `## Runtime constraints (Cloudflare Workers — read before writing code)
+  return `## Runtime defaults (Render founder apps)
 
-**Hard limits:**
-- CPU per HTTP request: ${r.cpu_http_request_ms / 1000}s (NOT 15 min — that's cron-only)
-- Memory per isolate: ${r.memory_mb} MB
-- Bundle size: ${r.bundle_gzip_mb} MB gzipped (Paid plan)
-- Subrequests per invocation: ${r.subrequests_per_invocation.toLocaleString()}
-- Request body: ${r.request_body_mb} MB max
+Engineering tasks deploy founder apps to Render-backed web services. Cloudflare is reserved for onboarding landing pages.
 
-**Recommended framework stack:**
-${r.supported_frameworks.map(f => `- ${f}`).join('\n')}
+**Default stack:**
+- Node.js web app deployed from the company's GitHub repository
+- Neon Postgres for per-company data
+- Render free plan for trial services unless a paid plan is explicitly requested
+- Environment variables managed through Render service env vars
 
-**Do NOT use (won't run on Workers):**
-${r.unsupported_frameworks.map(f => `- ${f}`).join('\n')}
+**First deploy flow:**
+1. Create or reuse the company GitHub repo.
+2. Push a complete minimal app with clear build and start commands.
+3. Provision a Neon database if the app needs persistence.
+4. Call render_create_service with plan "free".
+5. Verify render_get_deploy_status and check_url_health.
 
-**Database drivers — USE:**
-${r.supported_db_drivers.map(d => `- ${d}`).join('\n')}
+**Update flow:**
+1. Read/list the existing GitHub repo.
+2. Make the smallest change that satisfies the task.
+3. Push/commit to the repo.
+4. Call render_deploy on the existing render_service_id.
+5. Verify the deployed URL and the feature-specific route or behavior.
 
-**Database drivers — DO NOT USE:**
-${r.unsupported_db_drivers.map(d => `- ${d}`).join('\n')}
-
-**Node.js compat:** nodejs_compat flag is ENABLED by default for cf_deploy_app.
-Fully working: ${r.nodejs_fully_supported.join(', ')}
-Partial/broken: ${r.nodejs_partial_or_broken.join(', ')}
-
-**Default app template for a Tier 2/3 build:**
-\`\`\`js
-import { Hono } from 'hono';
-import { neon } from '@neondatabase/serverless';
-import { drizzle } from 'drizzle-orm/neon-http';
-
-const app = new Hono();
-app.get('/api/hello', (c) => c.json({ ok: true }));
-app.post('/api/things', async (c) => {
-  const sql = neon(c.env.NEON_URL);
-  const body = await c.req.json();
-  const [row] = await sql\`INSERT INTO things (name) VALUES (\${body.name}) RETURNING *\`;
-  return c.json(row);
-});
-export default app;
-\`\`\`
-
-When bundling for cf_deploy_app: the script_content string should be the FULL bundled JS
-(all imports inlined). You cannot import from node_modules at runtime — everything must
-be in the single script.`;
+Do not use Cloudflare deploy tools for engineering tasks.`;
 }

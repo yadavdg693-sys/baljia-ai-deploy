@@ -11,6 +11,7 @@
 
 import { createLogger } from '@/lib/logger';
 import { callSmallLLM } from '../llm/small-llm';
+import { callBigLLM } from '../llm/big-llm';
 import { sanitizeForFounder, type SanitizeViolation } from '@/lib/founder-safety/sanitize';
 import type { z } from 'zod';
 
@@ -22,12 +23,19 @@ export interface JsonModeOptions {
   /** Runtime contract for model output. Parseable JSON is not enough for
    * onboarding because missing keys can quietly corrupt later stages. */
   schema?: z.ZodType<unknown>;
+  /** Reject strings that look like prompt placeholders or mock output values. */
+  rejectPlaceholders?: boolean;
   /** Top-level string fields to scan for banned terms. Use for simple
    *  shapes like `{ refined_idea: string, changes_made: string }`. */
   sanitizeFields?: string[];
   /** Array-of-objects fields — every object's string-leaf values are
    *  scanned. Use for shapes like `{ competitors: [{ name, gap }] }`. */
   sanitizeArrayOfObjects?: string[];
+  /** Route to the big-tier LLM (Opus 4.6 / GPT-5.4 / Gemini 2.5 Pro) instead
+   *  of the small-tier default (Haiku / GPT-5.4-mini / Gemini Flash). Use for
+   *  founder-facing strategic outputs like market_research, mission_doc, and
+   *  starter task generation where constraint-honoring quality matters. */
+  useBigModel?: boolean;
 }
 
 // Calls the LLM expecting JSON-only output. Strips common wrapping (```json / ```)
@@ -39,25 +47,30 @@ export async function callSmallLLMJson<T>(
   opts: JsonModeOptions = {},
 ): Promise<T> {
   const maxTokens = opts.maxTokens ?? 2500;
+  const rejectPlaceholders = opts.rejectPlaceholders !== false;
+  const llmCall = opts.useBigModel ? callBigLLM : callSmallLLM;
   const jsonOnlyPrompt = `${prompt}
 
-Respond with ONLY a valid JSON object. No prose before or after. No markdown code fences. Start your response with { and end with }.`;
+Respond with ONLY a valid JSON object. No prose before or after. No markdown code fences. Start your response with { and end with }.
+Do not output placeholder/mock values or field-rule text as content.`;
 
   let parsed: T;
   try {
-    const response = await callSmallLLM(jsonOnlyPrompt, maxTokens);
+    const response = await llmCall(jsonOnlyPrompt, maxTokens);
     parsed = parseJson<T>(response);
     parsed = validateSchema<T>(parsed, opts.schema);
+    if (rejectPlaceholders) validateNoPlaceholderText(parsed);
   } catch (err) {
     if (opts.retryOnce === false) throw err;
     log.warn('JSON parse/validation failed, retrying once', { error: err instanceof Error ? err.message : String(err) });
 
     const retryPrompt = `${prompt}
 
-CRITICAL: Your previous response could not be parsed or did not match the required schema. Respond with ONLY a valid JSON object, starting with { and ending with }. Include every required key exactly as requested. No prose, no markdown, no commentary.`;
-    const response = await callSmallLLM(retryPrompt, maxTokens);
+CRITICAL: Your previous response could not be parsed, did not match the required schema, or contained placeholder/mock text. Respond with ONLY a valid JSON object, starting with { and ending with }. Include every required key exactly as requested. No prose, no markdown, no commentary. Do not output placeholder/mock values or field-rule text as content.`;
+    const response = await llmCall(retryPrompt, maxTokens);
     parsed = parseJson<T>(response);
     parsed = validateSchema<T>(parsed, opts.schema);
+    if (rejectPlaceholders) validateNoPlaceholderText(parsed);
   }
 
   // Founder-safety screen — skip entirely if no fields declared
@@ -81,14 +94,15 @@ CRITICAL: Your previous response could not be parsed or did not match the requir
 
 CRITICAL — do NOT mention any of these words or phrases in your response: ${bannedLabels.join(', ')}.
 These are infrastructure or internal terms the end user should never see.
-Use generic language instead (e.g. "database" not a specific DB product, "web app" not a framework name).
+Use generic category language instead of naming internal providers or frameworks.
 
 Respond with ONLY a valid JSON object, starting with { and ending with }.`;
 
   try {
-    const retryResponse = await callSmallLLM(avoidancePrompt, maxTokens);
+    const retryResponse = await llmCall(avoidancePrompt, maxTokens);
     const retryParsed = parseJson<T>(retryResponse);
     const validatedRetryParsed = validateSchema<T>(retryParsed, opts.schema);
+    if (rejectPlaceholders) validateNoPlaceholderText(validatedRetryParsed);
     const retryViolations = screenForBanned(
       validatedRetryParsed,
       opts.sanitizeFields ?? [],
@@ -212,4 +226,68 @@ function validateSchema<T>(parsed: T, schema: z.ZodType<unknown> | undefined): T
     })
     .join('; ');
   throw new Error(`JSON schema validation failed: ${issues}`);
+}
+
+interface PlaceholderViolation {
+  path: string;
+  value: string;
+  reason: string;
+}
+
+function validateNoPlaceholderText<T>(parsed: T): void {
+  const violations = collectPlaceholderViolations(parsed);
+  if (violations.length === 0) return;
+
+  const summary = violations
+    .slice(0, 6)
+    .map((v) => `${v.path}: ${v.reason} (${JSON.stringify(v.value.slice(0, 80))})`)
+    .join('; ');
+  throw new Error(`JSON output contained placeholder/mock text: ${summary}`);
+}
+
+function collectPlaceholderViolations(value: unknown, path = '(root)'): PlaceholderViolation[] {
+  if (typeof value === 'string') {
+    const reason = placeholderReason(value);
+    return reason ? [{ path, value, reason }] : [];
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap((item, index) => collectPlaceholderViolations(item, `${path}[${index}]`));
+  }
+
+  if (value && typeof value === 'object') {
+    return Object.entries(value as Record<string, unknown>).flatMap(([key, child]) =>
+      collectPlaceholderViolations(child, path === '(root)' ? key : `${path}.${key}`),
+    );
+  }
+
+  return [];
+}
+
+function placeholderReason(raw: string): string | null {
+  const value = raw.trim();
+  if (!value) return null;
+
+  if (/<[^>\r\n]{3,120}>/.test(value)) {
+    return 'angle-bracket placeholder';
+  }
+  if (/^\.\.\.?$/.test(value)) {
+    return 'ellipsis placeholder';
+  }
+  if (/^(tbd|todo)$/i.test(value)) {
+    return 'unfinished placeholder';
+  }
+  if (/not found\s*[-\u2013\u2014]\s*verify manually/i.test(value)) {
+    return 'mock fallback phrase';
+  }
+
+  const shortValue = value.length <= 160;
+  if (
+    shortValue
+    && /\b(max \d+ chars?|one sentence|1-2 sentences?|2-3 paragraphs?|4-6 .*sentences?|real competitor|what they do|gap or weakness|specific feature|concrete .*task)\b/i.test(value)
+  ) {
+    return 'field-rule text copied as content';
+  }
+
+  return null;
 }

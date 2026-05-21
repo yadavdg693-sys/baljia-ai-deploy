@@ -10,7 +10,7 @@ import { preflightCheck } from '@/lib/services/preflight.service';
 
 void (async () => {
   console.log('Running preflight against live integrations...\n');
-  const result = await preflightCheck({ bypassCache: true });
+  const result = await preflightCheck({ bypassCache: true, renderQuotaEvents: true });
 
   if (result.ok) {
     console.log('✅ All integrations healthy.');

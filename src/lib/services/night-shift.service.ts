@@ -1,102 +1,30 @@
-// Night Shift Engine — migrated to Drizzle + Neon
+// Night Shift Engine — context-driven planner (no stage buckets)
+//
+// Design note: this module previously routed planning through fixed
+// `early/validation/monetization/...` stage buckets backed by hardcoded
+// requirement tables. The bucketing was based on completed-task counters,
+// not real signals about the company. We replaced it with a contextual
+// planner: we read documents, recent task outcomes, deployment status,
+// activity counts, and learnings, then ask a small LLM (Haiku via
+// callSmallLLM) to pick the next 1-2 priorities. No templated gap lists,
+// no stage objectives — judgment from real context.
 import * as taskService from '@/lib/services/task.service';
 import * as eventService from '@/lib/services/event.service';
 import * as roadmapService from '@/lib/services/roadmap.service';
 import * as failureService from '@/lib/services/failure.service';
-import { evaluateStage } from '@/lib/services/stage.service';
+import { createTaskDraft, finalizeTaskDraftIds } from '@/lib/services/task-draft.service';
 import { sendNightShiftSummaryEmail } from '@/lib/services/email.service';
+import { callSmallLLM } from '@/lib/services/onboarding/llm/small-llm';
 import { processQueue } from '@/lib/agents/worker-launcher';
-import { db, txDb, companies, nightShiftCycles, users, tasks as tasksTable } from '@/lib/db';
-import { eq, isNotNull, or, and, sql } from 'drizzle-orm';
+import {
+  db, txDb, companies, nightShiftCycles, users,
+  tasks as tasksTable, documents, learnings, emailThreads, adCampaigns,
+} from '@/lib/db';
+import { eq, and, or, gte, sql, desc } from 'drizzle-orm';
 import { createLogger } from '@/lib/logger';
-import type { CompanyStage, NightShiftCycle } from '@/types';
+import type { NightShiftCycle, Task } from '@/types';
 
 const log = createLogger('NightShift');
-
-const STAGE_OBJECTIVES: Record<CompanyStage, string> = {
-  early: 'What is obviously missing?',
-  validation: 'What blocks activation?',
-  monetization: 'What blocks conversion?',
-  retention: 'What is underused or churn-inducing?',
-  scale: 'What channel is underperforming?',
-  compounding: 'What can be automated or defended?',
-};
-
-// ══════════════════════════════════════════════
-// STAGE-AWARE GAP ANALYSIS (SPEC-CTRL-103)
-// Night shift picks the strongest gap between ideal
-// stage progression and current state.
-// ══════════════════════════════════════════════
-
-interface StageGap {
-  dimension: string;
-  currentState: boolean;
-  gapStrength: number;  // 0-100, higher = more urgent
-  suggestedTag: string;
-  suggestedTitle: string;
-}
-
-/** What the NEXT stage requires that the current stage may not have */
-const NEXT_STAGE_REQUIREMENTS: Record<CompanyStage, Array<{
-  dimension: string;
-  evidenceKey: string;
-  gapStrength: number;
-  suggestedTag: string;
-  suggestedTitle: string;
-}>> = {
-  early: [
-    { dimension: 'website', evidenceKey: 'has_website', gapStrength: 95, suggestedTag: 'landing-page', suggestedTitle: 'Build and deploy landing page' },
-    { dimension: 'seo', evidenceKey: 'has_website', gapStrength: 70, suggestedTag: 'seo', suggestedTitle: 'Set up SEO: meta tags, OG image, sitemap' },
-  ],
-  validation: [
-    { dimension: 'payments', evidenceKey: 'has_paid', gapStrength: 90, suggestedTag: 'billing', suggestedTitle: 'Set up Stripe payments and pricing page' },
-    { dimension: 'marketing', evidenceKey: 'has_marketing', gapStrength: 85, suggestedTag: 'tweet', suggestedTitle: 'Start social media presence' },
-    { dimension: 'outreach', evidenceKey: 'has_outreach', gapStrength: 80, suggestedTag: 'outreach', suggestedTitle: 'Launch initial cold outreach campaign' },
-  ],
-  monetization: [
-    { dimension: 'recurring_revenue', evidenceKey: 'has_paid', gapStrength: 90, suggestedTag: 'billing', suggestedTitle: 'Set up subscription billing for recurring revenue' },
-    { dimension: 'customer_comms', evidenceKey: 'has_outreach', gapStrength: 85, suggestedTag: 'email-template', suggestedTitle: 'Create branded email templates for customer communication' },
-  ],
-  retention: [
-    { dimension: 'multi_channel', evidenceKey: 'has_marketing', gapStrength: 85, suggestedTag: 'meta-ads', suggestedTitle: 'Set up Meta Ads campaign for second marketing channel' },
-    { dimension: 'analytics', evidenceKey: 'has_marketing', gapStrength: 75, suggestedTag: 'analytics', suggestedTitle: 'Build analytics dashboard for user behavior tracking' },
-  ],
-  scale: [
-    { dimension: 'automation', evidenceKey: 'has_marketing', gapStrength: 80, suggestedTag: 'automation', suggestedTitle: 'Automate lead nurturing sequence' },
-    { dimension: 'optimization', evidenceKey: 'has_marketing', gapStrength: 70, suggestedTag: 'performance', suggestedTitle: 'Performance optimization: query caching and CDN' },
-  ],
-  compounding: [
-    // At compounding, focus on defending and automating — no hard gaps
-    { dimension: 'defense', evidenceKey: 'has_marketing', gapStrength: 60, suggestedTag: 'security', suggestedTitle: 'Security hardening: rate limits, XSS protection, audit log' },
-  ],
-};
-
-/**
- * Analyze gaps between current company state and next stage requirements.
- * Returns gaps sorted by strength (highest first).
- * Reuses evaluateStage() from stage.service.ts for evidence.
- */
-async function analyzeStageGaps(companyId: string, stage: CompanyStage): Promise<StageGap[]> {
-  const { evidence } = await evaluateStage(companyId);
-  const requirements = NEXT_STAGE_REQUIREMENTS[stage] ?? [];
-
-  const gaps: StageGap[] = [];
-  for (const req of requirements) {
-    const hasIt = !!(evidence as Record<string, unknown>)[req.evidenceKey];
-    if (!hasIt) {
-      gaps.push({
-        dimension: req.dimension,
-        currentState: false,
-        gapStrength: req.gapStrength,
-        suggestedTag: req.suggestedTag,
-        suggestedTitle: req.suggestedTitle,
-      });
-    }
-  }
-
-  // Sort by gap strength descending
-  return gaps.sort((a, b) => b.gapStrength - a.gapStrength);
-}
 
 // ══════════════════════════════════════════════
 // HEALTH PROBE — automatic URL health check
@@ -136,7 +64,7 @@ async function probeCompanyHealth(companyId: string, liveUrl: string): Promise<s
       await db.insert(tasksTable).values({
         company_id: companyId,
         title,
-        description: `Night Shift health probe detected an issue:\n- URL: ${liveUrl}\n- Response: ${msg}\n\nDiagnose first: call cf_get_logs with errors_only=true to see the error pattern (status codes, outcome, when it started). Then call get_company_tech for the current source, fix the Worker, and redeploy with cf_deploy_app (or cf_deploy_landing for static HTML). This is affecting live users.`,
+        description: `Night Shift health probe detected an issue:\n- URL: ${liveUrl}\n- Response: ${msg}\n\nDiagnose first: call get_company_tech to find the company's Render service and GitHub repo, then call render_get_logs with log_type="service" or "deploy" to see the error pattern. Fix the code in GitHub, redeploy with render_deploy, and verify the URL with check_url_health. This is affecting live users.`,
         tag: 'bug-fix',
         priority: 95,
         source: 'auto_remediation',
@@ -164,7 +92,7 @@ async function probeCompanyHealth(companyId: string, liveUrl: string): Promise<s
       await db.insert(tasksTable).values({
         company_id: companyId,
         title,
-        description: `Night Shift health probe could not reach the app:\n- URL: ${liveUrl}\n- Error: ${reason}\n\nThe Cloudflare Worker is unreachable. Diagnose with cf_get_logs (errors_only=true) — if there are no recent invocations, the script is missing or the route isn't bound. Call get_company_tech to find the current source, then redeploy with cf_deploy_app (or cf_deploy_landing for static HTML). If the current source is broken, revert by redeploying the last known-good version from GitHub.`,
+        description: `Night Shift health probe could not reach the app:\n- URL: ${liveUrl}\n- Error: ${reason}\n\nThe live Render app is unreachable. Call get_company_tech to find the Render service and GitHub repo, inspect render_get_logs with log_type="service" and "deploy", then fix the repo and redeploy with render_deploy. If the current source is broken, revert by redeploying the last known-good GitHub commit.`,
         tag: 'bug-fix',
         priority: 99,
         source: 'auto_remediation',
@@ -196,9 +124,10 @@ async function runHealthProbes(companyId: string): Promise<string[]> {
 
     if (!company) return [];
 
-    // Determine live URL: prefer custom domain, fallback to Cloudflare
-    // {subdomain|slug}.baljia.app (ADR-002). Founder apps live on Cloudflare
-    // now — no Render gating. If there's no subdomain/slug yet, the company
+    // Determine live URL: prefer custom domain, fallback to
+    // {subdomain|slug}.baljia.app. Founder apps deploy on Render after
+    // engineering approval; onboarding owns the initial Cloudflare landing page.
+    // If there's no subdomain/slug yet, the company
     // hasn't been provisioned, so skip.
     const cfHost = company.subdomain ?? company.slug;
     const liveUrl = company.custom_domain
@@ -230,24 +159,201 @@ function checkAdmissibility(taskTag: string, taskTitle: string): AdmissibilityRe
   return { admissible: looksSimple, reason: looksSimple ? 'Auto-admissible: appears straightforward' : 'Flagged for review: complex description may need founder input' };
 }
 
+// ══════════════════════════════════════════════
+// CONTEXTUAL PRIORITY PICKER
+// Reads real signals (documents, recent task outcomes, deployment state,
+// activity counts, learnings) and asks Haiku to pick at most 2 next
+// priorities. Replaces the previous stage-keyed gap analysis.
+// ══════════════════════════════════════════════
+
+interface ContextPriority {
+  title: string;
+  tag: string;
+  description: string;
+  reasoning: string;
+}
+
+interface ContextPickerResult {
+  priorities: ContextPriority[];
+  judgment: string | null;
+}
+
+const KNOWN_TAGS = [
+  'landing-page', 'seo', 'seo-meta', 'billing', 'tweet', 'outreach',
+  'email-template', 'meta-ads', 'analytics', 'tracking', 'automation',
+  'performance', 'security', 'bug-fix', 'fix', 'content', 'research',
+  'css', 'favicon', 'error-page', 'monitoring',
+];
+
+async function pickPrioritiesFromContext(
+  companyId: string,
+  tasks: Task[],
+): Promise<ContextPickerResult> {
+  const sevenDaysAgoIso = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+  const [companyRow, docRows, learningRows, emailCountRow, adCountRow] = await Promise.all([
+    db.select({
+      name: companies.name, slug: companies.slug, one_liner: companies.one_liner,
+      original_idea: companies.original_idea,
+      custom_domain: companies.custom_domain, subdomain: companies.subdomain,
+    }).from(companies).where(eq(companies.id, companyId)).limit(1),
+    db.select({ doc_type: documents.doc_type, title: documents.title, content: documents.content })
+      .from(documents)
+      .where(and(eq(documents.company_id, companyId), eq(documents.is_empty, false)))
+      .limit(8),
+    db.select({ category: learnings.category, content: learnings.content, confidence: learnings.confidence })
+      .from(learnings)
+      .where(and(eq(learnings.company_id, companyId), eq(learnings.status, 'active')))
+      .orderBy(desc(learnings.created_at))
+      .limit(5),
+    db.select({ count: sql<number>`count(*)` }).from(emailThreads)
+      .where(and(eq(emailThreads.company_id, companyId), eq(emailThreads.direction, 'outbound'), gte(emailThreads.created_at, new Date(sevenDaysAgoIso)))),
+    db.select({ count: sql<number>`count(*)` }).from(adCampaigns)
+      .where(and(eq(adCampaigns.company_id, companyId), eq(adCampaigns.status, 'active'))),
+  ]);
+
+  const company = companyRow[0];
+  if (!company) return { priorities: [], judgment: null };
+
+  const cfHost = company.subdomain ?? company.slug;
+  const liveUrl = company.custom_domain
+    ? `https://${company.custom_domain}`
+    : cfHost
+    ? `https://${cfHost}.baljia.app`
+    : null;
+
+  const completed = tasks.filter((t) => t.status === 'completed' && t.completed_at);
+  const recentCompleted = completed.filter(
+    (t) => new Date(t.completed_at!).getTime() >= Date.parse(sevenDaysAgoIso),
+  );
+  const last5Completed = [...completed]
+    .sort((a, b) => new Date(b.completed_at!).getTime() - new Date(a.completed_at!).getTime())
+    .slice(0, 5);
+  const last3Failed = tasks
+    .filter((t) => (t.status === 'failed' || t.status === 'failed_permanent'))
+    .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
+    .slice(0, 3);
+  const todoTitles = tasks.filter((t) => t.status === 'todo').map((t) => t.title);
+
+  const docSnippets = docRows
+    .map((d) => `- **${d.title ?? d.doc_type}** (${d.doc_type}): ${(d.content ?? '').replace(/\s+/g, ' ').slice(0, 240)}`)
+    .join('\n') || '(no documents populated yet)';
+
+  const learningSnippets = learningRows
+    .map((l) => `- [${l.category ?? 'general'} · ${l.confidence}] ${l.content.replace(/\s+/g, ' ').slice(0, 200)}`)
+    .join('\n') || '(no learnings captured yet)';
+
+  const recentEmails = Number(emailCountRow[0]?.count ?? 0);
+  const activeAds = Number(adCountRow[0]?.count ?? 0);
+
+  const prompt = `You are the night-shift planner for an autonomous SaaS founder platform. Your job: read the company's real situation and pick at most 2 next priorities. There are NO fixed lifecycle stages — judge from real signals only.
+
+## Company
+- Name: ${company.name}
+- One-liner: ${company.one_liner ?? '(not set)'}
+- Original idea: ${(company.original_idea ?? '(not set)').slice(0, 400)}
+- Live URL: ${liveUrl ?? 'NOT DEPLOYED YET'}
+
+## Documents (what the company has captured about itself)
+${docSnippets}
+
+## Recent activity (last 7 days)
+- Tasks completed: ${recentCompleted.length}
+- Outbound emails sent: ${recentEmails}
+- Active ad campaigns: ${activeAds}
+
+## Last 5 completed tasks
+${last5Completed.map((t) => `- ${t.title} [${t.tag}]`).join('\n') || '(none)'}
+
+## Last 3 failures
+${last3Failed.map((t) => `- ${t.title}${t.failure_class ? ` [${t.failure_class}]` : ''}`).join('\n') || '(none)'}
+
+## Top learnings
+${learningSnippets}
+
+## Currently in queue (do NOT duplicate)
+${todoTitles.slice(0, 10).map((t) => `- ${t}`).join('\n') || '(empty queue)'}
+
+---
+
+Pick at most 2 priorities. Each priority must be a single concrete task one agent can finish in one shot. Output STRICT JSON:
+
+{
+  "judgment": "one sentence — what you read about this company and why these priorities matter NOW (max 200 chars)",
+  "priorities": [
+    {
+      "title": "string — concrete imperative under 80 chars",
+      "tag": "string — must be one of: ${KNOWN_TAGS.join(', ')}",
+      "description": "string — what the agent should do, 2-3 sentences",
+      "reasoning": "string — one sentence on why this matters NOW for THIS company"
+    }
+  ]
+}
+
+If nothing meaningfully needs doing right now, return {"judgment": "...", "priorities": []}. Output JSON only — no prose, no markdown fences.`;
+
+  let raw: string;
+  try {
+    raw = await callSmallLLM(prompt, 800);
+  } catch (err) {
+    log.warn('callSmallLLM failed in pickPrioritiesFromContext', { companyId, error: err instanceof Error ? err.message : 'unknown' });
+    return { priorities: [], judgment: null };
+  }
+
+  // Strip markdown fences if the model added them despite the instruction
+  const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(cleaned);
+  } catch (err) {
+    log.warn('Failed to parse LLM JSON in pickPrioritiesFromContext', { companyId, raw: cleaned.slice(0, 300), error: err instanceof Error ? err.message : 'unknown' });
+    return { priorities: [], judgment: null };
+  }
+
+  const obj = parsed as { judgment?: unknown; priorities?: unknown };
+  const judgment = typeof obj.judgment === 'string' ? obj.judgment.slice(0, 240) : null;
+  const priorities: ContextPriority[] = [];
+
+  if (Array.isArray(obj.priorities)) {
+    for (const p of obj.priorities) {
+      if (!p || typeof p !== 'object') continue;
+      const pp = p as Record<string, unknown>;
+      const title = typeof pp.title === 'string' ? pp.title.trim() : '';
+      const tag = typeof pp.tag === 'string' ? pp.tag.trim().toLowerCase() : '';
+      const description = typeof pp.description === 'string' ? pp.description.trim() : '';
+      const reasoning = typeof pp.reasoning === 'string' ? pp.reasoning.trim() : '';
+      if (!title || !tag || !description) continue;
+      // Tag whitelist defense — fall back to 'fix' if model hallucinates an unknown tag
+      const safeTag = KNOWN_TAGS.includes(tag) ? tag : 'fix';
+      priorities.push({ title: title.slice(0, 100), tag: safeTag, description: description.slice(0, 600), reasoning: reasoning.slice(0, 240) });
+    }
+  }
+
+  return { priorities, judgment };
+}
+
 interface NightShiftPlan {
-  companyId: string; stage: CompanyStage; objective: string;
-  tasks_to_execute: string[]; tasks_to_create: Array<{ title: string; tag: string; description: string }>;
+  companyId: string;
+  tasks_to_execute: string[];
+  tasks_to_create: Array<{ title: string; tag: string; description: string }>;
   skipped_reasons: string[];
+  /** One-line summary of what the planner judged. Surfaced in the night-shift report. */
+  judgment: string | null;
 }
 
 async function planNightShift(companyId: string): Promise<NightShiftPlan> {
-  const [company] = await db.select({ company_stage: companies.company_stage, lifecycle: companies.lifecycle })
-    .from(companies).where(eq(companies.id, companyId)).limit(1);
-
-  const stage = (company?.company_stage ?? 'early') as CompanyStage;
-  const objective = STAGE_OBJECTIVES[stage];
-
   const tasks = await taskService.getTasks(companyId);
   const todoTasks = tasks.filter((t) => t.status === 'todo');
   const failedTasks = tasks.filter((t) => t.status === 'failed');
 
-  const plan: NightShiftPlan = { companyId, stage, objective, tasks_to_execute: [], tasks_to_create: [], skipped_reasons: [] };
+  const plan: NightShiftPlan = {
+    companyId,
+    tasks_to_execute: [],
+    tasks_to_create: [],
+    skipped_reasons: [],
+    judgment: null,
+  };
 
   // Build a set of titles already pending/active — used for duplicate retry guard
   const activeTitles = new Set(
@@ -310,30 +416,37 @@ async function planNightShift(companyId: string): Promise<NightShiftPlan> {
     }
   } catch { /* roadmap may not exist yet */ }
 
-  // SPEC-CTRL-103: Stage-aware gap analysis — prioritize strongest gaps
+  // Contextual priority picker (replaces stage-keyed gap analysis).
+  // Reads documents, recent task outcomes, deployment state, activity counts,
+  // and learnings, then asks Haiku to pick at most 2 next priorities.
+  // No fixed stages, no templated requirement tables — pure judgment from context.
   try {
-    const gaps = await analyzeStageGaps(companyId, stage);
+    const suggestions = await pickPrioritiesFromContext(companyId, tasks);
+    plan.judgment = suggestions.judgment;
     const existingTags = new Set(tasks.map((t) => t.tag.toLowerCase()));
 
-    for (const gap of gaps.slice(0, 2)) {
-      // Skip if a task with this tag already exists
-      if (existingTags.has(gap.suggestedTag.toLowerCase())) continue;
-      // Skip if title already in queue
-      if (activeTitles.has(gap.suggestedTitle.toLowerCase())) continue;
-
-      const a = checkAdmissibility(gap.suggestedTag, gap.suggestedTitle);
+    for (const sugg of suggestions.priorities.slice(0, 2)) {
+      if (existingTags.has(sugg.tag.toLowerCase())) {
+        plan.skipped_reasons.push(`Auto-suggested "${sugg.title}" skipped: tag "${sugg.tag}" already in queue`);
+        continue;
+      }
+      if (activeTitles.has(sugg.title.toLowerCase())) {
+        plan.skipped_reasons.push(`Auto-suggested "${sugg.title}" skipped: duplicate title`);
+        continue;
+      }
+      const a = checkAdmissibility(sugg.tag, sugg.title);
       if (a.admissible) {
         plan.tasks_to_create.push({
-          title: `[Gap] ${gap.suggestedTitle}`,
-          tag: gap.suggestedTag,
-          description: `Auto-generated from stage gap analysis. Stage: ${stage}. Gap: ${gap.dimension} (strength: ${gap.gapStrength}/100). This is the strongest gap blocking progression to the next stage.`,
+          title: sugg.title,
+          tag: sugg.tag,
+          description: `${sugg.description}\n\n[Why now] ${sugg.reasoning}`,
         });
       } else {
-        plan.skipped_reasons.push(`Gap "${gap.dimension}" requires founder approval: ${a.reason}`);
+        plan.skipped_reasons.push(`Auto-suggested "${sugg.title}" needs your approval: ${a.reason}`);
       }
     }
   } catch (err) {
-    log.warn('Gap analysis failed, continuing without', { companyId, error: err instanceof Error ? err.message : 'Unknown' });
+    log.warn('Contextual priority picker failed, continuing without', { companyId, error: err instanceof Error ? err.message : 'Unknown' });
   }
 
   // Failure feedback loop — inject regression context into night-shift planning
@@ -381,16 +494,50 @@ async function executeNightShift(plan: NightShiftPlan): Promise<{ completed: num
   // allowance, not by founder credit balance. Task creation and execution here
   // do NOT deduct from credit_ledger — see worker-launcher's subscriptionFunded
   // path. Per-cycle decrement of the allowance happens in runNightShift.
+  const createdDraftIds: string[] = [];
+  let finalizedDraftTaskCount = 0;
   for (const newTask of plan.tasks_to_create) {
     try {
-      await taskService.createTask({ company_id: plan.companyId, title: newTask.title, tag: newTask.tag, description: newTask.description, priority: 80, source: 'night_shift_generated', status: 'todo', queue_order: 1, estimated_credits: 1, max_turns: 200, executability_type: 'can_run_now', authorized_by: 'night_shift', authorization_reason: `Night shift auto-created: stage=${plan.stage}, objective=${plan.objective}` });
+      const draft = await createTaskDraft({
+        company_id: plan.companyId,
+        title: newTask.title,
+        tag: newTask.tag,
+        description: newTask.description,
+        priority: 80,
+        source: 'night_shift_generated',
+        status: 'pending_ceo_review',
+        suggestion_reasoning: plan.judgment ?? null,
+        proposed_task: {
+          queue_order: 1,
+          estimated_credits: 1,
+          max_turns: 200,
+          executability_type: 'can_run_now',
+          authorized_by: 'night_shift',
+          authorization_reason: plan.judgment ? `Night shift auto-created: ${plan.judgment}` : 'Night shift auto-created from company context',
+        },
+      });
+      createdDraftIds.push(draft.id);
     } catch (error) { log.error('Failed to create night-shift task', { title: newTask.title }, error); }
+  }
+
+  if (createdDraftIds.length > 0) {
+    const finalized = await finalizeTaskDraftIds(plan.companyId, createdDraftIds, {
+      authorizedBy: 'night_shift',
+      authorizationReason: plan.judgment ? `Night shift finalized: ${plan.judgment}` : 'Night shift finalized from company context',
+    });
+    finalizedDraftTaskCount = finalized.finalized;
+    if (finalized.skipped.length > 0) {
+      log.warn('Night-shift draft finalization skipped some drafts', {
+        companyId: plan.companyId,
+        skipped: finalized.skipped,
+      });
+    }
   }
 
   // SPEC-CTRL-001: One execution slot per company. A night-shift cycle runs
   // at most one task through the queue; remaining queued work drains on
   // subsequent cycles or manual triggers.
-  const maxTasks = Math.min(plan.tasks_to_execute.length, 1);
+  const maxTasks = Math.min(plan.tasks_to_execute.length + finalizedDraftTaskCount, 1);
   for (let i = 0; i < maxTasks; i++) {
     try {
       const processed = await processQueue(plan.companyId, { subscriptionFunded: true });
@@ -411,7 +558,7 @@ function generateSummary(
 ): string {
   const lines = [
     `## Night Shift Report`,
-    `**Stage:** ${plan.stage} | **Objective:** ${plan.objective}`,
+    plan.judgment ? `**Judgment:** ${plan.judgment}` : `**Judgment:** (no LLM judgment — running on retries/roadmap only)`,
     '',
     `### Results`,
     `- Tasks completed: ${results.completed}`,
@@ -441,7 +588,7 @@ export async function runNightShift(companyId: string): Promise<NightShiftCycle>
   // Audit #5: Only trial_active and full_active get night shifts.
   // keep_live_active is post-cancellation grace — no new execution.
   const activeLifecycles = ['trial_active', 'full_active'];
-  const mkSkipped = (reason: string) => ({ id: crypto.randomUUID(), company_id: companyId, cycle_number: null, started_at: new Date().toISOString(), completed_at: new Date().toISOString(), planned_tasks: null, executed_tasks: null, summary: reason, company_stage: 'early', trust_score: null, created_at: new Date().toISOString() }) as NightShiftCycle;
+  const mkSkipped = (reason: string) => ({ id: crypto.randomUUID(), company_id: companyId, cycle_number: null, started_at: new Date().toISOString(), completed_at: new Date().toISOString(), planned_tasks: null, executed_tasks: null, summary: reason, trust_score: null, created_at: new Date().toISOString() }) as NightShiftCycle;
 
   if (!company || !activeLifecycles.includes(company.lifecycle ?? '')) return mkSkipped(`Night shift skipped: lifecycle is ${company?.lifecycle ?? 'unknown'}`);
   if (company.execution_state === 'suspended') return mkSkipped('Night shift skipped: execution suspended');
@@ -484,7 +631,7 @@ export async function runNightShift(companyId: string): Promise<NightShiftCycle>
   const summary = generateSummary(plan, results, healthAlerts);
 
   const [cycle] = await db.insert(nightShiftCycles).values({
-    company_id: companyId, summary, company_stage: plan.stage,
+    company_id: companyId, summary,
   }).returning();
 
   // Consume one night-shift allowance slot from the active subscription.

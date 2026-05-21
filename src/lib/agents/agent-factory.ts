@@ -21,10 +21,52 @@ import { getTwitterTools, handleTwitterTool } from './tools/twitter.tools';
 import { getMetaAdsTools, handleMetaAdsTool } from './tools/meta-ads.tools';
 import { getOutreachTools, handleOutreachTool } from './tools/outreach.tools';
 import { getEngineeringTools, handleEngineeringTool } from './tools/engineering.tools';
+import { isDesignCritiqueConfigured } from '@/lib/services/design-critic.service';
 import { pickProviderOrder, recordProviderOutcome } from './llm-provider-router';
 import { withPolicyGate } from './policy-gate';
-import { callAnthropicWithTimeout, callOpenRouterWithTimeout, callGeminiWithTimeout } from '@/lib/llm-safety';
-import { isAnthropicAvailable, isBedrockAvailable, isDirectAnthropicAvailable, isAnthropicOAuthAvailable, isOpenAIAvailable, getOpenAIApiKey, isOpenRouterAvailable, isGeminiAvailable, OPENROUTER_MODELS, OPENAI_MODELS, getPreferredProvider } from '@/lib/llm-provider';
+import { evaluateGateOnExit as evaluateCompletionGateOnExit, type GateState } from './runtime/completion-gate';
+import { pushExecutionLog } from './runtime/execution-log';
+import {
+  blockedEngineeringLaneOutputs,
+  collectEngineeringLaneOutputs,
+  engineeringLaneCompletionIssues,
+  parseEngineeringLaneRequirementsEvidence,
+  selectEngineeringLanes,
+  type EngineeringLaneRole,
+  type EngineeringLaneOutput,
+} from './runtime/engineering-subagents';
+import { engineeringRuntimeAddendum } from './runtime/prompt-assembly';
+import { isTransientProviderError, providerAttemptEvent, shouldResumeProviderAfterProgress } from './runtime/provider-loop';
+import { evaluateDomainGate, readDomainGateMode } from './anti-generic-gate';
+import { hasClearDomainSignals } from './domain-registry';
+import { classifyPlanningDepth, maxPlanningDepth, parsePlanningDepth, type PlanningDepth } from './planning-depth';
+import { stripPlanningHarnessMetadata } from './planning-text';
+import { classifyTaskIntent, parseTaskIntent, type TaskIntent } from './task-intent';
+import { engineeringLaneToolGate, formatTaskLaneBriefing, getTaskLanePolicy } from './task-lane';
+import {
+  criticalFlowEvidenceChecks,
+  detectCriticalFlowContracts,
+  formatCriticalFlowBriefing,
+  requiredCriticalFlowContracts,
+} from './critical-flow-contracts';
+import {
+  contractFieldRequirements,
+  missingContractFieldProofs,
+  missingContractFlowIds,
+  parseAcceptanceProofEvidence,
+  parseAuthIsolationProofEvidence,
+  parseBuildBriefEvidence,
+  parseContractFieldProofEvidence,
+  parseContractFlowProofEvidence,
+  parseProductBuildContractEvidence,
+  requiresProductBuildContract,
+  type ContractFieldRequirement,
+  type ContractFieldProofEvidence,
+  type ContractFlowProofEvidence,
+} from './product-build-contract';
+import { formatExecutionContractForPrompt, hasCompleteExecutionContract } from './execution-contract';
+import { callAnthropicWithTimeout, callOpenRouterWithTimeout, callMoonshotWithTimeout, callGeminiWithTimeout } from '@/lib/llm-safety';
+import { isAnthropicAvailable, isBedrockAvailable, isDirectAnthropicAvailable, isAnthropicOAuthAvailable, isOpenAIAvailable, getOpenAIApiKey, isOpenRouterAvailable, isMoonshotAvailable, isGeminiAvailable, OPENROUTER_MODELS, MOONSHOT_MODELS, MOONSHOT_API_BASE, OPENAI_MODELS, getProviderOrder } from '@/lib/llm-provider';
 import { createAnthropicWithOAuthAsync, withClaudeCodeIdentity } from '@/lib/anthropic-oauth';
 import { sanitizeForPrompt, moderateOutput } from '@/lib/content-safety';
 import { db, agents as agentsTable, reports, companies, tasks as tasksTable, taskExecutions } from '@/lib/db';
@@ -43,9 +85,23 @@ const CLAUDE_MODEL_SONNET = process.env.WORKER_CLAUDE_MODEL || 'claude-sonnet-4-
 const CLAUDE_MODEL_HAIKU = process.env.WORKER_HAIKU_MODEL || 'claude-haiku-4-5-20251001';
 const GEMINI_MODEL = 'gemini-2.5-flash';
 const DEFAULT_AGENT_MAX_TOKENS = 4096;
-const ENGINEERING_AGENT_MAX_TOKENS = 12000;
+type OpenRouterReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';
+const OPENROUTER_REASONING_EFFORTS = new Set<OpenRouterReasoningEffort>(['low', 'medium', 'high', 'xhigh']);
+const DEFAULT_OPENROUTER_REASONING_EFFORT: OpenRouterReasoningEffort = 'xhigh';
+// Engineering writes whole files inline (server.js, app/page.tsx, components/*).
+// Sonnet 4.6 supports up to 64K output tokens. At 12K we saw real production
+// truncation: github_push_file was called without `content` because the JSON
+// tool_use block got cut off mid-string. 32K leaves headroom for a 25KB
+// HTML/JS file without forcing the agent into file-splitting acrobatics.
+const ENGINEERING_AGENT_MAX_TOKENS = Math.max(
+  1024,
+  parseInt(process.env.ENGINEERING_AGENT_MAX_TOKENS ?? '32000', 10) || 32000,
+);
 const DEFAULT_AGENT_CALL_TIMEOUT_MS = parseInt(process.env.LLM_TIMEOUT_MS ?? '300000', 10);
-const ENGINEERING_AGENT_CALL_TIMEOUT_MS = parseInt(process.env.ENGINEERING_LLM_TIMEOUT_MS ?? '180000', 10);
+// Engineering permits 32K output tokens for whole-file edits. Anthropic's own
+// expected-runtime math puts that above 10 minutes, so keep the per-turn cap
+// aligned with the large output budget while still bounded by the worker.
+const ENGINEERING_AGENT_CALL_TIMEOUT_MS = parseInt(process.env.ENGINEERING_LLM_TIMEOUT_MS ?? '900000', 10);
 
 function getAgentMaxTokens(agentId: number): number {
   return agentId === 30 ? ENGINEERING_AGENT_MAX_TOKENS : DEFAULT_AGENT_MAX_TOKENS;
@@ -53,6 +109,1452 @@ function getAgentMaxTokens(agentId: number): number {
 
 function getAgentCallTimeoutMs(agentId: number): number {
   return agentId === 30 ? ENGINEERING_AGENT_CALL_TIMEOUT_MS : DEFAULT_AGENT_CALL_TIMEOUT_MS;
+}
+
+function getOpenRouterReasoningEffort(): OpenRouterReasoningEffort | null {
+  const raw = (process.env.OPENROUTER_REASONING_EFFORT ?? DEFAULT_OPENROUTER_REASONING_EFFORT).trim().toLowerCase();
+  if (raw === 'off' || raw === 'none' || raw === 'false' || raw === '0') return null;
+  if (OPENROUTER_REASONING_EFFORTS.has(raw as OpenRouterReasoningEffort)) {
+    return raw as OpenRouterReasoningEffort;
+  }
+  return DEFAULT_OPENROUTER_REASONING_EFFORT;
+}
+
+// Invariant rules that survive even when an operator edits an agent's
+// `base_system_prompt` in the DB. Without this, a careless DB edit silently
+// disables design_audit, design_critique, the completion gate's required
+// sequence, and tenant-ownership reminders. The DB body controls TONE and
+// PRODUCT VOICE; the invariants below control SAFETY and QUALITY BAR.
+//
+// Keep short — this is appended to the user-editable prompt, not the
+// primary spec. The full prompt for agent 30 is in AGENT_PROMPTS[30].
+const ENGINEERING_INVARIANT_RULES = `## INVARIANT RULES (cannot be overridden via DB prompt)
+
+These rules ALWAYS apply on engineering tasks, regardless of any operator-authored prompt above:
+
+0.1. **Execution Contract source of truth** - If the briefing contains an Execution Contract, CEO has already decided product scope. Build exactly that scope. Do not infer extra product requirements, do not use domain/capability matchers to decide what the app should be, and use planning/retrieval tools only as optional implementation aids. UI/design choices are yours only when the contract says \`ui_freedom: yes\`. This overrides Product Build Contract planning requirements; prove the deployed behavior against the Execution Contract instead.
+
+0. **Adaptive budget** - Obey the Task Lane Policy in your briefing. Fast lane means targeted repair/proof only: relevant existing-code context, one or two required packs, a narrow architecture plan, then targeted verification. Standard lane proves deploy/logs/health/journey/UI/DB as relevant. Strict and canary lanes keep the heavier planning and quality gates. \`design_critique\`, reference retrieval, codebase map, and \`create_report\` are mandatory only when the lane policy or explicit task text requires them, or when a previous critique found a BLOCKER.
+
+1. **CEO task intake + adaptive planning** — You are executing a CEO-allocated company task, not a raw user prompt. Before coding, call \`get_company_tech\`, then plan at the depth the task deserves. Simple one-feature work can use lightweight planning: \`match_capabilities\`, only needed \`get_capability_pack\` calls, and \`compose_app_architecture\`. Standard user-facing apps add domain/design/frontend planning when product shape or UI is involved. Mixed/complex/canary/world-class tasks use the full chain: \`match_domain_app\` or \`compose_ad_hoc_domain\`, \`get_domain_pack\`, \`match_capabilities\`, all \`get_capability_pack\` calls, \`match_design_system\`/\`get_design_system\`, \`match_reference_repos\`/\`get_reference_repo_patterns\`/\`retrieve_component_examples\`, \`compose_frontend_plan\`, then \`compose_app_architecture\`. For app builds, \`compose_app_architecture\` must emit \`BUILD_BRIEF_EVIDENCE\` and \`PRODUCT_BUILD_CONTRACT_EVIDENCE\`; build from that contract, not from labels on a landing page. Existing-app work must call \`read_codebase_map\` plus \`build_code_graph\` or \`query_code_graph\` before editing. The template is chassis only; do not collapse mixed or product-shaped apps into one generic template.
+
+2. **Stack** — Any task producing a user-facing page MUST start with \`github_fork_skeleton\` (Next.js + shadcn/ui). \`fork_express_skeleton\` is for backend-only APIs/webhooks/cron with NO user-facing pages. If you forked Express on a UI task, restart with the Next.js skeleton — the completion gate will block you otherwise.
+
+3. **Design language + references** — Before writing user-facing UI, call \`match_design_system\` to choose the closest vendored design-language reference, then call \`get_design_system(name)\`. Use \`compose_frontend_plan\`, \`match_reference_repos\`, \`get_reference_repo_patterns\`, and \`retrieve_component_examples\` only when the lane policy, UI/architecture complexity, or canary/world-class bar requires them. Apply conventions and patterns, NOT brand identity or copied code.
+
+4. **Components** — Use \`@/components/ui/...\` (shadcn) for buttons/cards/inputs/dialogs. Never hand-roll an equivalent. Use \`lucide-react\` for icons. Never emoji in \`<h*>\`, button text, or icon slots. Buttons, links styled as buttons, selects, dropdown triggers, and native \`option\` rows must have readable foreground/background contrast in every light/dark state; white text on white/light buttons, black text on dark cards, and unstyled white native dropdown menus are blocker bugs.
+
+5. **Tenant ownership** — Every \`github_*\` and \`render_*\` call operates on the calling company's repo + service. Don't pass another tenant's repo or service_id. The dispatch layer enforces this; if you receive an ownership error, do not retry — you have the wrong target.
+
+6. **Completion sequence** — A task is complete only when the lane-required evidence is clean: capability plan complete when needed → Product Build Contract present for app builds only when no Execution Contract exists → deploy live when code changed → \`render_get_logs\` no errors → \`check_url_health\` 2xx → \`verify_user_journey\` PASS → \`verify_db_state\` PASS for DB-writing apps → \`verify_browser_ui\` PASS for user-facing/full-stack UI → \`verify_interaction_contract\` PASS for required interactions; include \`contract_flow_id\` and \`ACCEPTANCE_PROOF_EVIDENCE\` only for Product Build Contract flows → \`design_audit\` CLEAN for UI → \`design_critique\` with 0 BLOCKERs only when required. Missing required evidence = the completion gate blocks you with a specific reason. Address that reason. Do not retry the same broken step.
+
+6.1. **Finalization sweep after any late code push** — If you push code after any verification has passed, do not stop and do not keep editing unless a check fails. Run the final sweep in this order against the latest deploy: \`render_get_deploy_status\` → \`render_get_logs\` → \`check_url_health\` → \`verify_user_journey\` → \`verify_db_state\` for DB flows → \`verify_browser_ui\` for UI → \`verify_interaction_contract\` when contracts exist → \`design_audit\` → \`design_critique\` when configured → \`write_codebase_map\` → \`create_report\`. A passing sweep means finish immediately.
+
+6.2. **Critical flow contracts** - The runtime derives critical auth/signup, booking, checkout, upload, CRM/admin, inventory, AI action, and primary-feature flows from the task/lane/domain/capability signals. If such a flow exists, API-only proof is not enough: run \`verify_interaction_contract\` against the deployed UI, set \`critical_kind\` for each required flow, click the real button/form, assert visible readback, and pair DB-writing flows with \`verify_db_state\`.
+
+7. **Repair the exact failing surface** — When \`verify_browser_ui\`, \`verify_interaction_contract\`, or a canary browser journey reports a failing URL/path, fields, or buttons, patch that exact page and exact contract. Do not fix a nearby authenticated dashboard when the failure is on \`/\`; do not count navigation-only CTAs as submit buttons for a form journey. Required buttons must perform the requested action on the target page and produce visible readback, not merely link to sign-up or another page.
+
+8. **No fantasy completion** — A 200 response does NOT prove the feature works. A \`render_get_deploy_status: live\` does NOT prove the page is good. Only the gate's checklist counts.`;
+
+const ENGINEERING_INTERACTION_CONTRACT_RULES = `
+
+Additional Engineering interaction rules:
+- Plan by depth + intent + risk. Focused repairs should patch the failed route/component/table in the existing repo/service instead of repeating full canary planning.
+- \`compose_frontend_plan\` emits interaction contracts, and the runtime also derives critical-flow contracts from lane/task/domain/capability signals. User-facing full-stack tasks must prove critical button/form interactions with \`verify_interaction_contract\`: set \`critical_kind\` for each required flow, click, submit, UI readback, then DB proof when data is written. API-only proof cannot satisfy auth/signup, booking, checkout, upload, CRM/admin, inventory, AI action, or unclassified primary-feature flows.
+- When no Execution Contract is present, app builds must use the persisted Product Build Contract: \`BUILD_BRIEF_EVIDENCE\`, \`PRODUCT_BUILD_CONTRACT_EVIDENCE\`, \`PRODUCT_BUILD_CONTRACT_JSON\`, and \`PRODUCT_BUILD_CONTRACT_ARTIFACT\`. The completion gate compares exact flow ids, not counts; pass every required \`contract_flow_id\`, include realistic fields so \`CONTRACT_FIELD_PROOF\` covers required entity fields, and include \`auth_isolation\` so \`AUTH_ISOLATION_PROOF_EVIDENCE\` proves anonymous users cannot see private app data when auth_baseline/user_isolation is true.
+- Fresh canary/world-class builds stay strict; only focused repair tasks use the lighter repair lane.`;
+
+function getInvariantRulesForAgent(agentId: number): string {
+  if (agentId === 30) return `${ENGINEERING_INVARIANT_RULES}\n${ENGINEERING_INTERACTION_CONTRACT_RULES}`;
+  return '';
+}
+
+function appendSchemaDescription(schema: Record<string, unknown>, detail: string): void {
+  const current = typeof schema.description === 'string' ? schema.description.trim() : '';
+  schema.description = current ? `${current} ${detail}` : detail;
+}
+
+function normalizeGeminiSchemaType(value: unknown): string | undefined {
+  const rawTypes = Array.isArray(value) ? value : [value];
+  const preferred = rawTypes.find((entry) => typeof entry === 'string' && entry !== 'null');
+  if (typeof preferred !== 'string') return undefined;
+  if (preferred === 'integer') return 'integer';
+  if (preferred === 'number') return 'number';
+  if (preferred === 'boolean') return 'boolean';
+  if (preferred === 'array') return 'array';
+  if (preferred === 'object') return 'object';
+  return 'string';
+}
+
+/**
+ * Gemini's function-declaration Schema subset rejects several valid JSON Schema
+ * constructs used by the shared Engineering tool definitions: nullable type
+ * unions (`type: ['string', 'null']`), numeric enums, and free-form object
+ * hints. Convert those schemas at the provider boundary instead of weakening
+ * the canonical tool schemas used by Anthropic/OpenAI and runtime validators.
+ */
+export function sanitizeSchemaForGeminiTool(schema: unknown): unknown {
+  if (!schema || typeof schema !== 'object') return schema;
+  if (Array.isArray(schema)) return schema.map(sanitizeSchemaForGeminiTool);
+
+  const source = schema as Record<string, unknown>;
+  const cleaned: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(source)) {
+    if (
+      key === 'additionalProperties' ||
+      key === '$schema' ||
+      key === '$id' ||
+      key === '$defs' ||
+      key === 'definitions' ||
+      key === 'default' ||
+      key === 'examples'
+    ) {
+      continue;
+    }
+
+    if (key === 'type') {
+      const normalized = normalizeGeminiSchemaType(value);
+      if (normalized) cleaned.type = normalized;
+      if (Array.isArray(value) && value.includes('null')) {
+        appendSchemaDescription(cleaned, 'May be null at runtime; omit the field or pass the non-null value when known.');
+      }
+      continue;
+    }
+
+    if (key === 'enum') {
+      if (Array.isArray(value)) {
+        const stringValues = value.filter((entry): entry is string => typeof entry === 'string');
+        if (stringValues.length === value.length) {
+          cleaned.enum = stringValues;
+        } else if (stringValues.length > 0) {
+          cleaned.enum = stringValues;
+          appendSchemaDescription(cleaned, `Other allowed enum values at runtime: ${value.filter((entry) => typeof entry !== 'string').map(String).join(', ')}.`);
+        } else if (value.length > 0) {
+          appendSchemaDescription(cleaned, `Allowed value${value.length === 1 ? '' : 's'} at runtime: ${value.map(String).join(', ')}.`);
+        }
+      }
+      continue;
+    }
+
+    if ((key === 'anyOf' || key === 'oneOf') && Array.isArray(value)) {
+      const branch = value.find((entry) => {
+        if (!entry || typeof entry !== 'object') return false;
+        const type = (entry as Record<string, unknown>).type;
+        return type !== 'null';
+      }) ?? value[0];
+      const sanitizedBranch = sanitizeSchemaForGeminiTool(branch);
+      if (sanitizedBranch && typeof sanitizedBranch === 'object' && !Array.isArray(sanitizedBranch)) {
+        Object.assign(cleaned, sanitizedBranch);
+      }
+      continue;
+    }
+
+    if (key === 'allOf' && Array.isArray(value)) {
+      for (const branch of value) {
+        const sanitizedBranch = sanitizeSchemaForGeminiTool(branch);
+        if (sanitizedBranch && typeof sanitizedBranch === 'object' && !Array.isArray(sanitizedBranch)) {
+          Object.assign(cleaned, sanitizedBranch);
+        }
+      }
+      continue;
+    }
+
+    cleaned[key] = sanitizeSchemaForGeminiTool(value);
+  }
+
+  return cleaned;
+}
+
+function designCritiqueHasExplicitBlocker(result: string): boolean {
+  return /\[BLOCKER\]/i.test(result)
+    || /found\s+(?!0\b)\d+\s+BLOCKER\b/i.test(result)
+    || /\b(?!0\b)\d+\s+blockers?\b/i.test(result)
+    || /BLOCKER findings prevent task completion/i.test(result);
+}
+
+function designCritiqueHasZeroBlockers(result: string): boolean {
+  return /design_critique CLEAN/i.test(result)
+    || /\b0\s+blockers?\b/i.test(result)
+    || /\b0\s+BLOCKER\b/i.test(result)
+    || /No blockers/i.test(result);
+}
+
+// Centralized UI-task classifier used by:
+//   - The stack-lock check (Express forbidden on UI tasks)
+//   - The completion gate's design_audit + design_critique enforcement
+//   - The verifier (when we wire it through)
+//
+// Three signals, OR'd:
+//   1. title/description matches the UI keyword list
+//   2. agent forked the Next.js skeleton during the run
+//   3. agent already called design_audit or design_critique (intent signal)
+// Short-circuit: a backend-only marker in the title (webhook/cron/migration/
+// scheduler/etc) wins over any UI signal so e.g. "webhook handler with
+// dashboard log" classifies as backend.
+//
+// Expanded keyword list (audit P1.4, 2026-05-12) — first-pass list missed
+// portal, admin panel, CRM, booking, client workspace, login, settings,
+// account, blog, marketing page, tool, app, etc.
+const UI_KEYWORDS_RE = /\b(landing|hero|chat ui|chat panel|dashboard|onboarding|signup|sign[- ]?in|login|register|registration|portal|admin panel|admin ui|crm|booking|reserv(?:e|ation)|client workspace|workspace|home page|website|frontend|front[- ]?end|page|ui|user interface|user facing|public site|marketing|pricing page|blog|account page|profile page|settings page|preferences|checkout|cart|product page|feature page|tool|app(?!ointment)|interface)\b/i;
+const BACKEND_KEYWORDS_RE = /\b(webhook|cron|worker|api[- ]?only|backend[- ]?only|json api|background job|scheduler|migration|etl|pipeline|nightly job|batch job|ingestion|server[- ]?side[- ]?only|headless service|daemon)\b/i;
+const UI_CAPABILITY_IDS = new Set(['dashboard', 'admin_workflow', 'marketplace', 'booking', 'payments_stripe', 'analytics', 'realtime']);
+const COMPLETION_LOG_TRIGGER_TOOLS = new Set([
+  'github_push_file',
+  'github_create_commit',
+  'render_create_service',
+  'render_deploy',
+  'render_set_env_vars',
+  'deploy_to_render',
+  'create_instance',
+]);
+const COMPLETION_TRIGGER_FAILURE_RE = /\b(error|failed|failure|missing required|invalid|blocked|skipped|not configured|not found)\b/i;
+const RENDER_LOG_ERROR_RE = /\b(level=error|level=fatal|FATAL|ECONNREFUSED|Cannot find module|SQLSTATE|permission denied|EACCES|Error: |\s+Error:|UnhandledPromiseRejection)\b/i;
+const PLANNING_TOOL_FAILURE_RE = /^(error:|unknown engineering tool|failed to|missing required input|invalid input)/i;
+const RENDER_INFRASTRUCTURE_BLOCKER_RE = /(?:RENDER_INFRASTRUCTURE_BLOCKER:\s*pipeline_minutes_exhausted|RENDER_DEPLOY_BLOCKED_RECENT_PIPELINE_MINUTES_EXHAUSTED)/i;
+const RENDER_INFRASTRUCTURE_BLOCKER_SOURCE_TOOLS = new Set([
+  'render_deploy',
+  'render_get_deploy_status',
+  'render_get_logs',
+]);
+const RENDER_INFRASTRUCTURE_BLOCKER_GATED_TOOLS = new Set([
+  'github_push_file',
+  'github_create_commit',
+  'github_delete_file',
+  'github_create_branch',
+  'github_create_pr',
+  'run_migration',
+  'run_drizzle_push',
+  'render_create_service',
+  'render_deploy',
+  'render_get_deploy_status',
+  'render_get_logs',
+  'render_set_env_vars',
+  'render_update_service_config',
+  'render_rollback',
+  'attach_custom_domain',
+  'verify_custom_domain',
+  'check_url_health',
+  'verify_user_journey',
+  'verify_db_state',
+  'verify_browser_ui',
+  'design_audit',
+  'design_critique',
+]);
+const RENDER_INFRASTRUCTURE_BLOCKER_CODE_REPAIR_TOOLS = new Set([
+  'github_push_file',
+  'github_create_commit',
+]);
+const CUSTOM_DOMAIN_FAILURE_RE = /\b(Failed to attach custom domain|custom domain quota|Hobby Tier is limited to \d+ custom domains?|No custom domain configured|Domain ".*" is not yet verified)\b/i;
+const SERVICE_PROVISION_SUCCESS_RE = /\b(Render service created!|Instance ready!|Service ID:\s*srv-[a-z0-9]+|App URL:\s*https?:\/\/\S+\.onrender\.com)\b/i;
+const SERVICE_PROVISION_TOOLS = new Set(['create_instance', 'render_create_service']);
+const SKILL_LIST_TOOL = 'list_skills';
+
+function qualityResultHasHighFinding(result: string): boolean {
+  if (/CODE REVIEW PASS|STATIC (?:CODE )?SCAN PASS|high\s*=\s*0|0\s+HIGH|high=0/i.test(result)) return false;
+  return /\bHIGH\b|high\s*=\s*[1-9]|HIGH-severity|high severity/i.test(result);
+}
+
+function hasUnaddressedQualityHighAfterBlocker(
+  logEntries: Record<string, unknown>[],
+  blockerIndex: number,
+): boolean {
+  let lastHighAt = -1;
+  let lastCleanAt = -1;
+  let lastCodeRepairAt = -1;
+  for (let i = blockerIndex + 1; i < logEntries.length; i++) {
+    const tool = typeof logEntries[i].tool === 'string' ? logEntries[i].tool as string : '';
+    const result = typeof logEntries[i].result === 'string' ? logEntries[i].result as string : '';
+    if (tool === 'static_code_scan' || tool === 'review_pushed_code') {
+      if (qualityResultHasHighFinding(result)) {
+        lastHighAt = i;
+      } else if (/CODE REVIEW PASS|STATIC (?:CODE )?SCAN PASS|high\s*=\s*0|0\s+HIGH|Clean/i.test(result)) {
+        lastCleanAt = i;
+      }
+    }
+    if (tool === 'github_push_file' || tool === 'github_create_commit') {
+      lastCodeRepairAt = i;
+    }
+  }
+  return lastHighAt > Math.max(lastCleanAt, lastCodeRepairAt);
+}
+
+function didTriggerDeployOrPush(tool: string, result: string): boolean {
+  return COMPLETION_LOG_TRIGGER_TOOLS.has(tool) && !COMPLETION_TRIGGER_FAILURE_RE.test(result);
+}
+
+function didPlanningToolSucceed(result: string): boolean {
+  return !PLANNING_TOOL_FAILURE_RE.test(result.trim());
+}
+
+function latestRenderInfrastructureBlocker(
+  logEntries: Record<string, unknown>[],
+): { index: number; detail: string } | null {
+  for (let i = logEntries.length - 1; i >= 0; i--) {
+    const tool = typeof logEntries[i].tool === 'string' ? logEntries[i].tool as string : '';
+    if (!RENDER_INFRASTRUCTURE_BLOCKER_SOURCE_TOOLS.has(tool)) continue;
+    const result = typeof logEntries[i].result === 'string' ? logEntries[i].result as string : '';
+    if (RENDER_INFRASTRUCTURE_BLOCKER_RE.test(result)) {
+      return { index: i, detail: result.slice(0, 500) };
+    }
+  }
+  return null;
+}
+
+export function engineeringInfrastructureBlockerGate(
+  toolName: string,
+  logEntries: Record<string, unknown>[],
+): string | null {
+  if (!RENDER_INFRASTRUCTURE_BLOCKER_GATED_TOOLS.has(toolName)) return null;
+  const blocker = latestRenderInfrastructureBlocker(logEntries);
+  if (!blocker) return null;
+  if (
+    RENDER_INFRASTRUCTURE_BLOCKER_CODE_REPAIR_TOOLS.has(toolName) &&
+    hasUnaddressedQualityHighAfterBlocker(logEntries, blocker.index)
+  ) {
+    return null;
+  }
+  return [
+    `RENDER_INFRASTRUCTURE_BLOCKER_GATE: blocked \`${toolName}\` because an earlier Render deploy/status/log returned \`pipeline_minutes_exhausted\`.`,
+    'This is an external Render account quota/build-minutes blocker before app build logs exist, not an app-code bug.',
+    'Stop code/config/deploy/verification churn. Do not change package.json, render.yaml, build/start commands, env vars, or recreate services for this signal.',
+    'Allowed next steps: run static_code_scan/review_pushed_code if they have not run after the latest code push, fix any HIGH findings with a code-only commit, then write_codebase_map and create_report with the exact blocker and rerun instructions.',
+    `Blocker detail: ${blocker.detail}`,
+  ].join('\n');
+}
+
+export function isUserFacingUiTask(
+  task: { title?: string; description?: string | null } | undefined,
+  logEntries: Record<string, unknown>[],
+): boolean {
+  const taskText = task ? `${task.title ?? ''} ${stripPlanningHarnessMetadata(task.description)}` : '';
+  if (BACKEND_KEYWORDS_RE.test(taskText)) return false;
+  if (UI_KEYWORDS_RE.test(taskText)) return true;
+  for (const entry of logEntries) {
+    const tool = entry.tool as string | undefined;
+    if (tool === 'github_fork_skeleton') return true;
+    if (tool === 'design_audit' || tool === 'design_critique') return true;
+  }
+  return false;
+}
+
+const CAPABILITY_BUILD_KEYWORDS_RE = /\b(build|create|ship|launch|implement|add|extend|full[- ]?stack|mvp|app|portal|dashboard|marketplace|booking|crm|admin|workflow|payment|billing|upload|ai|rag|search|analytics|auth|login|integration)\b/i;
+const CAPABILITY_SKIP_KEYWORDS_RE = /\b(verify only|audit only|status only|read-only|investigate only|explain only|summarize only|report status|no code change)\b/i;
+const REFERENCE_RETRIEVAL_KEYWORDS_RE = /\b(frontend|front[- ]?end|ui|user[- ]?facing|dashboard|admin|portal|crm|marketplace|listing|search|booking|calendar|slot|upload|document|approval|analytics|reporting|billing|pricing|checkout|ai|rag|chat|history)\b/i;
+
+export function isCapabilityPlanningTask(
+  task: { title?: string; description?: string | null; tag?: string | null } | undefined,
+  logEntries: Record<string, unknown>[],
+): boolean {
+  const taskText = task ? `${task.title ?? ''} ${stripPlanningHarnessMetadata(task.description)} ${task.tag ?? ''}` : '';
+  if (CAPABILITY_SKIP_KEYWORDS_RE.test(taskText)) return false;
+  if (CAPABILITY_BUILD_KEYWORDS_RE.test(taskText)) return true;
+  for (const entry of logEntries) {
+    const tool = entry.tool as string | undefined;
+    if (
+      tool === 'match_capabilities' ||
+      tool === 'compose_app_architecture' ||
+      tool === 'create_instance' ||
+      tool === 'github_fork_skeleton' ||
+      tool === 'fork_express_skeleton'
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function isReferenceRetrievalTask(
+  task: { title?: string; description?: string | null; tag?: string | null } | undefined,
+  logEntries: Record<string, unknown>[],
+): boolean {
+  const taskText = task ? `${task.title ?? ''} ${stripPlanningHarnessMetadata(task.description)} ${task.tag ?? ''}` : '';
+  if (CAPABILITY_SKIP_KEYWORDS_RE.test(taskText)) return false;
+  if (BACKEND_KEYWORDS_RE.test(taskText) && !UI_KEYWORDS_RE.test(taskText)) return false;
+  if (REFERENCE_RETRIEVAL_KEYWORDS_RE.test(taskText)) return true;
+  for (const entry of logEntries) {
+    const tool = entry.tool as string | undefined;
+    if (
+      tool === 'github_fork_skeleton' ||
+      tool === 'match_design_system' ||
+      tool === 'get_design_system' ||
+      tool === 'design_audit' ||
+      tool === 'design_critique'
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+const DB_STATE_REQUIRED_CAPABILITIES = new Set([
+  'auth',
+  'roles',
+  'crud',
+  'dashboard',
+  'payments_stripe',
+  'uploads_storage',
+  'email_notifications',
+  'ai_openai',
+  'rag_search',
+  'search',
+  'admin_workflow',
+  'analytics',
+  'realtime',
+  'cron_jobs',
+  'external_api',
+  'marketplace',
+  'booking',
+]);
+const DB_STATE_KEYWORDS_RE = /\b(full[- ]?stack|database|postgres|db|auth|login|sign[- ]?up|account|role|crud|upload|document|payment|billing|checkout|subscription|booking|marketplace|admin|approval|dashboard|analytics|ai|rag|search|history|notification|email|webhook|integration)\b/i;
+
+function isDbStateRequiredTask(
+  task: { title?: string; description?: string | null; tag?: string | null } | undefined,
+  planningEvidence: Pick<EngineeringPlanningEvidence, 'selectedCapabilities' | 'architectureCapabilities' | 'taskIntentLane' | 'interactionContractDbWrites'>,
+): boolean {
+  const taskText = task ? `${task.title ?? ''} ${stripPlanningHarnessMetadata(task.description)} ${task.tag ?? ''}` : '';
+  if (
+    planningEvidence.taskIntentLane === 'repair' &&
+    planningEvidence.interactionContractDbWrites.length === 0 &&
+    /\b(contrast|button|dropdown|select|copy|spacing|style|visual|typography|layout|color|font)\b/i.test(taskText) &&
+    !/\b(api|endpoint|submit|save|create|update|delete|insert|write|db|database|postgres|schema|form submission)\b/i.test(taskText)
+  ) {
+    return false;
+  }
+  const plannedCapabilities = uniqueStrings([
+    ...planningEvidence.selectedCapabilities,
+    ...planningEvidence.architectureCapabilities,
+  ]);
+  if (plannedCapabilities.some((capability) => DB_STATE_REQUIRED_CAPABILITIES.has(capability))) {
+    return true;
+  }
+  return DB_STATE_KEYWORDS_RE.test(taskText);
+}
+
+export type EngineeringPlanningEvidence = {
+  taskIntent: TaskIntent;
+  taskIntentLane: 'build' | 'extend' | 'repair' | 'verify';
+  taskIntentReasons: string[];
+  taskIntentEvidencePresent: boolean;
+  planningDepth: PlanningDepth;
+  planningDepthReasons: string[];
+  planningRiskSignals: string[];
+  planningDepthEvidencePresent: boolean;
+  domainMatched: boolean;
+  selectedDomains: string[];
+  loadedDomainPacks: string[];
+  missingDomainPacks: string[];
+  adHocDomainComposed: boolean;
+  capabilityMatched: boolean;
+  selectedCapabilities: string[];
+  requiredCapabilities: string[];
+  optionalCapabilities: string[];
+  loadedCapabilityPacks: string[];
+  missingCapabilityPacks: string[];
+  referenceMatched: boolean;
+  selectedReferencePatterns: string[];
+  loadedReferencePatterns: string[];
+  componentExamplesRetrieved: boolean;
+  designSystemMatched: boolean;
+  designSystemLoaded: boolean;
+  selectedDesignSystem: string | null;
+  loadedDesignSystem: string | null;
+  frontendPlanComposed: boolean;
+  frontendPlanUiType: string | null;
+  frontendPlanPatterns: string[];
+  frontendPlanUiReferences: string[];
+  interactionContractComposed: boolean;
+  interactionContractCount: number;
+  interactionContractDbWrites: string[];
+  interactionProofPassed: boolean;
+  interactionProofPassedCount: number;
+  interactionProofFailedCount: number;
+  buildBriefPresent: boolean;
+  productContractPresent: boolean;
+  productContractFlowCount: number;
+  productContractRequiredFlowIds: string[];
+  productContractMissingFlowIds: string[];
+  productContractAuthBaseline: boolean;
+  productContractUserIsolation: boolean;
+  productContractArtifactPresent: boolean;
+  productContractFieldRequirements: ContractFieldRequirement[];
+  productContractMissingFieldProofs: ContractFieldRequirement[];
+  acceptanceProofPresent: boolean;
+  acceptanceProofPassedCount: number;
+  acceptanceProofFailedCount: number;
+  acceptanceProofContractFlowCount: number;
+  acceptanceProofPassedFlowIds: string[];
+  acceptanceProofFailedFlowIds: string[];
+  authIsolationProofPresent: boolean;
+  authIsolationProofPassed: boolean;
+  authIsolationProofFailedCount: number;
+  engineeringLaneRequiredRoles: EngineeringLaneRole[];
+  engineeringLaneOutputs: EngineeringLaneOutput[];
+  blockedEngineeringLaneOutputs: EngineeringLaneOutput[];
+  architectureComposed: boolean;
+  architectureCapabilities: string[];
+  architectureReferencePatterns: string[];
+  architectureDesignSystem: string | null;
+  lastPlanningDepthAt: number;
+  lastDomainMatchAt: number;
+  lastDomainPackAt: number;
+  lastCapabilityMatchAt: number;
+  lastCapabilityPackAt: number;
+  lastReferencePatternAt: number;
+  lastComponentExamplesAt: number;
+  lastDesignSystemLoadedAt: number;
+  lastFrontendPlanAt: number;
+  lastInteractionContractAt: number;
+  lastInteractionProofAt: number;
+  lastBuildBriefAt: number;
+  lastProductContractAt: number;
+  lastAcceptanceProofAt: number;
+  lastAuthIsolationProofAt: number;
+  lastEngineeringLaneRequirementsAt: number;
+  lastArchitecturePlanAt: number;
+};
+
+const PRE_CODE_PLANNING_GATED_TOOLS = new Set([
+  'create_instance',
+  'github_create_repo',
+  'github_fork_skeleton',
+  'fork_express_skeleton',
+  'github_push_file',
+  'github_delete_file',
+  'github_create_commit',
+  'github_create_branch',
+  'github_create_pr',
+  'run_migration',
+  'run_drizzle_push',
+  'render_create_service',
+  'render_deploy',
+  'render_set_env_vars',
+  'render_update_service_config',
+]);
+
+const UI_CRAFT_REFERENCE_IDS = new Set([
+  'open-codesign-design-agent-patterns',
+  'onlook-visual-repair-patterns',
+  'radix-accessibility-primitives',
+  'tremor-analytics-dashboard-patterns',
+  'dub-saas-dashboard-patterns',
+  'midday-business-ops-patterns',
+  'twenty-crm-workspace-patterns',
+]);
+
+function hasUiCraftReference(ids: string[]): boolean {
+  return ids.some((id) => UI_CRAFT_REFERENCE_IDS.has(id));
+}
+
+function markerLine(result: string, marker: string): string | null {
+  return result.split(/\r?\n/).find((line) => line.startsWith(marker)) ?? null;
+}
+
+function markerValue(line: string | null, key: string): string | null {
+  if (!line) return null;
+  const match = line.match(new RegExp(`(?:^|\\s)${key}=([^\\s]+)`));
+  return match?.[1] ?? null;
+}
+
+function csvMarkerValues(line: string | null, key: string): string[] {
+  const value = markerValue(line, key);
+  if (!value || value === 'none') return [];
+  return value.split(',').map((item) => item.trim()).filter(Boolean);
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+function taskPlanningText(task?: { title?: string; description?: string | null; tag?: string | null }): string {
+  return `${task?.title ?? ''}\n${stripPlanningHarnessMetadata(task?.description)}\n${task?.tag ?? ''}`.toLowerCase();
+}
+
+function isExistingAppExtensionTask(task?: { title?: string; description?: string | null; tag?: string | null }): boolean {
+  const text = taskPlanningText(task);
+  return (
+    /\bexisting-app[-\s]+extension\b/.test(text) ||
+    /\bexisting deployed app\b/.test(text) ||
+    /\bextend(?:ing)?\s+(?:the\s+)?existing\s+app\b/.test(text) ||
+    /\b(update|debug|extend|extension)\b[\s\S]{0,120}\bexisting\s+(?:repo|app|codebase)\b/.test(text)
+  );
+}
+
+function hasClearDomainTaskSignals(
+  task: { title?: string; description?: string | null; tag?: string | null } | undefined,
+  evidence?: Pick<EngineeringPlanningEvidence, 'selectedDomains' | 'loadedDomainPacks' | 'domainMatched' | 'adHocDomainComposed'>,
+): boolean {
+  if ((evidence?.selectedDomains.length ?? 0) > 0 || (evidence?.loadedDomainPacks.length ?? 0) > 0 || evidence?.domainMatched || evidence?.adHocDomainComposed) {
+    return true;
+  }
+  return hasClearDomainSignals({
+    title: task?.title,
+    description: stripPlanningHarnessMetadata(task?.description),
+    productContext: task?.tag,
+  });
+}
+
+function successfulToolResult(logEntries: Record<string, unknown>[], toolName: string): string | null {
+  for (let i = logEntries.length - 1; i >= 0; i--) {
+    const entry = logEntries[i];
+    if (entry.tool !== toolName) continue;
+    const result = typeof entry.result === 'string' ? entry.result : '';
+    if (result && didPlanningToolSucceed(result)) return result;
+  }
+  return null;
+}
+
+function isExplicitTeardownTask(task?: { title?: string; description?: string | null; tag?: string | null }): boolean {
+  const text = taskPlanningText(task);
+  return /\b(delete|remove|tear\s*down|teardown|decommission|destroy|cleanup)\b[\s\S]{0,80}\b(render\s+service|service|deployment|app)\b/i.test(text);
+}
+
+function hasServiceProvisionEvidence(logEntries: Record<string, unknown>[]): boolean {
+  return logEntries.some((entry) => {
+    const tool = typeof entry.tool === 'string' ? entry.tool : '';
+    if (!SERVICE_PROVISION_TOOLS.has(tool)) return false;
+    const result = typeof entry.result === 'string' ? entry.result : '';
+    return SERVICE_PROVISION_SUCCESS_RE.test(result) && !COMPLETION_TRIGGER_FAILURE_RE.test(result);
+  });
+}
+
+function hasCustomDomainFailureEvidence(logEntries: Record<string, unknown>[]): boolean {
+  return logEntries.some((entry) => {
+    const tool = typeof entry.tool === 'string' ? entry.tool : '';
+    if (tool !== 'attach_custom_domain' && tool !== 'verify_custom_domain' && tool !== 'create_instance' && tool !== 'render_create_service') {
+      return false;
+    }
+    const result = typeof entry.result === 'string' ? entry.result : '';
+    return CUSTOM_DOMAIN_FAILURE_RE.test(result);
+  });
+}
+
+export function engineeringDeployChurnGate(
+  toolName: string,
+  logEntries: Record<string, unknown>[],
+  task?: { title?: string; description?: string | null; tag?: string | null },
+): string | null {
+  const teardownTask = isExplicitTeardownTask(task);
+
+  if (toolName === 'render_delete_service' && !teardownTask) {
+    return [
+      'DEPLOY_CHURN_GATE: `render_delete_service` is blocked for normal Engineering build/repair/debug tasks.',
+      'Do not delete a working or partially working Render service to fix app bugs, custom-domain quota, DB errors, env vars, 404s, or UI issues.',
+      'Use `github_create_commit`, `render_deploy`, `render_update_service_config`, `render_set_env_vars`, or `render_rollback` against the existing service instead. If the only blocker is custom-domain quota, use the Render-assigned `.onrender.com` URL and record the custom-domain blocker as non-fatal.',
+    ].join('\n');
+  }
+
+  if (toolName === 'create_instance' && hasServiceProvisionEvidence(logEntries)) {
+    return [
+      'DEPLOY_CHURN_GATE: this task already provisioned a repo/DB/Render service. Do not call `create_instance` again.',
+      'Continue by editing the existing repo and redeploying the existing service. Recreating the instance loses deploy history, can reset the database, and turns a working app into a starter shell.',
+    ].join('\n');
+  }
+
+  if ((toolName === 'attach_custom_domain' || toolName === 'verify_custom_domain') && hasCustomDomainFailureEvidence(logEntries)) {
+    return [
+      'DEPLOY_CHURN_GATE: custom-domain attachment/verification already failed in this task.',
+      'Stop retrying custom-domain tools. Use the Render-assigned `.onrender.com` URL for health checks, browser QA, user journeys, design audit, design critique, codebase map, and final report. Record custom-domain quota/SSL propagation as non-fatal.',
+    ].join('\n');
+  }
+
+  return null;
+}
+
+export function engineeringSkillLoopGate(
+  toolName: string,
+  logEntries: Record<string, unknown>[],
+  task?: { title?: string; description?: string | null; tag?: string | null },
+): string | null {
+  if (toolName !== SKILL_LIST_TOOL) return null;
+  if (!isCapabilityPlanningTask(task, logEntries) && !isReferenceRetrievalTask(task, logEntries)) return null;
+
+  const listSkillCalls = logEntries.filter((entry) => entry.tool === SKILL_LIST_TOOL).length;
+  if (listSkillCalls < 1) return null;
+
+  const evidence = engineeringPlanningEvidence(logEntries, task);
+  const needsDomain = hasClearDomainTaskSignals(task, evidence);
+  const needsFrontend = isUserFacingUiTask(task, logEntries) || planningEvidenceImpliesUi(evidence);
+  const nextSteps: string[] = ['`get_company_tech` if not already called'];
+  if (needsDomain && !evidence.domainMatched && !evidence.adHocDomainComposed) {
+    nextSteps.push('`match_domain_app` or `compose_ad_hoc_domain`');
+  }
+  if (!evidence.capabilityMatched) nextSteps.push('`match_capabilities`');
+  if (needsFrontend && !evidence.designSystemMatched) nextSteps.push('`match_design_system`');
+  if (needsFrontend && !evidence.frontendPlanComposed) nextSteps.push('`compose_frontend_plan`');
+  if (!evidence.architectureComposed) nextSteps.push('`compose_app_architecture` after planning evidence is complete');
+
+  return [
+    'SKILL_DISCOVERY_GATE: `list_skills` already ran for this Engineering build task.',
+    'Do not loop on skill discovery. Read one specific relevant skill if needed, then move into deterministic planning.',
+    `Next required planning step(s): ${nextSteps.join(' -> ')}.`,
+  ].join('\n');
+}
+
+function ragEmbeddingGuidance(env: { AI_GATEWAY_URL?: string } = { AI_GATEWAY_URL: process.env.AI_GATEWAY_URL }): {
+  gateway: 'google-openai-compatible' | 'openai-compatible';
+  model: string;
+  dimensions: number;
+} {
+  void env;
+  return { gateway: 'google-openai-compatible', model: 'gemini-embedding-001', dimensions: 3072 };
+}
+
+function hasUnsupportedRagEmbeddingPlan(result: string | null): boolean {
+  if (!result) return false;
+  const guidance = ragEmbeddingGuidance();
+  const scanText = result
+    .replace(/For RAG in founder\/user apps,[\s\S]{0,900}?(?:indexed representation\.|new founder apps\.|$)/gi, '')
+    .replace(/fixed Gemini embedding contract:[\s\S]{0,700}?(?:indexed representation\.|new founder apps\.|$)/gi, '')
+    .replace(/\b(?:Never|Do not|Don't)\s+(?:plan\s+|use\s+|create\s+|hardcode\s+)?[^.\n]*(?:text-embedding-004|text-embedding-3-small|Gemini\s+embedContent|vector\s*\(?\s*(?:768|1536)\s*\)?|(?:768|1536)[-\s]?dim)[^.\n]*(?:\.|\n|$)/gi, '')
+    .replace(/\bcommon failures?:[^.\n]*(?:text-embedding-004|text-embedding-3-small|vector\s*\(?\s*(?:768|1536)\s*\)?|(?:768|1536)[-\s]?dim)[^.\n]*(?:\.|\n|$)/gi, '');
+  const correctiveReference = /\b(hardcoded|currently|existing|legacy|old|prior|mismatch|wrong|not available|unavailable|fallback|do not use|don't use|replace|migrate|needs gemini|use gemini|disable embeddings|skip embeddings|without embeddings|vectorless|ilike)\b/i.test(scanText);
+  const plannedBadUsage = /\b(use|uses|using|model|embed_model|selected|generate|write|store|create|insert|update)\b[\s\S]{0,120}\b(text-embedding-004|text-embedding-3-small|gemini-embedding(?:-[a-z0-9]+)*|vector\s*\(?\s*(?:768|1536|3072)\s*\)?|(?:768|1536|3072)[-\s]?dim)\b/i.test(scanText);
+  if (/\btext-embedding-004\b/i.test(scanText) ||
+    /\bGemini\s+embedContent\b/i.test(scanText) ||
+    /\bvector\s*\(?\s*768\s*\)?\b/i.test(scanText) ||
+    /\b768[-\s]?dim(?:s|ensional)?\b/i.test(scanText)) {
+    if (correctiveReference && !plannedBadUsage) return false;
+    return true;
+  }
+  if (guidance.gateway === 'google-openai-compatible') {
+    const bad = /\btext-embedding-3-small\b/i.test(scanText) ||
+      /\bvector\s*\(?\s*1536\s*\)?\b/i.test(scanText) ||
+      /\b1536[-\s]?dim(?:s|ensional)?\b/i.test(scanText);
+    return bad && (!correctiveReference || plannedBadUsage);
+  }
+  const bad = /\bgemini-embedding(?:-[a-z0-9]+)*\b/i.test(scanText) ||
+    /\bvector\s*\(?\s*3072\s*\)?\b/i.test(scanText) ||
+    /\b3072[-\s]?dim(?:s|ensional)?\b/i.test(scanText);
+  return bad && (!correctiveReference || plannedBadUsage);
+}
+
+function planningEvidenceImpliesUi(evidence: Pick<EngineeringPlanningEvidence, 'selectedCapabilities' | 'requiredCapabilities' | 'architectureCapabilities'>): boolean {
+  const capabilityIds = evidence.requiredCapabilities.length > 0
+    ? [...evidence.requiredCapabilities, ...evidence.architectureCapabilities]
+    : [...evidence.selectedCapabilities, ...evidence.architectureCapabilities];
+  return capabilityIds
+    .some((id) => UI_CAPABILITY_IDS.has(id));
+}
+
+function isFullPlanningDepth(depth: PlanningDepth): boolean {
+  return depth === 'mixed_complex_app' || depth === 'canary_world_class';
+}
+
+function requiresDomainPlanningForDepth(
+  depth: PlanningDepth,
+  isUiTask: boolean,
+  hasDomainSignals: boolean,
+): boolean {
+  if (!isUiTask) return false;
+  if (depth === 'canary_world_class' || depth === 'mixed_complex_app') return true;
+  if (depth === 'standard_app') return hasDomainSignals;
+  return false;
+}
+
+function requiresFrontendPlanForDepth(depth: PlanningDepth, isUiTask: boolean): boolean {
+  if (!isUiTask) return false;
+  return depth === 'standard_app' || depth === 'mixed_complex_app' || depth === 'canary_world_class';
+}
+
+function requiresReferencesForDepth(depth: PlanningDepth, needsReferences: boolean): boolean {
+  if (depth === 'canary_world_class' || depth === 'mixed_complex_app') return true;
+  if (depth === 'standard_app') return needsReferences;
+  return false;
+}
+
+function isFocusedRepairIntent(intent: TaskIntent): boolean {
+  return intent === 'focused_repair' ||
+    intent === 'api_contract_fix' ||
+    intent === 'auth_security_fix' ||
+    intent === 'deployment_fix' ||
+    intent === 'ui_polish';
+}
+
+function isStrictReplayRepairTask(task?: { title?: string; description?: string | null; tag?: string | null }): boolean {
+  const text = taskPlanningText(task);
+  return /\b(canary-render-engineering|strict replay|replay contract|canary replay|missingcriticaltools)\b/i.test(text);
+}
+
+function isInteractionProofRequired(
+  evidence: Pick<EngineeringPlanningEvidence,
+    'interactionContractComposed' |
+    'interactionContractCount' |
+    'interactionContractDbWrites' |
+    'taskIntent'
+  >,
+  isUiTask: boolean,
+): boolean {
+  if (!isUiTask) return false;
+  if (evidence.taskIntent === 'ui_polish' || evidence.taskIntent === 'deployment_fix') return false;
+  return evidence.interactionContractComposed &&
+    (evidence.interactionContractCount > 0 || evidence.interactionContractDbWrites.length > 0);
+}
+
+function isDesignCritiqueRequiredForTask(
+  task: { title?: string; description?: string | null; tag?: string | null } | undefined,
+  evidence: Pick<EngineeringPlanningEvidence, 'planningDepth' | 'taskIntentLane' | 'taskIntent'>,
+  hadCritiqueBlocker = false,
+): boolean {
+  if (hadCritiqueBlocker) return true;
+  const lanePolicy = getTaskLanePolicy(task, {
+    planningDepth: evidence.planningDepth,
+    taskIntent: evidence.taskIntent,
+  });
+  if (!lanePolicy.completion.requireDesignCritique) {
+    const text = taskPlanningText(task);
+    return /\b(design_critique|vision critique|critique the design|visual critique)\b/i.test(text);
+  }
+  if (evidence.planningDepth === 'canary_world_class' || evidence.planningDepth === 'mixed_complex_app') return true;
+  if (evidence.taskIntentLane === 'build' && evidence.taskIntent === 'new_app_build') return true;
+
+  const text = taskPlanningText(task);
+  return /\b(landing|marketing|homepage|hero|brand|visual redesign|redesign|design system|theme|typography|font|layout|responsive|mobile|polish)\b/i.test(text);
+}
+
+function fallbackCapabilityIds(result: string): string[] {
+  const ids: string[] = [];
+  const regex = /^\s*\d+\.\s+([a-z][a-z0-9_]+)/gim;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(result))) ids.push(match[1]);
+  return uniqueStrings(ids);
+}
+
+function fallbackReferencePatternIds(result: string): string[] {
+  const ids: string[] = [];
+  const regex = /^\s*\d+\.\s+([a-z0-9-]+)\s+\(/gim;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(result))) ids.push(match[1]);
+  return uniqueStrings(ids);
+}
+
+export function engineeringPlanningEvidence(
+  logEntries: Record<string, unknown>[],
+  task?: { title?: string; description?: string | null; tag?: string | null },
+): EngineeringPlanningEvidence {
+  const selectedDomains: string[] = [];
+  const loadedDomainPacks: string[] = [];
+  const selectedCapabilities: string[] = [];
+  const requiredCapabilities: string[] = [];
+  const optionalCapabilities: string[] = [];
+  const loadedCapabilityPacks: string[] = [];
+  const selectedReferencePatterns: string[] = [];
+  const loadedReferencePatterns: string[] = [];
+  const architectureCapabilities: string[] = [];
+  const architectureReferencePatterns: string[] = [];
+  let architectureDesignSystem: string | null = null;
+  let domainMatched = false;
+  let adHocDomainComposed = false;
+  let capabilityMatched = false;
+  let referenceMatched = false;
+  let componentExamplesRetrieved = false;
+  let designSystemMatched = false;
+  let designSystemLoaded = false;
+  let selectedDesignSystem: string | null = null;
+  let loadedDesignSystem: string | null = null;
+  let frontendPlanComposed = false;
+  let frontendPlanUiType: string | null = null;
+  const frontendPlanPatterns: string[] = [];
+  const frontendPlanUiReferences: string[] = [];
+  let markerTaskIntent: TaskIntent | null = null;
+  let markerTaskIntentLane: 'build' | 'extend' | 'repair' | 'verify' | null = null;
+  const markerTaskIntentReasons: string[] = [];
+  let taskIntentEvidencePresent = false;
+  let markerPlanningDepth: PlanningDepth | null = null;
+  const markerPlanningReasons: string[] = [];
+  const markerPlanningRiskSignals: string[] = [];
+  let planningDepthEvidencePresent = false;
+  let interactionContractComposed = false;
+  let interactionContractCount = 0;
+  const interactionContractDbWrites: string[] = [];
+  let interactionProofPassed = false;
+  let interactionProofPassedCount = 0;
+  let interactionProofFailedCount = 0;
+  let buildBriefPresent = false;
+  let productContractPresent = false;
+  let productContractFlowCount = 0;
+  let productContractRequiredFlowIds: string[] = [];
+  let productContractAuthBaseline = false;
+  let productContractUserIsolation = false;
+  let productContractArtifactPresent = false;
+  let productContractFieldRequirements: ContractFieldRequirement[] = [];
+  let acceptanceProofPresent = false;
+  let acceptanceProofPassedCount = 0;
+  let acceptanceProofFailedCount = 0;
+  let acceptanceProofContractFlowCount = 0;
+  const contractFlowProofById = new Map<string, ContractFlowProofEvidence>();
+  const contractFieldProofs: ContractFieldProofEvidence[] = [];
+  let authIsolationProofPresent = false;
+  let authIsolationProofPassed = false;
+  let authIsolationProofFailedCount = 0;
+  let engineeringLaneRequiredRoles: EngineeringLaneRole[] = [];
+  let architectureComposed = false;
+  let lastPlanningDepthAt = -1;
+  let lastDomainMatchAt = -1;
+  let lastDomainPackAt = -1;
+  let lastCapabilityMatchAt = -1;
+  let lastCapabilityPackAt = -1;
+  let lastReferencePatternAt = -1;
+  let lastComponentExamplesAt = -1;
+  let lastDesignSystemLoadedAt = -1;
+  let lastFrontendPlanAt = -1;
+  let lastInteractionContractAt = -1;
+  let lastInteractionProofAt = -1;
+  let lastBuildBriefAt = -1;
+  let lastProductContractAt = -1;
+  let lastAcceptanceProofAt = -1;
+  let lastAuthIsolationProofAt = -1;
+  let lastEngineeringLaneRequirementsAt = -1;
+  let lastArchitecturePlanAt = -1;
+
+  for (let i = 0; i < logEntries.length; i++) {
+    const entry = logEntries[i];
+    const tool = entry.tool as string | undefined;
+    const result = entry.result as string | undefined;
+    if (!tool || !result || !didPlanningToolSucceed(result)) continue;
+
+    const planningDepthLine = markerLine(result, 'PLANNING_DEPTH_EVIDENCE');
+    if (planningDepthLine) {
+      const parsedDepth = parsePlanningDepth(markerValue(planningDepthLine, 'depth'));
+      if (parsedDepth) markerPlanningDepth = markerPlanningDepth ? maxPlanningDepth(markerPlanningDepth, parsedDepth) : parsedDepth;
+      markerPlanningReasons.push(...csvMarkerValues(planningDepthLine, 'reasons'));
+      markerPlanningRiskSignals.push(...csvMarkerValues(planningDepthLine, 'risks'));
+      planningDepthEvidencePresent = true;
+      lastPlanningDepthAt = i;
+    }
+
+    const taskIntentLine = markerLine(result, 'TASK_INTENT_EVIDENCE');
+    if (taskIntentLine) {
+      const parsedIntent = parseTaskIntent(markerValue(taskIntentLine, 'intent'));
+      if (parsedIntent) markerTaskIntent = parsedIntent;
+      const lane = markerValue(taskIntentLine, 'lane');
+      if (lane === 'build' || lane === 'extend' || lane === 'repair' || lane === 'verify') {
+        markerTaskIntentLane = lane;
+      }
+      markerTaskIntentReasons.push(...csvMarkerValues(taskIntentLine, 'reasons'));
+      taskIntentEvidencePresent = true;
+    }
+
+    if (tool === 'match_domain_app') {
+      domainMatched = true;
+      const line = markerLine(result, 'DOMAIN_MATCH_EVIDENCE');
+      selectedDomains.push(...csvMarkerValues(line, 'selected'));
+      lastDomainMatchAt = i;
+    }
+    if (tool === 'get_domain_pack') {
+      const line = markerLine(result, 'DOMAIN_PACK_EVIDENCE');
+      const id = markerValue(line, 'id');
+      if (id && id !== 'none') loadedDomainPacks.push(id);
+      if (!id) {
+        const legacy = result.match(/Domain:\s+([a-z][a-z0-9_]*)/i)?.[1];
+        if (legacy) loadedDomainPacks.push(legacy);
+      }
+      lastDomainPackAt = i;
+    }
+    if (tool === 'compose_ad_hoc_domain') {
+      const line = markerLine(result, 'AD_HOC_DOMAIN_EVIDENCE');
+      adHocDomainComposed = Boolean(line) || /Ad-hoc domain:/i.test(result);
+      if (line) {
+        const name = markerValue(line, 'name');
+        if (name && name !== 'none') selectedDomains.push(name);
+      }
+      lastDomainMatchAt = i;
+    }
+    if (tool === 'match_capabilities') {
+      capabilityMatched = true;
+      const line = markerLine(result, 'CAPABILITY_MATCH_EVIDENCE');
+      selectedCapabilities.push(...csvMarkerValues(line, 'selected'));
+      requiredCapabilities.push(...csvMarkerValues(line, 'required'));
+      optionalCapabilities.push(...csvMarkerValues(line, 'optional'));
+      if (!line) selectedCapabilities.push(...fallbackCapabilityIds(result));
+      lastCapabilityMatchAt = i;
+    }
+    if (tool === 'get_capability_pack') {
+      const line = markerLine(result, 'CAPABILITY_PACK_EVIDENCE');
+      const id = markerValue(line, 'id');
+      if (id) loadedCapabilityPacks.push(id);
+      if (!id) {
+        const legacy = result.match(/Capability:\s+([a-z][a-z0-9_]*)/i)?.[1];
+        if (legacy) loadedCapabilityPacks.push(legacy);
+      }
+      lastCapabilityPackAt = i;
+    }
+    if (tool === 'match_reference_repos') {
+      referenceMatched = true;
+      const line = markerLine(result, 'REFERENCE_MATCH_EVIDENCE');
+      selectedReferencePatterns.push(...csvMarkerValues(line, 'selected'));
+      if (!line) selectedReferencePatterns.push(...fallbackReferencePatternIds(result));
+    }
+    if (tool === 'get_reference_repo_patterns') {
+      const line = markerLine(result, 'REFERENCE_PATTERN_EVIDENCE');
+      const id = markerValue(line, 'id');
+      if (id) loadedReferencePatterns.push(id);
+      if (!id) {
+        const legacy = result.match(/Reference pattern:\s+([a-z0-9-]+)/i)?.[1];
+        if (legacy) loadedReferencePatterns.push(legacy);
+      }
+      lastReferencePatternAt = i;
+    }
+    if (tool === 'retrieve_component_examples') {
+      componentExamplesRetrieved = true;
+      lastComponentExamplesAt = i;
+    }
+    if (tool === 'match_design_system') {
+      designSystemMatched = true;
+      const selected = markerValue(markerLine(result, 'DESIGN_SYSTEM_MATCH_EVIDENCE'), 'selected');
+      if (selected && selected !== 'none') selectedDesignSystem = selected;
+    }
+    if (tool === 'get_design_system') {
+      designSystemLoaded = true;
+      const loaded = markerValue(markerLine(result, 'DESIGN_SYSTEM_EVIDENCE'), 'name');
+      if (loaded && loaded !== 'none') loadedDesignSystem = loaded;
+      lastDesignSystemLoadedAt = i;
+    }
+    if (tool === 'compose_frontend_plan') {
+      frontendPlanComposed = true;
+      const line = markerLine(result, 'FRONTEND_PLAN_EVIDENCE');
+      const uiType = markerValue(line, 'ui_type');
+      if (uiType && uiType !== 'none') frontendPlanUiType = uiType;
+      frontendPlanPatterns.push(...csvMarkerValues(line, 'pattern_ids'));
+      frontendPlanUiReferences.push(...csvMarkerValues(line, 'ui_refs'));
+      const interactionLine = markerLine(result, 'INTERACTION_CONTRACT_EVIDENCE');
+      if (interactionLine) {
+        interactionContractComposed = true;
+        interactionContractCount = Math.max(interactionContractCount, Number(markerValue(interactionLine, 'count') ?? 0) || 0);
+        interactionContractDbWrites.push(...csvMarkerValues(interactionLine, 'db_writes'));
+        lastInteractionContractAt = i;
+      }
+      lastFrontendPlanAt = i;
+    }
+    if (tool === 'verify_interaction_contract') {
+      const line = markerLine(result, 'INTERACTION_PROOF_EVIDENCE');
+      if (line) {
+        const passed = Number(markerValue(line, 'passed') ?? 0) || 0;
+        const failed = Number(markerValue(line, 'failed') ?? 0) || 0;
+        interactionProofPassedCount = passed;
+        interactionProofFailedCount = failed;
+        interactionProofPassed = passed > 0 && failed === 0;
+      } else {
+        interactionProofPassed = /^INTERACTION PROOF PASS\b/m.test(result);
+      }
+      const acceptanceProof = parseAcceptanceProofEvidence(result);
+      if (acceptanceProof) {
+        acceptanceProofPresent = true;
+        acceptanceProofPassedCount = acceptanceProof.passed;
+        acceptanceProofFailedCount = acceptanceProof.failed;
+        acceptanceProofContractFlowCount = acceptanceProof.contractFlows;
+        lastAcceptanceProofAt = i;
+      }
+      for (const proof of parseContractFlowProofEvidence(result)) {
+        contractFlowProofById.set(proof.id, proof);
+      }
+      contractFieldProofs.push(...parseContractFieldProofEvidence(result));
+      const authIsolationProof = parseAuthIsolationProofEvidence(result);
+      if (authIsolationProof.present) {
+        authIsolationProofPresent = true;
+        authIsolationProofPassed = authIsolationProof.failed === 0 && authIsolationProof.passed > 0;
+        authIsolationProofFailedCount = authIsolationProof.failed;
+        lastAuthIsolationProofAt = i;
+      }
+      lastInteractionProofAt = i;
+    }
+    if (tool === 'verify_db_state') {
+      contractFieldProofs.push(...parseContractFieldProofEvidence(result));
+    }
+    if (tool === 'compose_app_architecture') {
+      architectureComposed = true;
+      const buildBrief = parseBuildBriefEvidence(result);
+      if (buildBrief.present) {
+        buildBriefPresent = true;
+        lastBuildBriefAt = i;
+      }
+      const productContract = parseProductBuildContractEvidence(result);
+      if (productContract.present) {
+        productContractPresent = true;
+        productContractFlowCount = productContract.flowCount;
+        productContractRequiredFlowIds = productContract.flowIds;
+        productContractAuthBaseline = productContract.authBaseline;
+        productContractUserIsolation = productContract.userIsolation;
+        productContractArtifactPresent = Boolean(markerLine(result, 'PRODUCT_BUILD_CONTRACT_ARTIFACT'));
+        productContractFieldRequirements = contractFieldRequirements(productContract.contract);
+        contractFlowProofById.clear();
+        contractFieldProofs.length = 0;
+        authIsolationProofPresent = false;
+        authIsolationProofPassed = false;
+        authIsolationProofFailedCount = 0;
+        lastProductContractAt = i;
+      }
+      if (markerLine(result, 'PRODUCT_BUILD_CONTRACT_ARTIFACT')) {
+        productContractArtifactPresent = true;
+      }
+      const laneRequirements = parseEngineeringLaneRequirementsEvidence(result);
+      if (laneRequirements.length > 0) {
+        engineeringLaneRequiredRoles = laneRequirements;
+        lastEngineeringLaneRequirementsAt = i;
+      }
+      const line = markerLine(result, 'ARCHITECTURE_PLAN_EVIDENCE');
+      architectureCapabilities.push(...csvMarkerValues(line, 'capabilities'));
+      architectureReferencePatterns.push(...csvMarkerValues(line, 'reference_patterns'));
+      const design = markerValue(line, 'design_system');
+      if (design && design !== 'none') architectureDesignSystem = design;
+      if (!line) architectureCapabilities.push(...fallbackCapabilityIds(result));
+      lastArchitecturePlanAt = i;
+    }
+  }
+
+  const selected = uniqueStrings(selectedCapabilities);
+  const required = uniqueStrings(requiredCapabilities.length > 0 ? requiredCapabilities : selected);
+  const optional = uniqueStrings(optionalCapabilities);
+  const loadedPacks = uniqueStrings(loadedCapabilityPacks);
+  const loadedPackSet = new Set(loadedPacks);
+  const missingCapabilityPacks = required.filter((id) => !loadedPackSet.has(id));
+  const selectedDomainIds = uniqueStrings(selectedDomains);
+  const loadedDomainIds = uniqueStrings(loadedDomainPacks);
+  const loadedDomainSet = new Set(loadedDomainIds);
+  const missingDomainPacks = adHocDomainComposed ? [] : selectedDomainIds.filter((id) => !loadedDomainSet.has(id));
+  const sanitizedTaskDescription = stripPlanningHarnessMetadata(task?.description);
+  const computedTaskIntent = classifyTaskIntent({
+    title: task?.title,
+    description: sanitizedTaskDescription,
+    tag: task?.tag,
+  });
+  const taskIntent = markerTaskIntent ?? computedTaskIntent.intent;
+  const taskIntentLane = markerTaskIntentLane ?? computedTaskIntent.lane;
+  const computedPlanningDepth = classifyPlanningDepth({
+    title: task?.title,
+    description: sanitizedTaskDescription,
+    tag: task?.tag,
+    taskIntent,
+    taskIntentLane,
+    selectedCapabilities: uniqueStrings([...selected, ...architectureCapabilities]),
+    selectedDomains: selectedDomainIds,
+  });
+  const planningDepth = markerPlanningDepth
+    ? taskIntentLane === 'repair' &&
+      markerPlanningDepth !== 'canary_world_class' &&
+      computedPlanningDepth.depth !== 'canary_world_class'
+      ? computedPlanningDepth.depth
+      : maxPlanningDepth(markerPlanningDepth, computedPlanningDepth.depth)
+    : computedPlanningDepth.depth;
+  const contractFlowProofs = [...contractFlowProofById.values()];
+  const productContractMissingFlowIds = missingContractFlowIds(productContractRequiredFlowIds, contractFlowProofs);
+  const productContractMissingFieldProofs = missingContractFieldProofs(productContractFieldRequirements, contractFieldProofs);
+  const acceptanceProofPassedFlowIds = uniqueStrings(contractFlowProofs.filter((proof) => proof.passed).map((proof) => proof.id));
+  const acceptanceProofFailedFlowIds = uniqueStrings(contractFlowProofs.filter((proof) => !proof.passed).map((proof) => proof.id));
+  const engineeringLaneOutputs = collectEngineeringLaneOutputs(logEntries);
+  const blockedLaneOutputs = blockedEngineeringLaneOutputs(engineeringLaneOutputs);
+  return {
+    taskIntent,
+    taskIntentLane,
+    taskIntentReasons: uniqueStrings([...computedTaskIntent.reasons, ...markerTaskIntentReasons]),
+    taskIntentEvidencePresent,
+    planningDepth,
+    planningDepthReasons: uniqueStrings([...computedPlanningDepth.reasons, ...markerPlanningReasons]),
+    planningRiskSignals: uniqueStrings([...computedPlanningDepth.riskSignals, ...markerPlanningRiskSignals]),
+    planningDepthEvidencePresent,
+    domainMatched,
+    selectedDomains: selectedDomainIds,
+    loadedDomainPacks: loadedDomainIds,
+    missingDomainPacks,
+    adHocDomainComposed,
+    capabilityMatched,
+    selectedCapabilities: selected,
+    requiredCapabilities: required,
+    optionalCapabilities: optional,
+    loadedCapabilityPacks: loadedPacks,
+    missingCapabilityPacks,
+    referenceMatched,
+    selectedReferencePatterns: uniqueStrings(selectedReferencePatterns),
+    loadedReferencePatterns: uniqueStrings(loadedReferencePatterns),
+    componentExamplesRetrieved,
+    designSystemMatched,
+    designSystemLoaded,
+    selectedDesignSystem,
+    loadedDesignSystem,
+    frontendPlanComposed,
+    frontendPlanUiType,
+    frontendPlanPatterns: uniqueStrings(frontendPlanPatterns),
+    frontendPlanUiReferences: uniqueStrings(frontendPlanUiReferences),
+    interactionContractComposed,
+    interactionContractCount,
+    interactionContractDbWrites: uniqueStrings(interactionContractDbWrites),
+    interactionProofPassed,
+    interactionProofPassedCount,
+    interactionProofFailedCount,
+    buildBriefPresent,
+    productContractPresent,
+    productContractFlowCount,
+    productContractRequiredFlowIds: uniqueStrings(productContractRequiredFlowIds),
+    productContractMissingFlowIds,
+    productContractAuthBaseline,
+    productContractUserIsolation,
+    productContractArtifactPresent,
+    productContractFieldRequirements,
+    productContractMissingFieldProofs,
+    acceptanceProofPresent,
+    acceptanceProofPassedCount,
+    acceptanceProofFailedCount,
+    acceptanceProofContractFlowCount,
+    acceptanceProofPassedFlowIds,
+    acceptanceProofFailedFlowIds,
+    authIsolationProofPresent,
+    authIsolationProofPassed,
+    authIsolationProofFailedCount,
+    engineeringLaneRequiredRoles,
+    engineeringLaneOutputs,
+    blockedEngineeringLaneOutputs: blockedLaneOutputs,
+    architectureComposed,
+    architectureCapabilities: uniqueStrings(architectureCapabilities),
+    architectureReferencePatterns: uniqueStrings(architectureReferencePatterns),
+    architectureDesignSystem,
+    lastPlanningDepthAt,
+    lastDomainMatchAt,
+    lastDomainPackAt,
+    lastCapabilityMatchAt,
+    lastCapabilityPackAt,
+    lastReferencePatternAt,
+    lastComponentExamplesAt,
+    lastDesignSystemLoadedAt,
+    lastFrontendPlanAt,
+    lastInteractionContractAt,
+    lastInteractionProofAt,
+    lastBuildBriefAt,
+    lastProductContractAt,
+    lastAcceptanceProofAt,
+    lastAuthIsolationProofAt,
+    lastEngineeringLaneRequirementsAt,
+    lastArchitecturePlanAt,
+  };
+}
+
+export function engineeringPreToolGate(
+  toolName: string,
+  logEntries: Record<string, unknown>[],
+  task?: { title?: string; description?: string | null; tag?: string | null; execution_contract?: unknown },
+): string | null {
+  if (!PRE_CODE_PLANNING_GATED_TOOLS.has(toolName)) return null;
+  if (!isCapabilityPlanningTask(task, logEntries) && !isReferenceRetrievalTask(task, logEntries)) return null;
+
+  const evidence = engineeringPlanningEvidence(logEntries, task);
+  const lanePolicy = getTaskLanePolicy(task, {
+    logEntries,
+    planningDepth: evidence.planningDepth,
+    taskIntent: evidence.taskIntent,
+    selectedCapabilities: uniqueStrings([
+      ...evidence.selectedCapabilities,
+      ...evidence.requiredCapabilities,
+      ...evidence.architectureCapabilities,
+    ]),
+    riskSignals: evidence.planningRiskSignals,
+  });
+  const isUiTask = isUserFacingUiTask(task, logEntries) || planningEvidenceImpliesUi(evidence);
+  const needsReferences = isReferenceRetrievalTask(task, logEntries);
+  const existingAppExtension = isExistingAppExtensionTask(task);
+  const domainGateMode = readDomainGateMode();
+  const planningDepth = evidence.planningDepth;
+  const clearDomainSignals = hasClearDomainTaskSignals(task, evidence);
+  const domainPlanningGateEnabled = domainGateMode !== 'off' || planningDepth === 'canary_world_class';
+  const needsDomainPlanning =
+    domainPlanningGateEnabled &&
+    requiresDomainPlanningForDepth(planningDepth, isUiTask, clearDomainSignals);
+  const needsFrontendPlan = requiresFrontendPlanForDepth(planningDepth, isUiTask);
+  const needsReferencePlanning = lanePolicy.completion.requireReferenceRetrieval &&
+    requiresReferencesForDepth(planningDepth, needsReferences);
+  const needsUiCraftReferences = isUiTask &&
+    needsReferencePlanning &&
+    (planningDepth === 'canary_world_class' || planningDepth === 'mixed_complex_app' || lanePolicy.lane === 'strict' || lanePolicy.lane === 'canary');
+  const focusedRepairIntent = isFocusedRepairIntent(evidence.taskIntent);
+  const needsProductContract = requiresProductBuildContract({
+    lane: lanePolicy.lane,
+    taskIntent: evidence.taskIntent,
+    planningDepth,
+    isUserFacing: isUiTask,
+    focusedRepair: focusedRepairIntent,
+    selectedDomains: evidence.selectedDomains,
+    selectedCapabilities: uniqueStrings([
+      ...evidence.selectedCapabilities,
+      ...evidence.requiredCapabilities,
+      ...evidence.architectureCapabilities,
+    ]),
+    clearDomainSignals,
+  });
+  const needsKnownIssues =
+    existingAppExtension ||
+    evidence.selectedCapabilities.includes('rag_search') ||
+    evidence.architectureCapabilities.includes('rag_search') ||
+    /\brag|embedding|semantic|document search\b/i.test(taskPlanningText(task));
+
+  if (existingAppExtension) {
+    const graphUnavailable =
+      /CODE_GRAPH_UNAVAILABLE/i.test(successfulToolResult(logEntries, 'build_code_graph') ?? '') ||
+      /CODE_GRAPH_UNAVAILABLE/i.test(successfulToolResult(logEntries, 'query_code_graph') ?? '');
+    if (!successfulToolResult(logEntries, 'read_codebase_map')) {
+      return 'PRE_CODE_PLANNING_GATE: blocked existing-app implementation before `read_codebase_map`. Read the existing codebase map so the task extends the current app instead of replacing it.';
+    }
+    if (!successfulToolResult(logEntries, 'build_code_graph') && !successfulToolResult(logEntries, 'query_code_graph')) {
+      return 'PRE_CODE_PLANNING_GATE: blocked existing-app implementation before Graphify evidence. Call `build_code_graph` or `query_code_graph` after `read_codebase_map`; if Graphify is unavailable, continue with explicit GitHub reads.';
+    }
+    if (!graphUnavailable && !successfulToolResult(logEntries, 'query_code_graph')) {
+      return 'PRE_CODE_PLANNING_GATE: blocked existing-app implementation before `query_code_graph`. Query the graph for the routes/components/tables affected by this extension so implementation targets the existing app.';
+    }
+  }
+
+  if (hasCompleteExecutionContract(task?.execution_contract)) {
+    return null;
+  }
+
+  if (!evidence.capabilityMatched) {
+    return 'PRE_CODE_PLANNING_GATE: blocked implementation/deploy tool before `match_capabilities`. Call `match_capabilities` with the CEO task, company context, actors, workflows, entities, and inferred capabilities first.';
+  }
+  if (focusedRepairIntent) {
+    if (evidence.loadedCapabilityPacks.length === 0) {
+      return 'PRE_CODE_PLANNING_GATE: blocked focused repair before `get_capability_pack`. Load the one or two packs relevant to the failed interaction/API/deploy path before patching.';
+    }
+    if (!evidence.architectureComposed) {
+      return 'PRE_CODE_PLANNING_GATE: blocked focused repair before `compose_app_architecture`. Compose a narrow repair plan naming the failed route/component/table, the minimal patch, and the exact verification to rerun.';
+    }
+    if (evidence.lastArchitecturePlanAt < evidence.lastCapabilityPackAt) {
+      return 'PRE_CODE_PLANNING_GATE: blocked focused repair because `compose_app_architecture` ran before the relevant capability pack. Re-run the narrow repair plan after loading the pack.';
+    }
+    return null;
+  }
+  if (evidence.requiredCapabilities.length > 0 && evidence.missingCapabilityPacks.length > 0) {
+    return `PRE_CODE_PLANNING_GATE: blocked implementation/deploy tool before all required capability packs were loaded. Missing get_capability_pack for: ${evidence.missingCapabilityPacks.join(', ')}.`;
+  }
+  if (evidence.loadedCapabilityPacks.length === 0) {
+    return 'PRE_CODE_PLANNING_GATE: blocked implementation/deploy tool before `get_capability_pack`. Load every required capability pack before coding.';
+  }
+  if (needsDomainPlanning) {
+    if (!evidence.domainMatched && !evidence.adHocDomainComposed) {
+      return 'PRE_CODE_PLANNING_GATE: blocked user-facing implementation before domain planning. Call `match_domain_app`; if no known domain fits but the CEO task has a real product shape, call `compose_ad_hoc_domain` instead.';
+    }
+    if (evidence.selectedDomains.length > 0 && evidence.missingDomainPacks.length > 0) {
+      return `PRE_CODE_PLANNING_GATE: blocked implementation before all selected domain packs were loaded. Missing get_domain_pack for: ${evidence.missingDomainPacks.join(', ')}. If no known domain fits, use compose_ad_hoc_domain instead.`;
+    }
+    if (evidence.lastCapabilityMatchAt < Math.max(evidence.lastDomainMatchAt, evidence.lastDomainPackAt)) {
+      return 'PRE_CODE_PLANNING_GATE: blocked implementation because `match_capabilities` ran before domain planning finished. Re-run `match_capabilities` after `match_domain_app`/`get_domain_pack` (or `compose_ad_hoc_domain`) and pass the selected domains/product shape.';
+    }
+  }
+  if (isUiTask) {
+    if (!evidence.designSystemMatched) {
+      return 'PRE_CODE_PLANNING_GATE: blocked user-facing implementation before `match_design_system`. Pick the design language before coding UI.';
+    }
+    if (!evidence.designSystemLoaded) {
+      return 'PRE_CODE_PLANNING_GATE: blocked user-facing implementation before `get_design_system`. Load the selected design system before coding UI.';
+    }
+    if (needsFrontendPlan && !evidence.frontendPlanComposed) {
+      return 'PRE_CODE_PLANNING_GATE: blocked user-facing implementation before `compose_frontend_plan`. Compose page map, required text/buttons, form checks, shadcn components, icons, accessibility, and responsive states before coding UI.';
+    }
+    if (needsUiCraftReferences && evidence.frontendPlanComposed && !hasUiCraftReference(evidence.frontendPlanUiReferences)) {
+      return 'PRE_CODE_PLANNING_GATE: blocked strict/canary UI implementation because `compose_frontend_plan` did not include UI-craft reference evidence. Re-run it with `reference_patterns` including at least one loaded UI-craft/accessibility/dashboard-craft reference id.';
+    }
+  }
+  if (needsReferencePlanning) {
+    if (!evidence.referenceMatched) {
+      return 'PRE_CODE_PLANNING_GATE: blocked implementation before `match_reference_repos`. Retrieve GitHub/reference patterns so this is not a generic template app.';
+    }
+    if (evidence.loadedReferencePatterns.length === 0) {
+      return 'PRE_CODE_PLANNING_GATE: blocked implementation before `get_reference_repo_patterns`. Load at least one selected reference pattern before coding.';
+    }
+    if (!evidence.componentExamplesRetrieved) {
+      return 'PRE_CODE_PLANNING_GATE: blocked implementation before `retrieve_component_examples`. Retrieve capability-specific component examples before UI implementation.';
+    }
+    if (needsUiCraftReferences && !hasUiCraftReference(evidence.loadedReferencePatterns)) {
+      return 'PRE_CODE_PLANNING_GATE: blocked strict/canary UI implementation before loading a UI-craft reference. Load at least one of: open-codesign-design-agent-patterns, onlook-visual-repair-patterns, radix-accessibility-primitives, tremor-analytics-dashboard-patterns, dub-saas-dashboard-patterns, midday-business-ops-patterns, or twenty-crm-workspace-patterns.';
+    }
+  }
+  if (!evidence.architectureComposed) {
+    return 'PRE_CODE_PLANNING_GATE: blocked implementation before `compose_app_architecture`. Compose capabilities into actors, entities, pages, API routes, DB tables, vertical slices, and verification journeys before coding.';
+  }
+  if (evidence.lastArchitecturePlanAt < evidence.lastCapabilityPackAt) {
+    return 'PRE_CODE_PLANNING_GATE: blocked implementation because `compose_app_architecture` ran before all capability packs were loaded. Re-run it after the final `get_capability_pack` call.';
+  }
+  if (needsDomainPlanning && evidence.lastArchitecturePlanAt < Math.max(evidence.lastDomainMatchAt, evidence.lastDomainPackAt)) {
+    return 'PRE_CODE_PLANNING_GATE: blocked implementation because `compose_app_architecture` ran before domain planning completed. Re-run it after domain and capability planning so the architecture keeps the product shape.';
+  }
+  if (isUiTask && evidence.lastArchitecturePlanAt < evidence.lastDesignSystemLoadedAt) {
+    return 'PRE_CODE_PLANNING_GATE: blocked implementation because `compose_app_architecture` ran before `get_design_system`. Re-run architecture composition with the selected design_system.';
+  }
+  if (isUiTask && evidence.frontendPlanComposed && evidence.lastArchitecturePlanAt < evidence.lastFrontendPlanAt) {
+    return 'PRE_CODE_PLANNING_GATE: blocked implementation because `compose_app_architecture` ran before `compose_frontend_plan`. Re-run architecture composition after the frontend plan so UI contract evidence influences the vertical slices.';
+  }
+  if (needsReferencePlanning && evidence.lastArchitecturePlanAt < Math.max(evidence.lastReferencePatternAt, evidence.lastComponentExamplesAt)) {
+    return 'PRE_CODE_PLANNING_GATE: blocked implementation because `compose_app_architecture` ran before reference pattern/component retrieval completed. Re-run it after `get_reference_repo_patterns` and `retrieve_component_examples`, passing selected reference_patterns.';
+  }
+  if (needsReferencePlanning && evidence.architectureReferencePatterns.length === 0) {
+    return 'PRE_CODE_PLANNING_GATE: blocked implementation because `compose_app_architecture` did not include selected reference_patterns. Re-run it with the selected reference pattern ids.';
+  }
+  if (needsUiCraftReferences && !hasUiCraftReference(evidence.architectureReferencePatterns)) {
+    return 'PRE_CODE_PLANNING_GATE: blocked strict/canary UI implementation because `compose_app_architecture` did not include a selected UI-craft reference pattern. Re-run it with at least one UI-craft/accessibility/dashboard-craft reference id so the UI plan is not generic.';
+  }
+  if (isUiTask && !evidence.architectureDesignSystem) {
+    return 'PRE_CODE_PLANNING_GATE: blocked implementation because `compose_app_architecture` did not include the selected design_system. Re-run it with the selected design system.';
+  }
+  if (
+    (evidence.architectureCapabilities.includes('rag_search') || evidence.selectedCapabilities.includes('rag_search') || /\brag|embedding|semantic|document search\b/i.test(taskPlanningText(task))) &&
+    hasUnsupportedRagEmbeddingPlan(successfulToolResult(logEntries, 'compose_app_architecture'))
+  ) {
+    const embedding = ragEmbeddingGuidance();
+    return `PRE_CODE_PLANNING_GATE: blocked RAG implementation because \`compose_app_architecture\` selected known-bad embedding model/vector guidance that does not match the configured AI gateway. Re-run it using ${embedding.model} with ${embedding.dimensions}-dim pgvector columns for this gateway.`;
+  }
+  if (needsProductContract) {
+    if (!evidence.buildBriefPresent) {
+      return 'PRE_CODE_PLANNING_GATE: blocked app implementation before `BUILD_BRIEF_EVIDENCE`. Re-run `compose_app_architecture` so the user request, assumptions, MVP features, and non-goals are locked before coding.';
+    }
+    if (!evidence.productContractPresent || evidence.productContractFlowCount === 0) {
+      return 'PRE_CODE_PLANNING_GATE: blocked app implementation before `PRODUCT_BUILD_CONTRACT_EVIDENCE`. Re-run `compose_app_architecture` so screens, flows, entities, APIs, DB assertions, auth rules, and acceptance criteria are machine-readable before coding.';
+    }
+    if (!evidence.productContractArtifactPresent) {
+      return 'PRE_CODE_PLANNING_GATE: blocked app implementation before `PRODUCT_BUILD_CONTRACT_ARTIFACT`. Re-run `compose_app_architecture` so the Build Brief and Product Build Contract are persisted for repair/replay.';
+    }
+    if (evidence.lastProductContractAt < evidence.lastArchitecturePlanAt) {
+      return 'PRE_CODE_PLANNING_GATE: blocked app implementation because product contract evidence is older than the latest architecture plan. Re-run `compose_app_architecture` and build from the latest PRODUCT_BUILD_CONTRACT_JSON.';
+    }
+  }
+  if (needsKnownIssues && !successfulToolResult(logEntries, 'read_known_issues')) {
+    return 'PRE_CODE_PLANNING_GATE: blocked RAG/existing-app implementation before `read_known_issues`. Load relevant known issues so fixed canary learnings and provider-specific integration guidance override stale repo comments or model memory.';
+  }
+
+  return null;
+}
+
+// Load the base system prompt for an agent. Two paths:
+//   1. DB has a non-empty base_system_prompt → use it AND append the agent's
+//      invariant rules so quality/security guarantees survive a DB edit.
+//   2. DB is empty / not deployed yet / errored → fall back to the hardcoded
+//      AGENT_PROMPTS[agentId] which already contains the full ruleset.
+// Exported so tests can exercise the override branch directly.
+export interface LoadedAgentPrompt {
+  prompt: string;
+  fromDB: boolean;
+  deactivated: boolean;
+  dbName?: string;
+}
+export async function loadAgentBasePrompt(agentId: number): Promise<LoadedAgentPrompt> {
+  const hardcoded = AGENT_PROMPTS[agentId] ?? '';
+  try {
+    const [dbAgent] = await db.select({
+      base_system_prompt: agentsTable.base_system_prompt,
+      name: agentsTable.name,
+      is_active: agentsTable.is_active,
+    }).from(agentsTable).where(eq(agentsTable.id, agentId)).limit(1);
+
+    const deactivated = !!dbAgent && dbAgent.is_active === false;
+    if (deactivated) {
+      log.warn('Agent is deactivated in DB', { agentId, name: dbAgent?.name });
+    }
+
+    if (dbAgent?.base_system_prompt?.trim()) {
+      // Override the body — but APPEND invariants so quality, security, and
+      // completion-gate rules survive a DB-side prompt edit.
+      const merged = dbAgent.base_system_prompt + '\n\n' + getInvariantRulesForAgent(agentId);
+      log.debug('Using DB agent prompt (with appended invariants)', { agentId, name: dbAgent.name });
+      return { prompt: merged, fromDB: true, deactivated, dbName: dbAgent.name };
+    }
+    return { prompt: hardcoded, fromDB: false, deactivated, dbName: dbAgent?.name };
+  } catch {
+    return { prompt: hardcoded, fromDB: false, deactivated: false };
+  }
 }
 
 // ══════════════════════════════════════════════
@@ -96,6 +1598,46 @@ ship a pattern that doesn't work in Baljia's deployment path. The skills exist
 because the LLM's general training data often suggests patterns that do not
 match the current hosting/runtime.
 
+## CEO task intake and capability composition
+
+You do not build from a direct user prompt. The CEO/Product Owner allocates a
+company task, and your job is to convert that task plus company context into a
+full-stack implementation plan.
+
+If the briefing contains an Execution Contract, the CEO has already done the
+product-scope work. Execute that contract. Do not guess missing product
+requirements, do not add integrations because a keyword looks related, and do
+not run domain/capability matching to decide what product to build. You may
+choose implementation details and UI treatment only inside the contract.
+
+When no Execution Contract is present, before coding any build or extension task:
+
+1. Call \`get_company_tech\` to understand the company's repo, Render service,
+   database, and existing deployed state.
+2. If the company already has an app, call \`read_codebase_map\` before planning
+   so you extend the existing product instead of creating a duplicate template.
+3. Call \`match_capabilities\` with the task title, description, company/product
+   context, actors, workflows, and entities you can infer.
+4. Call \`get_capability_pack\` for every required capability
+   (auth, roles, CRUD, dashboard, payments, uploads, AI, RAG, admin workflow,
+   marketplace, booking, Render deployment, etc.).
+5. For user-facing UI or architecture-heavy work, call \`match_reference_repos\`
+   with the selected capabilities, then \`get_reference_repo_patterns\` for
+   the top references and \`retrieve_component_examples\` for relevant UI
+   patterns. GitHub/reference repos are patterns only: respect licenses,
+   summarize what is useful, and never copy whole apps. Component examples
+   complement reference matching; they do not replace \`match_reference_repos\`
+   or \`get_reference_repo_patterns\`.
+6. Call \`compose_app_architecture\` to produce actors, entities, pages, API
+   routes, DB tables, vertical slices, and verification journeys.
+
+The template is only the chassis. The app definition comes from the capability
+plan, company context, capability packs, reference patterns, design system,
+existing codebase map, known issues, skills, and canary learnings. Weird mixed
+apps are normal: decompose them into capabilities, retrieve the packs, retrieve
+patterns, build vertical slices, and verify each main workflow. AI is optional;
+only add AI/RAG capabilities when the CEO task actually needs them.
+
 ## Operating mode (read this BEFORE rule 1)
 
 You operate as a **deploy-and-fix loop**, not a one-shot writer. The single most common failure mode is: agent reads docs, commits a bunch of files, then runs out of budget without ever deploying — leaving the founder with code that has never run anywhere.
@@ -107,10 +1649,57 @@ To prevent that:
 - **Iterate after deploy, not before.** The right loop is: deploy → \`render_get_deploy_status\` → \`check_url_health\` → \`render_get_logs\` → if broken, ONE focused fix commit → \`render_deploy\` → re-verify. Repeat until \`JOURNEY PASS\`. Use small, focused fix commits (1–3 files each), not large batches. **When a journey step fails after a successful deploy, invoke the \`debug-deployed-app\` skill** (read with \`read_skill\`) — it codifies the exact diagnose → fix → redeploy → re-verify ritual using \`render_get_logs\` + \`http_fetch_full\` + \`read_known_issues\` so you fix the bug in THIS run instead of handing off to remediation.
 - **Budget discipline.** Your per-turn budget summary shows remaining cost. If you see <40% remaining and you haven't deployed yet, abandon any remaining "nice-to-have" customizations and ship what you have. A deployed minimum-viable feature beats a pre-deploy zero.
 - **You are not done until JOURNEY PASS.** "I committed code" ≠ done. "I deployed and got 200" ≠ done. "I called \`verify_user_journey\` and it returned JOURNEY PASS for the critical flow" = done. The verifier rejects anything else.
+- **A SINGLE non-2xx on \`check_url_health\` means the deploy is broken.** Not "mostly working." Not "good enough." If even ONE health check returns non-2xx (502, 504, 500), you MUST: (1) read \`render_get_logs\`, (2) identify the root cause, (3) push a fix, (4) redeploy, (5) re-run \`check_url_health\` until you get THREE consecutive 2xxs. Founders see "Failure" if you ship a partially-broken app — partial doesn't count.
+- **HIGH-severity \`static_code_scan\` findings are NOT optional.** If \`static_code_scan\` returns any HIGH findings, you MUST push a fix commit BEFORE declaring complete. Don't argue, don't justify, don't decide they're "fine for v1" — fix them. The verifier will reject the task if HIGH findings remain.
+- **Env vars must match the code.** Whatever \`process.env.X\` your code reads, that X MUST be set on the Render service. Two places:
+  - At first deploy: pass \`env_vars\` to \`render_create_service\` (DATABASE_URL, AI gateway vars, and platform Stripe vars are auto-injected when configured; everything else is your responsibility).
+  - On existing service: call \`render_set_env_vars\` with \`service_id\` and the keys to set. It upserts each var and triggers a redeploy.
+  - Do NOT use \`render_set_env_vars\` for \`BUILD_COMMAND\`, \`START_COMMAND\`, runtime, plan, health check path, or root directory. Those are Render service config, not runtime env vars. Use \`render_update_service_config\` on existing services. For the Next.js skeleton's first deploy, pass \`build_command: "pnpm install --no-frozen-lockfile --prod=false && pnpm build"\` to \`render_create_service\` after schema changes are already applied with \`run_migration\` or \`run_drizzle_push\`.
+  - For Next.js on Render, the start command must bind to Render's injected port: \`pnpm exec next start -H 0.0.0.0 -p $PORT\`. Hardcoded \`next start -p 3000\` can build successfully and then fail Render's deploy/update phase.
+  - If \`render_deploy\` returns \`RENDER_DEPLOY_BLOCKED_RECENT_PIPELINE_MINUTES_EXHAUSTED\`, or \`render_get_deploy_status\` / \`render_get_logs\` returns \`RENDER_INFRASTRUCTURE_BLOCKER: pipeline_minutes_exhausted\`, stop code/config churn immediately. This is a Render account quota failure before app logs exist, not an app bug. Do not change \`package.json\`, \`render.yaml\`, build/start commands, env vars, or delete/recreate services for this signal. Record the blocker and report that deploy verification must be rerun only after Render pipeline minutes are restored; if the operator confirms restoration, make one controlled retry with \`force_after_quota_restored=true\` and poll that exact deploy id.
+- **Verify the actual feature, not just the landing.** When you run \`verify_user_journey\` or \`http_fetch_full\`, hit the ENDPOINT THE TASK BUILT (\`POST /api/ask\`, \`GET /api/leads\`, etc.) — not just \`GET /\`. A passing root-URL health check while \`POST /api/feature\` returns 502 is a verifier-fooling false pass. The verifier will tighten and reject this pattern.
+- **\`render_delete_service\` is FORBIDDEN for normal debugging.** Almost every error you'll encounter (502, 404, "model not found", "env var undefined", "table does not exist") is a CODE-LEVEL or ENV-VAR-LEVEL bug. Deleting the service does not fix code or env bugs — it just runs the same broken code on a fresh service. Recovery hierarchy:
+    1. Read \`render_get_logs\` and the response body of failing \`http_fetch_full\` carefully. If the error names a specific value (model ID, env var name, file path, library version, table name), that value is your bug. Call \`github_search_code\` with that value to find the file. Push a fix. Redeploy.
+    2. If logs show missing env var, call \`render_set_env_vars\` to add it. Redeploy.
+    3. If the BUILD itself fails repeatedly with infra errors (out of memory, dep install fails), only then consider \`render_delete_service\`. Even then, never delete more than once per task.
+- **Errors quoting specific names are code bugs.** If a response body contains a string like \`"models/gemini-2.5-flash is no longer available"\` or \`"AI_GATEWAY_TOKEN not configured"\` or \`"column 'foo' does not exist"\`, the string in quotes is the bug. Search the repo for that exact string. Fix it. Don't delete the service.
+- **Mandatory final-step sequence before stopping.** Once you believe the app works:
+    1. \`static_code_scan\` (after your most recent github push)
+    2. \`design_audit\` against the public landing — must be clean (regex anti-pattern check)
+    3. \`design_critique\` against the public landing — must be clean (0 BLOCKERs; score is guidance unless a stricter score gate is configured)
+    4. \`verify_user_journey\` against the feature endpoint — must return JOURNEY PASS
+    5. Only then stop responding. The completion gate enforces these in order; skipping any means automatic block + forced continuation.
+
+## Founder-facing UI rules (HARD — verifier and gate enforce these)
+
+You are building software for a non-technical founder's customers. Treat \`/\` (the public landing) as the founder's storefront, NOT a developer's swagger page.
+
+- **One audience per page.** The public landing (\`/\`) serves END USERS. They should see a clean product surface (chat box, form, dashboard tile — whatever the task built) and NOTHING else. API documentation, curl examples, endpoint lists, healthcheck readouts, and "request format" code blocks DO NOT belong on \`/\`. If you must document the API, put it at \`/docs\` or \`/api\` (and even those are usually unnecessary for v1).
+- **No "API Documentation", "Endpoints", "Examples", or \`pre.example { color: #4ade80 }\` styled code blocks on the landing.** If a section header says one of those words on the public landing page, the page is wrong. Strip it.
+- **Inline \`<style>\` blocks with hardcoded hex colors are forbidden.** Use design tokens (CSS variables defined once in \`:root\` for the skeleton's color system, or Tailwind classes for Next.js). \`style="color:#0a0a0a;background:#171717"\` everywhere = AI slop. Wrap palette in tokens once.
+- **No AI-default tells.** No purple/blue gradients on hero. No emoji in \`<h1>\` or \`<h2>\` or icon slots. No Inter for everything. No \`feature one / feature two / feature three\` placeholder copy. No "rounded card with colored left border" tile pattern. Each of these alone signals "this was AI-generated and the founder didn't customize."
+- **The landing's title and copy must be specific to THIS company, not the API name.** "Equityzen — AI Stock Research API" → wrong (mentions the implementation detail "API"). "Equityzen — research any Indian stock in plain English" → right (describes what a USER gets).
+- **No generic or internal starter surface.** The deployed \`/\` page and every authenticated app/dashboard page must not still show skeleton copy such as "Your app, generated. Yours to keep.", "Baljia App", "This is your authenticated app shell", "Specialist agents will add features", "Your database", "AI is pre-wired", \`db/schema.ts\`, Neon implementation copy, SDK import guidance, or gateway internals. Replace the chassis with the actual product before verification.
+- **Verify visually after deploy.** Call \`design_audit\` after the deploy is live. The audit returns a list of AI-default violations on the rendered HTML. Fix every violation before declaring complete. Also treat unreadable rendered controls as broken: white-on-white buttons, black text on dark cards, invisible icons, and native \`select\`/\`option\` dropdowns whose foreground/background colors collapse must be fixed before completion.
+- **Use the Next.js skeleton for UI work.** ANY task that produces a user-facing surface (landing, chat UI, dashboard, signup/login, founder app) MUST use \`github_fork_skeleton\` (Next.js 15 + Tailwind 4 + shadcn/ui). \`fork_express_skeleton\` is BACKEND-ONLY — pure JSON APIs, webhooks, cron workers. Express + hand-rolled HTML cannot pass the Frontend Quality Bar and the completion gate will block it.
+- **Repo layout discipline, not product guessing.** CEO decides WHAT to build. You decide WHERE code belongs. For Next.js apps: pages in \`app/<route>/page.tsx\`, API handlers in \`app/api/<feature>/route.ts\`, reusable UI in \`components/<feature>/\`, business/provider logic in \`lib/<feature>/\`, schema changes in \`db/schema.ts\`, and proofs/tests in the verification tools or \`tests/e2e/\` when the repo already uses tests. For existing apps, extend the current structure instead of moving files. For UI fixes and bug fixes, touch only the affected path.
+- **Import, don't hand-roll.** The skeleton ships with 14 production shadcn/ui components in \`components/ui/\` (Button, Card, Input, Dialog, Badge, Dropdown, ScrollArea, Skeleton, Tabs, Textarea, Toast, ThemeToggle, MarkdownBody). Call \`list_components\` to see the catalog. \`<div className="border rounded-lg p-4">\` instead of \`<Card>\`, bare \`<button style="...">\` instead of \`<Button>\`, bare \`<input>\` instead of \`<Input>+<Label>\` — all violations.
+
+### FORBIDDEN strings (in any UI commit — \`static_code_scan\` and \`design_audit\` enforce these)
+
+- \`from-indigo\`, \`from-purple\`, \`bg-gradient-to-r from-\` → no Tailwind indigo accents or two-stop trust gradients
+- 🚀 ✨ 💡 🎯 ⚡ 🔥 (any emoji in \`<h1>\`/\`<h2>\`/\`<h3>\` or icon slots — use \`lucide-react\` monoline icons)
+- \`text-center max-w-2xl mx-auto\` on hero → the AI hero-centering tell; use left-aligned with explicit visual anchor
+- \`grid grid-cols-3 gap-8\` for feature sections → the AI symmetric-grid tell; use \`grid-cols-2\` or asymmetric layouts (e.g. \`md:grid-cols-[2fr_1fr]\`)
+- "lorem ipsum", "feature one", "feature two", "feature three", "sample content", "placeholder text", "your headline here" → write real product copy
+- "Hero → Features → Pricing → FAQ → CTA" template sequence → introduce one unconventional section (testimonial pull-quote, comparison-against-status-quo, inline demo, kbd shortcut wall)
+- \`style="color:#...; background:#..."\` inline hex → use Tailwind classes or CSS variables from \`app/globals.css\`; max 8 distinct hex colors in inline styles across the whole page
 
 ## Rules
 
 1. **Skills first.** Call list_skills + read the relevant ones BEFORE coding. This is the single most important rule.
+1.5. **Capability plan before implementation.** If an Execution Contract is present, do not use capability/domain matching to decide product scope; use it only if it helps implementation. If no Execution Contract is present, for build/extend tasks call \`match_capabilities\`, \`get_capability_pack\` for each selected capability, \`match_reference_repos\`/\`get_reference_repo_patterns\` when UI or architecture patterns are useful, and \`compose_app_architecture\` before any code commit. Use hybrid retrieval (capability packs, design systems, GitHub/reference patterns, codebase map, known issues, skills, and previous canary learnings) to decide the vertical slices and generated verification journeys when calling \`verify_user_journey\` and \`verify_db_state\`.
+1.6. **Code graph for existing apps.** For update/debug/extend tasks where a company already has a GitHub repo, call \`read_codebase_map\`, then \`build_code_graph\`, then \`query_code_graph\` for the affected routes/components/tables before editing. Graphify is runtime-only navigation evidence, not a replacement for verification: if it returns \`CODE_GRAPH_UNAVAILABLE\`, continue with \`read_codebase_map\`, \`github_list_files\`, and \`github_read_file\` and state that fallback in your plan. When \`verify_user_journey\` or \`verify_browser_ui\` fails, query the code graph for the failing route/component/table before pushing a fix.
 2. **Know the company state.** Call get_company_tech to know slug + DB status before infra work.
 2.5. **Read past failures before risky work.** Before \`render_create_service\`, \`run_migration\`, \`fork_express_skeleton\`, or any first-time integration work, call \`read_known_issues\` with a one-line description of what you're about to do. The platform records every recurring infra failure (Render API shape changes, env-var quirks, DNS gotchas, token format bugs) with the exact fix that worked. Spending one tool call to check known issues is cheaper than re-discovering the same failure. If a [FIXED] entry applies, follow its fix_notes.
 3. **Default deploy path for engineering tasks is Render — and for plain Express + Postgres apps you fork the hardened skeleton, you do NOT write server.js from scratch.**
@@ -118,8 +1707,11 @@ To prevent that:
    - **First deploy of a Next.js app**: use \`github_fork_skeleton\` (the existing Next.js skeleton at BALAJIapps/Balaji) instead.
    - **Update** (render_service_id exists): your briefing already contains an "Existing app (codebase map)" section with the deployed app's stack, schema, routes, and shipped features — read it FIRST. If the briefing's map looks stale or missing, call \`read_codebase_map\` to refresh. Then edit only what the task requires via \`github_create_commit\` (atomic multi-file), call \`render_deploy\`, then check deploy status and health.
    - **At the END of every successful task** (first deploy or extend): call \`write_codebase_map\` with the FULL updated map — refresh \`last_commit_sha\`, \`last_deployed_at\`, append the new feature to \`shipped_features\`, add any new tables/routes. This is what the NEXT task's agent will read; skipping it makes future extends blind.
+   - **Existing-app code graph:** before editing an existing repo, call \`build_code_graph\` and \`query_code_graph\` after \`read_codebase_map\` so you can target the right files/routes/entities instead of rebuilding a generic app. If Graphify is unavailable, keep going with the codebase map and GitHub read tools.
+   - **After successful existing-app updates:** rebuild the code graph report when a GitHub repo exists, then write the updated codebase map.
    - Do not create duplicate Render services. One company gets one trial Render service.
    - Do not modify the skeleton's framework files (the Zod schema, trust-proxy line, session middleware, /api/health, withTimeout helper, register/login/logout handlers). Customize ONLY: landing copy in landingPage(), dashboard rendering in dashboardPage(), feature routes (rename /api/items to your feature noun), and add feature-specific tables to db/schema.sql.
+   - **Keep individual files under ~20KB of code.** Large inline HTML/JS strings in server.js cause your tool calls to be truncated at the output token cap, after which github_push_file/github_create_commit will fail with "content missing" errors. If \`landingPage()\` or \`dashboardPage()\` would exceed ~20KB of HTML, externalize the HTML into \`public/index.html\` (or \`public/dashboard.html\`) and serve it via \`app.use(express.static('public'))\` + a tiny route handler. Two small files always beat one large file you cannot push.
 4. **Provision before deploy.** If the app needs a DB, call provision_database FIRST, then pass DATABASE_URL/NEON_CONNECTION_STRING as a Render env var. The tool will replace masked DB URLs with the real company DB URL.
 5. **Verification gate — you cannot finish without this.** A 200 response does NOT mean the app works. After every deploy you MUST run, in order. Two of the steps run BEFORE deploy (against the pushed code) and the rest run AFTER:
 
@@ -128,18 +1720,39 @@ To prevent that:
    - \`review_pushed_code\` — Haiku-based semantic review of the diff. Catches auth bypass, race conditions, async ordering bugs the static scanner can't see. Address all HIGH-severity findings before deploying.
 
    POST-DEPLOY:
+   - Prefer \`render_get_deploy_status\` with \`wait_for_terminal=true\`; the tool will poll Render internally so you do not spend one LLM turn per status check.
    - \`render_get_deploy_status\` — wait until status=live (poll up to 10 min).
    - \`render_get_logs\` to inspect the last ~1-2 minutes of logs. Pass \`limit: 200\` and let the tool default the \`since\` window. **This is mandatory, not optional.** Apps that boot with bad env vars, wrong DATABASE_URL SSL config, or missing tables will log \`error\` lines on startup and at first request, while every URL still returns nominally-OK status. Look for: \`level=error\`, \`level=fatal\`, lines containing "ECONNREFUSED" / "Cannot find module" / "permission denied" / "rate limit" / Postgres SQLSTATE codes (28000, 28P01, 42P01, etc.). If you find any, treat the deploy as broken: read the actual message (don't just count lines), identify the root cause, fix it in code, push, redeploy, and re-pull logs. Do NOT proceed to journey verification with errors in the log — you will get a misleading PASS that hides a real bug.
    - \`check_url_health\` — confirm at least the landing route returns 2xx. If \`/api/health\` exists, also call it and confirm \`body.checks.*\` are ALL \`ok\`. A 200 with \`db: error\` means the app is up but broken.
    - \`verify_user_journey\` — walk the critical user flow end-to-end with assertions. **This is mandatory for engineering-tagged tasks. The verifier will FAIL the task if you skip it — even if /api/health returns 200, even if a fallback liveness probe passes. The fallback only proves "/" responded; that is NOT proof your feature works.** Pick the highest-value flow the task implies — for an auth+CRUD app this is "register → reach dashboard → submit one create-form → see the new item appear → log out → log in → see it again". Use \`expect_status\`, \`expect_redirect\`, \`expect_body_contains\`, and especially \`expect_body_not_contains\` to assert error toasts like "Registration failed" do NOT appear. Stop on first failure, read \`render_get_logs\`, fix the root cause in code, push, redeploy, and re-run the journey. Repeat until \`JOURNEY PASS\`.
    - \`verify_db_state\` — for any flow that writes to the founder DB (auth, form submissions, settings updates), follow the journey with at least one SELECT-based assertion to prove the row actually landed (e.g., \`SELECT email FROM users WHERE email='<the test email>'\` with \`expect_min_rows: 1\`). Servers can return 302 with a silently-failed INSERT; this is the only way to catch that. Advisory in the verifier but a strong recommendation in practice.
-   - **Browser verification (for JS-heavy apps only)** — \`verify_user_journey\` is HTTP-only; it cannot execute JavaScript or interact with React/Vue/Next.js dynamic UI. If the app you shipped has significant client-side JS — anywhere a form submits via \`fetch()\` instead of native form-POST, anywhere a modal or AJAX-list updates the page without reload, or any Next.js route group with client components — you MUST also run a browser-driven walkthrough using the \`browser_*\` tools (navigate, fill, click, get_content, evaluate). Sequence: \`browser_navigate\` to /, \`browser_navigate\` to /register, \`browser_fill\` the inputs, \`browser_click\` the submit, then \`browser_navigate\` to /dashboard and use \`browser_get_content\` to assert the expected text appears. One session per deploy is enough — Browserbase costs real money. For server-rendered apps (plain Express + HTML forms), skip this step; verify_user_journey is sufficient.
+   - **Browser UI verification (mandatory for user-facing/full-stack UI)** — \`verify_user_journey\` is HTTP-only; it cannot execute JavaScript, see React hydration errors, or notice that a visible panel has fields but no submit button. After the API journey and DB proof pass, call \`verify_browser_ui\` against the deployed URL with capability-specific \`required_text\` and \`required_buttons\` from the architecture plan. For apps with auth/dashboard, also prove the authenticated product surface is customized: the signed-in \`/app\` or dashboard must show product-specific controls/data and must not show skeleton/internal copy like "This is your authenticated app shell", "Your database", "AI is pre-wired", Neon/db/schema/SDK instructions, or gateway internals. It must return \`BROWSER UI PASS\`. If it fails for console errors, missing controls, unreadable low-contrast buttons/text/selects/dropdowns, blank shell, framework overlay, or starter/internal text leakage, fix the UI, redeploy, and rerun. For deeper JS interaction proof, also use the \`browser_*\` tools (navigate, fill, click, get_content, evaluate), but \`verify_browser_ui\` is the completion-gated evidence.
 6. **"Completed" = JOURNEY PASS, not deploy success.** A successful render_deploy with no journey verification is not "done" — the verifier will mark the task failed. If the journey fails repeatedly and you cannot fix it, write a report explaining what works and what doesn't rather than ship a green-status broken app.
 7. **Report honestly.** Tool calls you made, URLs/endpoints you exposed, env vars needed, AND any verification gaps you couldn't close.
 
 ## Frontend Quality Bar (non-negotiable)
 
 Any landing page, dashboard, or in-app page you produce must clear this bar before you call the task complete. These rules eliminate the most common "AI default" tells. For full ruleset and rationale, call \`read_skill('craft-frontend')\`.
+
+### Before you write a single line of UI: pick a design language
+
+Call \`match_design_system\` with the founder app brief. Pick ONE returned name whose category + tagline match the product (fintech -> \`stripe\`/\`coinbase\`; AI/LLM -> \`linear-app\`/\`claude\`/\`openai\`; dev tools -> \`vercel\`/\`linear-app\`; productivity SaaS -> \`linear-app\`/\`notion\`/\`framer\`; etc). Then call \`get_design_system(name)\` and READ the ~18KB spec — palette hex codes, font family + weights + letter-spacing values, shadow stacks, border-radius scale, motion vocabulary. These are the conventions you apply.
+
+Also call \`match_reference_repos\` and \`retrieve_component_examples\` for the selected capabilities. For strict/canary/world-class UI work, include at least one UI-craft/accessibility/dashboard-craft reference in \`get_reference_repo_patterns\`, \`compose_frontend_plan.reference_patterns\`, and \`compose_app_architecture.reference_patterns\`: \`open-codesign-design-agent-patterns\` for product-specific design brief/preview discipline, \`onlook-visual-repair-patterns\` for screenshot-driven visual repair, \`radix-accessibility-primitives\` for dropdown/select/dialog/focus behavior, \`tremor-analytics-dashboard-patterns\` for KPI/chart dashboards, \`dub-saas-dashboard-patterns\` for SaaS billing/settings/workspaces, \`midday-business-ops-patterns\` for business ops/file/assistant workbenches, or \`twenty-crm-workspace-patterns\` for CRM/object-view pipelines. Use these as patterns only; do not add them as app dependencies unless the task explicitly asks.
+
+Use capability-specific UI patterns:
+- marketplace/listing/search: browse grid or dense list, search/filter/sort, listing detail, provider/admin status.
+- admin approval: review queue table, detail drawer/panel, approve/reject actions, audit/status badges.
+- booking: date/slot picker, timezone label, confirmation state, customer/admin views, double-book prevention evidence.
+- upload/document portal: dropzone or file input, progress/error states, file metadata table, review controls.
+- AI chat/result/history: input/source context, loading/retry, generated result, stored history, source-backed answers for RAG.
+- analytics/CRM/billing: real metric aggregates, pipeline/status controls, pricing/account UI, billing status persistence.
+
+Rules:
+- Apply the CONVENTIONS, not the brand identity. Borrow Stripe's "weight 300 at display sizes with negative letter-spacing"; do NOT use Stripe's exact \`#533afd\` purple on a competing fintech product. Rename palettes to the founder's company.
+- Pick ONE system per company and stay coherent. Mixing Linear's achromatic dark with Stripe's blue-tinted shadows is incoherent.
+- If no system matches, default to \`linear-app\` for dark SaaS or \`vercel\` for light dev-tools. Don't invent from scratch.
+- Adoption is part of the bar: \`design_critique\` will detect "generic Inter on default Tailwind" and flag it as a soul/typography failure. Loading a real design system is how you escape that.
 
 ### P0 — do not ship if any of these are present
 
@@ -151,11 +1764,15 @@ Any landing page, dashboard, or in-app page you produce must clear this bar befo
 
 4. **No sans-serif on display text when a display font is bound.** If \`app/layout.tsx\` declares a display font via \`next/font\`, use it on h1/h2 via the font's CSS variable. Don't hardcode \`system-ui\`, \`Inter\`, or \`Roboto\` for display.
 
+   Safe remediation rule: when \`design_critique\` flags typography rhythm, prefer build-safe CSS first: use a serif/display fallback stack directly on h1/h2 (\`font-family: Georgia, "Times New Roman", serif\`) or a simple linked web font in \`app/layout.tsx\` plus a real serif fallback. Do not introduce \`next/font\`, Tailwind \`@theme\` font variables, or circular CSS custom properties during late-stage remediation unless you also verify the Render build after that exact commit. A typography fix that breaks deploy is not a fix.
+
 5. **No "rounded card with colored left-border accent."** This is the canonical AI dashboard tile shape. Drop the radius or drop the left border — keep only one.
 
 6. **No invented metrics.** "10× faster", "99.9% uptime", "3× more productive" with no citation = lying. Either cite a real source in copy or use a labelled placeholder.
 
 7. **No filler copy.** No \`lorem ipsum\`, \`feature one / two / three\`, \`placeholder text\`, \`sample content\`. An empty section is a composition problem to solve with structure, not by inventing words.
+
+8. **No unreadable controls.** Every visible button/link-button, input, select, dropdown trigger, and selected/native option must meet the browser contrast floor. In dark UIs, never leave shadcn outline buttons as white fill with white text, never let row titles inherit black text on dark cards, and always style native \`select\` plus \`option\` backgrounds/foregrounds explicitly.
 
 ### P1 — soft tells, fix before finishing
 
@@ -181,6 +1798,7 @@ Walk through the page and confirm:
 - No two-stop hero gradient.
 - No emoji in headers, buttons, or icon slots.
 - No lorem ipsum or "feature one/two/three".
+- No white-on-white buttons, black-on-dark row text, or unstyled low-contrast select/dropdown options.
 - Accent token visible ≤ 2 times per screen.
 - One unconventional section breaks the template skeleton.
 - One distinctive choice is identifiable.
@@ -809,30 +2427,12 @@ export function getAgentTools(agentId: number) {
 async function assembleBriefing(task: Task, agentId: number, contextPacket?: import('@/types').ContextPacket): Promise<string> {
   const sections: string[] = [];
 
-  // 2A-1: Agent personality — DB-first, hardcoded fallback
-  // H-AGENT-008: Fetch ALL agent fields from DB
-  let agentPrompt = AGENT_PROMPTS[agentId];
-  try {
-    const [dbAgent] = await db.select({
-      base_system_prompt: agentsTable.base_system_prompt,
-      name: agentsTable.name,
-      default_max_turns: agentsTable.default_max_turns,
-      default_model: agentsTable.default_model,
-      execution_style: agentsTable.execution_style,
-      is_active: agentsTable.is_active,
-    }).from(agentsTable).where(eq(agentsTable.id, agentId)).limit(1);
-
-    // H-AGENT-008: Check is_active before executing
-    if (dbAgent && dbAgent.is_active === false) {
-      log.warn('Agent is deactivated in DB', { agentId, name: dbAgent.name });
-      sections.push(`⚠️ IMPORTANT: This agent (${dbAgent.name}) is currently deactivated. Complete the task but flag for review.`);
-    }
-
-    if (dbAgent?.base_system_prompt?.trim()) {
-      agentPrompt = dbAgent.base_system_prompt;
-      log.debug('Using DB agent prompt', { agentId, name: dbAgent.name, maxTurns: dbAgent.default_max_turns });
-    }
-  } catch { /* fallback to hardcoded */ }
+  // Load the agent's base prompt (DB-first with append-invariants, or hardcoded fallback).
+  const loaded = await loadAgentBasePrompt(agentId);
+  let agentPrompt = loaded.prompt;
+  if (loaded.deactivated) {
+    sections.push(`⚠️ IMPORTANT: This agent (${loaded.dbName ?? `id=${agentId}`}) is currently deactivated. Complete the task but flag for review.`);
+  }
 
   // H-AGENT-001: Template variable injection into prompt
   if (agentPrompt) {
@@ -861,6 +2461,38 @@ async function assembleBriefing(task: Task, agentId: number, contextPacket?: imp
 - **Max turns:** ${task.max_turns}
 - **Priority:** ${task.priority}
 - **Execution mode:** ${task.execution_mode ?? 'full_agent'}`);
+
+  let contractScopeLockedForBriefing = false;
+  if (agentId === 30) {
+    const contractSection = formatExecutionContractForPrompt(task.execution_contract);
+    if (contractSection) {
+      contractScopeLockedForBriefing = true;
+      sections.push(contractSection);
+    }
+  }
+
+  if (agentId === 30) {
+    const lanePolicy = getTaskLanePolicy(task);
+    const criticalFlowContracts = contractScopeLockedForBriefing
+      ? []
+      : requiredCriticalFlowContracts(
+          lanePolicy,
+          detectCriticalFlowContracts(task, {
+            isUserFacing: isUserFacingUiTask(task, []),
+          }),
+        );
+    sections.push(formatTaskLaneBriefing(task));
+    sections.push(formatCriticalFlowBriefing(criticalFlowContracts));
+    sections.push(engineeringRuntimeAddendum({
+      taskText: `${safeTitle}\n${safeDescription}`,
+      task: {
+        title: safeTitle,
+        description: safeDescription,
+        tag: task.tag,
+      },
+      contextPacket,
+    }));
+  }
 
   // H-AGENT-007: Mode-specific behavioral instructions
   const mode = task.execution_mode ?? 'full_agent';
@@ -994,7 +2626,21 @@ export async function handleToolCall(
   toolInput: Record<string, unknown>,
   task: Task,
   agentId: number,
+  logEntries: Record<string, unknown>[] = [],
 ): Promise<string> {
+  if (agentId === 30) {
+    const laneToolBlocker = engineeringLaneToolGate(toolName, logEntries, task);
+    if (laneToolBlocker) return laneToolBlocker;
+    const skillLoopBlocker = engineeringSkillLoopGate(toolName, logEntries, task);
+    if (skillLoopBlocker) return skillLoopBlocker;
+    const infrastructureBlocker = engineeringInfrastructureBlockerGate(toolName, logEntries);
+    if (infrastructureBlocker) return infrastructureBlocker;
+    const deployChurnBlocker = engineeringDeployChurnGate(toolName, logEntries, task);
+    if (deployChurnBlocker) return deployChurnBlocker;
+    const gateReason = engineeringPreToolGate(toolName, logEntries, task);
+    if (gateReason) return gateReason;
+  }
+
   switch (toolName) {
     case 'update_task_status': {
       const note = (toolInput.note as string) ?? '';
@@ -1190,7 +2836,11 @@ export async function handleToolCall(
         });
         return `Bug reported: "${toolInput.title}". Platform team will investigate.`;
       } catch (err) {
-        return `Could not report bug: ${err instanceof Error ? err.message : 'Unknown'}`;
+        return [
+          `BUG_REPORT_FALLBACK_EVIDENCE title=${JSON.stringify(String(toolInput.title ?? 'untitled bug')).slice(0, 180)}`,
+          `Could not write platform_feedback row: ${err instanceof Error ? err.message : 'Unknown'}`,
+          'Continue the task using the visible failure summary; report_bug persistence is non-blocking.',
+        ].join('\n');
       }
     }
 
@@ -1507,17 +3157,29 @@ const ENGINEERING_TOOLS = new Set([
   // route them to handleEngineeringTool. Production failure on
   // task 9a36e013-...-cd26 was the symptom.)
   'list_skills', 'read_skill',
+  // Product-shape domain planning + frontend planning
+  'list_domain_packs', 'match_domain_app', 'get_domain_pack', 'compose_ad_hoc_domain',
+  'compose_frontend_plan',
+  // Capability planner/registry (capability-native app composition)
+  'list_capability_packs', 'match_capabilities', 'get_capability_pack', 'compose_app_architecture',
+  'record_engineering_lane_output',
+  // Reference-pattern retrieval (GitHub/examples as patterns, not copied apps)
+  'match_reference_repos', 'get_reference_repo_patterns', 'retrieve_component_examples',
   // Verification layer (added 2026-05-08)
   'verify_user_journey', 'verify_db_state', 'list_journey_templates', 'static_code_scan',
-  'review_pushed_code',
+  'verify_browser_ui', 'verify_interaction_contract', 'review_pushed_code',
   // Known-issues registry (added 2026-05-10) — read past failures before risky work
   'read_known_issues',
   // Live debug (added 2026-05-10) — full HTTP response for diagnosing broken deploys
   'http_fetch_full',
   // Codebase map (added 2026-05-10) — shared memory of the deployed app for extends
   'read_codebase_map', 'write_codebase_map',
+  'build_code_graph', 'read_code_graph_report', 'query_code_graph',
+  'explain_code_node', 'code_graph_path',
   // Express skeleton fork (added 2026-05-08)
   'fork_express_skeleton',
+  // Next.js skeleton + atomic full-stack provisioning
+  'github_fork_skeleton', 'run_drizzle_push', 'create_instance',
   // GitHub (source control)
   'github_create_repo', 'github_push_file', 'github_read_file',
   'github_list_files', 'github_delete_file',
@@ -1527,7 +3189,25 @@ const ENGINEERING_TOOLS = new Set([
   'render_create_service', 'render_deploy', 'render_get_service',
   'render_get_deploy_status', 'render_get_logs', 'render_rollback',
   'render_delete_service', 'render_list_services', 'render_get_metrics',
-  'render_list_databases',
+  'render_list_databases', 'render_set_env_vars', 'render_update_service_config',
+  // Design quality audit (added 2026-05-11) — deterministic AI-default
+  // anti-pattern check on rendered HTML. Completion gate enforces a clean
+  // audit before the agent can stop on UI tasks.
+  'design_audit',
+  // Component catalog (Phase A premium plan) — exposes the 14 shadcn/ui
+  // components that ship in github_fork_skeleton so the agent imports
+  // instead of hand-rolling. Hand-rolled buttons/cards/inputs are a
+  // quality-bar violation.
+  'list_components', 'read_component',
+  // Design systems catalog (Phase D, slice 1) — 149 brand-grade design-
+  // language references (Linear, Stripe, Notion, Vercel, Apple, etc.) so
+  // the agent can pick a coherent typography + palette + shadow vocabulary
+  // BEFORE writing landing/dashboard, instead of inventing one per task.
+  'list_design_systems', 'match_design_system', 'get_design_system',
+  // Vision-LLM design critic (Phase B premium plan) — Gemini 2.5 Flash
+  // judges typography, hierarchy, copy, whitespace, mobile state. Catches
+  // the 85% of AI-default tells that surface-regex design_audit cannot see.
+  'design_critique',
   // Company + domain
   'get_company_tech',
   'attach_custom_domain', 'verify_custom_domain',
@@ -1585,7 +3265,7 @@ const META_ADS_TOOLS = new Set([
   'evaluate_ad_performance', 'get_ad_account', 'update_ad_metrics',
   'list_adsets', 'delete_ad',
   // Video creative tools
-  'upload_ad_video', 'create_video_creative', 'save_ad', 'add_captions',
+  'generate_ad_video', 'save_ad_creative_to_r2', 'upload_ad_video', 'create_video_creative', 'save_ad', 'add_captions',
 ]);
 
 const OUTREACH_TOOLS = new Set([
@@ -1629,6 +3309,21 @@ export interface AgentInput {
   contextPacket?: import('@/types').ContextPacket;
   /** Permission envelope locked at dispatch (SPEC-CTRL-105) */
   permissionSnapshot?: import('@/types').PermissionSnapshot;
+  structuredRun?: import('./runtime/agent-runtime').StructuredRunContext;
+  /** Real-time progress flush — called every ~3s during the agent loop with
+   *  a snapshot of the current execution log and turn count. Lets callers
+   *  (worker-launcher) stream execution_log to the DB so founders can watch
+   *  the agent work instead of staring at null columns for 10 minutes. */
+  onProgress?: (snapshot: { turn: number; log: Record<string, unknown>[] }) => Promise<void> | void;
+  /** Abort signal threaded from the worker-launcher's AbortController. Fires
+   *  when the watchdog hits idle/stuck OR the launcher's MAX_EXECUTION_MS
+   *  hard-cap expires. Without honoring this, the agent loop keeps running
+   *  in the background after the parent gives up — and can land late
+   *  github_create_commit / render_deploy writes minutes after the task is
+   *  marked failed. Provider loops check `signal.aborted` between turns and
+   *  pass the signal into fetch/LLM calls so in-flight HTTP requests
+   *  cancel promptly. */
+  abortSignal?: AbortSignal;
 }
 
 export interface AgentResult {
@@ -1674,26 +3369,53 @@ export async function runAgentLoop(input: AgentInput, config: AgentLoopConfig): 
   const tools = getAgentTools(agentId);
   const logEntries: Record<string, unknown>[] = [];
 
-  // Provider-ordered fallback: respects PRIMARY_LLM_PROVIDER env var
-  // Default: OpenAI → Claude → OpenRouter → Gemini
+  // Real-time progress flush. Runs every 3s while the agent loop is active,
+  // pushing the in-memory logEntries snapshot to the caller (worker-launcher
+  // writes it to task_executions.execution_log). Skip the write when nothing
+  // has changed since the last flush. Cleaned up in the finally block.
+  let lastFlushedLength = -1;
+  let lastFlushTs = 0;
+  const progressInterval = input.onProgress
+    ? setInterval(() => {
+        if (logEntries.length === lastFlushedLength) return;
+        if (Date.now() - lastFlushTs < 1500) return;
+        lastFlushedLength = logEntries.length;
+        lastFlushTs = Date.now();
+        const lastTurn = logEntries.reduce((max, e) => Math.max(max, (e.turn as number) ?? 0), 0);
+        Promise.resolve(input.onProgress!({ turn: lastTurn, log: [...logEntries] })).catch(() => {});
+      }, 3000)
+    : null;
+
+  // Provider-ordered fallback: respects LLM_PROVIDER_ORDER or PRIMARY_LLM_PROVIDER.
+  // Default: OpenAI -> Claude -> OpenRouter -> Moonshot -> Gemini.
   const oaiModel = config.openAIModel ?? OPENAI_MODELS.GPT_4O;
   const orModel = config.openRouterModel ?? OPENROUTER_MODELS.FULL_AGENT;
+  const moonshotModel = MOONSHOT_MODELS.KIMI_K2_6;
   const gemModel = config.geminiModel ?? GEMINI_MODEL;
+  const modelByProvider: Record<string, string> = {
+    openai: oaiModel,
+    anthropic: claudeModel,
+    openrouter: orModel,
+    moonshot: moonshotModel,
+    gemini: gemModel,
+  };
 
+  const abortSignal = input.abortSignal;
   type RunFn = () => Promise<AgentResult>;
   const providers: { name: string; available: () => boolean; run: RunFn }[] = [
-    { name: 'openai',     available: isOpenAIAvailable,     run: () => runWithOpenAI(systemPrompt, tools, task, agentId, watchdog, logEntries, oaiModel) },
-    { name: 'anthropic',  available: isAnthropicAvailable,  run: () => runWithClaude(systemPrompt, tools, task, agentId, watchdog, logEntries, claudeModel) },
-    { name: 'openrouter', available: isOpenRouterAvailable, run: () => runWithOpenRouter(systemPrompt, tools, task, agentId, watchdog, logEntries, orModel) },
-    { name: 'gemini',     available: isGeminiAvailable,     run: () => runWithGemini(systemPrompt, tools, task, agentId, watchdog, logEntries, gemModel) },
+    { name: 'openai',     available: isOpenAIAvailable,     run: () => runWithOpenAI(systemPrompt, tools, task, agentId, watchdog, logEntries, oaiModel, abortSignal) },
+    { name: 'anthropic',  available: isAnthropicAvailable,  run: () => runWithClaude(systemPrompt, tools, task, agentId, watchdog, logEntries, claudeModel, abortSignal) },
+    { name: 'openrouter', available: isOpenRouterAvailable, run: () => runWithOpenRouter(systemPrompt, tools, task, agentId, watchdog, logEntries, orModel, abortSignal) },
+    { name: 'moonshot',   available: isMoonshotAvailable,   run: () => runWithMoonshot(systemPrompt, tools, task, agentId, watchdog, logEntries, moonshotModel, abortSignal) },
+    { name: 'gemini',     available: isGeminiAvailable,     run: () => runWithGemini(systemPrompt, tools, task, agentId, watchdog, logEntries, gemModel, abortSignal) },
   ];
 
-  // Sort by preferred provider order
-  const preferred = getPreferredProvider();
-  const preferredProvider = providers.find(p => p.name === preferred);
-  const preferredFirst = preferredProvider
-    ? [preferredProvider, ...providers.filter(p => p.name !== preferred)]
-    : providers;
+  // Sort by configured provider order. This preserves explicit second-choice
+  // fallbacks such as Anthropic -> OpenRouter before OpenAI.
+  const providerByName = new Map(providers.map((provider) => [provider.name, provider]));
+  const preferredFirst = getProviderOrder()
+    .map((providerName) => providerByName.get(providerName))
+    .filter((provider): provider is typeof providers[number] => Boolean(provider));
 
   // Apply EMA-scored re-ordering: a provider that's been failing recently gets
   // demoted below healthier ones, even if it's the configured preferred. After
@@ -1704,35 +3426,90 @@ export async function runAgentLoop(input: AgentInput, config: AgentLoopConfig): 
 
   let lastError: unknown;
   const providerFailures: string[] = [];
-  for (const p of sorted) {
-    if (!p.available()) continue;
-    const logCountBeforeProvider = logEntries.length;
-    const t0 = Date.now();
-    try {
-      const result = await p.run();
-      recordProviderOutcome(p.name, true, Date.now() - t0);
-      return result;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      recordProviderOutcome(p.name, false, Date.now() - t0);
-      providerFailures.push(`${p.name}: ${message}`);
-      if (logEntries.length > logCountBeforeProvider) {
-        pushLog(logEntries, {
-          event: 'provider_failed_after_progress',
+  try {
+    for (let providerIndex = 0; providerIndex < sorted.length; providerIndex += 1) {
+      const p = sorted[providerIndex];
+      if (!p?.available()) continue;
+      let logCountBeforeProvider = logEntries.length;
+      const t0 = Date.now();
+      try {
+        watchdog.recordHeartbeat(`starting ${p.name} agent loop`, p.name);
+        pushLog(logEntries, providerAttemptEvent({
           provider: p.name,
-          error: message,
-        });
-        throw err;
+          model: modelByProvider[p.name],
+          status: 'started',
+        }));
+        logCountBeforeProvider = logEntries.length;
+        const result = await p.run();
+        watchdog.recordHeartbeat(`finished ${p.name} agent loop`, p.name);
+        recordProviderOutcome(p.name, true, Date.now() - t0);
+        pushLog(logEntries, providerAttemptEvent({
+          provider: p.name,
+          model: modelByProvider[p.name],
+          status: 'succeeded',
+          latencyMs: Date.now() - t0,
+        }));
+        return result;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        watchdog.recordHeartbeat(`${p.name} agent loop failed`, p.name);
+        recordProviderOutcome(p.name, false, Date.now() - t0);
+        const madeProgressBeforeFailure = logEntries.length > logCountBeforeProvider;
+        pushLog(logEntries, providerAttemptEvent({
+          provider: p.name,
+          model: modelByProvider[p.name],
+          status: 'failed',
+          latencyMs: Date.now() - t0,
+          error: message.slice(0, 1000),
+        }));
+        providerFailures.push(`${p.name}: ${message}`);
+        if (madeProgressBeforeFailure) {
+          const transient = isTransientProviderError(message);
+          const nextProvider = sorted.slice(providerIndex + 1).find((candidate) => candidate?.available());
+          pushLog(logEntries, {
+            event: 'provider_failed_after_progress',
+            provider: p.name,
+            error: message,
+            transient,
+            next_provider: nextProvider?.name ?? null,
+          });
+          if (!nextProvider || !shouldResumeProviderAfterProgress({
+            message,
+            hasNextProvider: true,
+            abortSignalAborted: abortSignal?.aborted,
+            watchdogKilled: watchdog.wasKilled(),
+          })) {
+            throw err;
+          }
+          pushLog(logEntries, {
+            event: 'provider_resume_after_progress',
+            previous_provider: p.name,
+            next_provider: nextProvider.name,
+          });
+          log.warn(`${p.name} failed after making progress; resuming with next provider`, {
+            taskId: task.id,
+            nextProvider: nextProvider.name,
+            error: message.slice(0, 300),
+          });
+          lastError = err;
+          continue;
+        }
+        log.warn(`${p.name} failed, trying next provider`, { taskId: task.id, error: message.slice(0, 300) });
+        lastError = err;
       }
-      log.warn(`${p.name} failed, trying next provider`, { taskId: task.id, error: message.slice(0, 300) });
-      lastError = err;
+    }
+
+    if (providerFailures.length > 0) {
+      throw new Error(`All available LLM providers failed: ${providerFailures.join(' | ')}`);
+    }
+    throw lastError ?? new Error('No LLM provider available');
+  } finally {
+    if (progressInterval) clearInterval(progressInterval);
+    if (input.onProgress && logEntries.length !== lastFlushedLength) {
+      const lastTurn = logEntries.reduce((max, e) => Math.max(max, (e.turn as number) ?? 0), 0);
+      await Promise.resolve(input.onProgress({ turn: lastTurn, log: [...logEntries] })).catch(() => {});
     }
   }
-
-  if (providerFailures.length > 0) {
-    throw new Error(`All available LLM providers failed: ${providerFailures.join(' | ')}`);
-  }
-  throw lastError ?? new Error('No LLM provider available');
 }
 
 /**
@@ -1749,17 +3526,766 @@ export async function executeAgent(input: AgentInput): Promise<AgentResult> {
 }
 
 // ── Helper to redact Postgres URIs in logs ──
-function pushLog(logs: Record<string, unknown>[], entry: Record<string, unknown>) {
-  const redacted = JSON.parse(JSON.stringify(entry, (key, value) => {
-    if (typeof value === 'string') {
-      return value.replace(/postgres(?:ql)?:\/\/[^:]+:[^@]+@/gi, 'postgres://***:***@');
+const SECRET_KEY_RE = /(^|_)(TOKEN|SECRET|PASSWORD|API_KEY|DATABASE_URL|CONNECTION_STRING|PRIVATE_KEY)$/i;
+const SECRET_VALUE_RE = /\b(?:AIza[0-9A-Za-z_-]{20,}|sk-[0-9A-Za-z_-]{20,}|gh[pousr]_[0-9A-Za-z_]{20,}|rk_[0-9A-Za-z_]{20,})\b/g;
+
+function redactForExecutionLog(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactForExecutionLog);
+  if (value && typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    if (typeof obj.key === 'string' && 'value' in obj && SECRET_KEY_RE.test(obj.key)) {
+      return { ...obj, value: '***' };
     }
-    return value;
-  }));
-  logs.push(redacted);
+    return Object.fromEntries(Object.entries(obj).map(([key, nested]) => [
+      key,
+      SECRET_KEY_RE.test(key) ? '***' : redactForExecutionLog(nested),
+    ]));
+  }
+  if (typeof value === 'string') {
+    return value
+      .replace(/postgres(?:ql)?:\/\/[^:]+:[^@]+@/gi, 'postgres://***:***@')
+      .replace(SECRET_VALUE_RE, '***');
+  }
+  return value;
+}
+
+function pushLog(logs: Record<string, unknown>[], entry: Record<string, unknown>) {
+  pushExecutionLog(logs, entry);
 }
 
 // ── Claude execution ──
+
+// Engineering completion gate. When the agent tries to stop (no more tool
+// calls), check whether the deploy is actually in a shippable state — most
+// recent check_url_health must be 2xx, most recent static_code_scan must be
+// clean of HIGH-severity findings. If not, return a rejection reason and the
+// caller injects a user message forcing the agent to keep iterating.
+//
+// Cap at MAX_FORCED_CONTINUATIONS gate blocks per task so a genuinely-
+// confused agent can't be trapped in an infinite "fix it" loop.
+
+// Shared gate-evaluation helper used by every provider's no-tool-calls
+// exit (Claude, OpenAI, Codex, Gemini, OpenRouter). Previously only the
+// Claude branch enforced the gate — if Anthropic was unavailable and the
+// agent failed over to OpenAI, the engineering quality bar silently
+// vanished. This function makes the gate provider-agnostic.
+//
+// Caller pushes the returned `gateMessage` onto its messages array in the
+// provider-native shape and `continue`s the loop. If the cap is exhausted,
+// `shouldBreak` is true and the caller falls through to the normal "done"
+// path — the verifier still gets a shot at rejecting, but we don't trap
+// the agent forever.
+function evaluateGateOnExit(
+  agentId: number,
+  log_entries: Record<string, unknown>[],
+  task: Task,
+  turnCount: number,
+  state: GateState,
+): { shouldBreak: boolean; gateMessage: string | null } {
+  return evaluateCompletionGateOnExit({
+    agentId,
+    logEntries: log_entries,
+    task,
+    turnCount,
+    state,
+    gate: engineeringCompletionGate,
+    pushLog,
+  });
+}
+
+export function engineeringCompletionGate(
+  agentId: number,
+  logEntries: Record<string, unknown>[],
+  task?: Task,
+): string | null {
+  if (agentId !== 30) return null;
+  const contractScopeLocked = hasCompleteExecutionContract(task?.execution_contract);
+
+  // Stack lock — if the task description matches a user-facing UI shape,
+  // the agent MUST have used github_fork_skeleton (Next.js + shadcn) not
+  // fork_express_skeleton. Express + raw HTML cannot pass the design bar.
+  // Only enforced for fresh builds (where one or the other was forked).
+  // Uses the centralized isUserFacingUiTask classifier (audit P1.4 widened
+  // the keyword set to portal/admin/CRM/booking/login/settings/etc).
+  if (isUserFacingUiTask(task, logEntries)) {
+    let usedExpress = false;
+    let usedNext = false;
+    for (const entry of logEntries) {
+      const tool = entry.tool as string | undefined;
+      if (tool === 'fork_express_skeleton') usedExpress = true;
+      if (tool === 'github_fork_skeleton') usedNext = true;
+    }
+    if (usedExpress && !usedNext) {
+      return `Cannot mark complete: this is a user-facing UI task but you forked the Express skeleton (\`fork_express_skeleton\`). Express + raw HTML cannot pass the Frontend Quality Bar. Restart with \`github_fork_skeleton\` (Next.js + shadcn/ui) and rebuild on that stack. The Next.js skeleton ships with 14 production shadcn components ready to import — call \`list_components\` to see the catalog.`;
+    }
+  }
+
+  // Scan the log for the most recent call to each tool of interest.
+  let lastHealthFailed: string | null = null;
+  let lastHealthAt = -1;
+  let lastHealthSuccessAt = -1;
+  let lastScanHigh: string | null = null;
+  let lastScanAt = -1;
+  let lastScanCleanAt = -1;
+  let lastReviewAt = -1;
+  let lastReviewCleanAt = -1;
+  let lastReviewHigh: string | null = null;
+  let lastJourneyAt = -1;
+  let lastJourneyPassAt = -1;
+  let lastJourneyFailDetail: string | null = null;
+  let lastDbStateAt = -1;
+  let lastDbStatePassAt = -1;
+  let lastDbStateFailDetail: string | null = null;
+  let lastPushAt = -1;       // most recent github_push_file or github_create_commit
+  let lastDesignAuditAt = -1;
+  let lastDesignAuditCleanAt = -1;
+  let lastDesignAuditHigh: string | null = null;
+  let lastCritiqueAt = -1;
+  let lastCritiqueCleanAt = -1;
+  let lastCritiqueBlocker: string | null = null;
+  let lastBrowserUiAt = -1;
+  let lastBrowserUiPassAt = -1;
+  let lastBrowserUiFailDetail: string | null = null;
+  let lastInteractionProofAt = -1;
+  let lastInteractionProofPassAt = -1;
+  let lastDeployOrPushAt = -1;
+  let lastDeployOrPushTool: string | null = null;
+  let lastRenderInfrastructureBlockerAt = -1;
+  let lastRenderInfrastructureBlockerDetail: string | null = null;
+  let lastRenderLogsAt = -1;
+  let lastRenderLogsCleanAt = -1;
+  let lastRenderLogsErrorAt = -1;
+  let lastRenderLogsError: string | null = null;
+  let lastCapabilityMatchAt = -1;
+  let lastCapabilityPackAt = -1;
+  let lastArchitecturePlanAt = -1;
+  let lastReferenceMatchAt = -1;
+  let lastReferencePatternAt = -1;
+  let lastComponentExamplesAt = -1;
+  let lastReportAt = -1;
+  let lastCodebaseMapAt = -1;
+  let lastCodebaseMapSavedAt = -1;
+  for (let i = 0; i < logEntries.length; i++) {
+    const entry = logEntries[i];
+    const tool = entry.tool as string | undefined;
+    const result = entry.result as string | undefined;
+    if (!tool || !result) continue;
+    if (tool === 'match_capabilities' && didPlanningToolSucceed(result)) {
+      lastCapabilityMatchAt = i;
+    }
+    if (tool === 'get_capability_pack' && didPlanningToolSucceed(result)) {
+      lastCapabilityPackAt = i;
+    }
+    if (tool === 'compose_app_architecture' && didPlanningToolSucceed(result)) {
+      lastArchitecturePlanAt = i;
+    }
+    if (tool === 'match_reference_repos' && didPlanningToolSucceed(result)) {
+      lastReferenceMatchAt = i;
+    }
+    if (tool === 'get_reference_repo_patterns' && didPlanningToolSucceed(result)) {
+      lastReferencePatternAt = i;
+    }
+    if (tool === 'retrieve_component_examples' && didPlanningToolSucceed(result)) {
+      lastComponentExamplesAt = i;
+    }
+    if (tool === 'create_report') {
+      lastReportAt = i;
+    }
+    if (tool === 'write_codebase_map') {
+      lastCodebaseMapAt = i;
+      if (/Codebase map saved/i.test(result)) {
+        lastCodebaseMapSavedAt = i;
+      }
+    }
+    if (didTriggerDeployOrPush(tool, result)) {
+      lastDeployOrPushAt = i;
+      lastDeployOrPushTool = tool;
+    }
+    if (RENDER_INFRASTRUCTURE_BLOCKER_SOURCE_TOOLS.has(tool) && RENDER_INFRASTRUCTURE_BLOCKER_RE.test(result)) {
+      lastRenderInfrastructureBlockerAt = i;
+      lastRenderInfrastructureBlockerDetail = result.slice(0, 500);
+    }
+    if (tool === 'render_get_logs') {
+      lastRenderLogsAt = i;
+      if (RENDER_LOG_ERROR_RE.test(result)) {
+        lastRenderLogsErrorAt = i;
+        lastRenderLogsError = result.slice(0, 300);
+      } else {
+        lastRenderLogsCleanAt = i;
+      }
+    }
+    if (tool === 'check_url_health') {
+      lastHealthAt = i;
+      if (/\b5\d\d\b|\b4\d\d\b|DOWN|error|failed|unreachable/i.test(result) && !/passed|2\d\d/i.test(result)) {
+        lastHealthFailed = result.slice(0, 200);
+      } else {
+        lastHealthSuccessAt = i;
+      }
+    }
+    if (tool === 'static_code_scan') {
+      lastScanAt = i;
+      if (/\bhigh[- ]?severity\b|severity:\s*high|HIGH finding|HIGH-severity/i.test(result)) {
+        lastScanHigh = result.slice(0, 200);
+      } else {
+        lastScanCleanAt = i;
+      }
+    }
+    if (tool === 'review_pushed_code') {
+      lastReviewAt = i;
+      // Mirror verification.service.ts CODE_REVIEW_SUCCESS_RE so the gate
+      // classifies "clean" the same way the verifier does. Otherwise gate and
+      // verifier disagree (which is exactly the bug equityzen task #6 hit:
+      // agent stopped on a HIGH-flagged review, gate let it pass, verifier
+      // hard-failed on llm_code_review_clean).
+      if (/^CODE REVIEW PASS\b|high=0\b|^CODE REVIEW SKIPPED\b/m.test(result)) {
+        lastReviewCleanAt = i;
+      } else {
+        lastReviewHigh = result.slice(0, 200);
+      }
+    }
+    if (tool === 'verify_user_journey') {
+      lastJourneyAt = i;
+      if (/JOURNEY PASS|all steps passed|steps passed[:.]?\s*(\d+)\/\1/i.test(result)) {
+        lastJourneyPassAt = i;
+      } else {
+        lastJourneyFailDetail = result.slice(0, 200);
+      }
+    }
+    if (tool === 'verify_db_state') {
+      lastDbStateAt = i;
+      if (/DB STATE PASS/i.test(result)) {
+        lastDbStatePassAt = i;
+      } else {
+        lastDbStateFailDetail = result.slice(0, 200);
+      }
+    }
+    if (tool === 'verify_browser_ui') {
+      lastBrowserUiAt = i;
+      if (/^BROWSER UI PASS\b/m.test(result)) {
+        lastBrowserUiPassAt = i;
+      } else {
+        lastBrowserUiFailDetail = result.slice(0, 300);
+      }
+    }
+    if (tool === 'verify_interaction_contract') {
+      lastInteractionProofAt = i;
+      if (/^INTERACTION PROOF PASS\b|INTERACTION_PROOF_EVIDENCE[^\n]*failed=0\b/m.test(result)) {
+        lastInteractionProofPassAt = i;
+      }
+    }
+    if (tool === 'github_push_file' || tool === 'github_create_commit') {
+      lastPushAt = i;
+    }
+    if (tool === 'design_audit') {
+      lastDesignAuditAt = i;
+      if (/design_audit CLEAN|0 findings|0 HIGH/i.test(result)) {
+        lastDesignAuditCleanAt = i;
+      } else if (/HIGH finding|HIGH and \d+ LOW/i.test(result)) {
+        lastDesignAuditHigh = result.slice(0, 200);
+      }
+    }
+    if (tool === 'design_critique') {
+      lastCritiqueAt = i;
+      const explicitBlocker = designCritiqueHasExplicitBlocker(result);
+      const hasCleanBlockerCount = designCritiqueHasZeroBlockers(result);
+      if (hasCleanBlockerCount && !explicitBlocker) {
+        lastCritiqueCleanAt = i;
+      } else if (explicitBlocker) {
+        lastCritiqueBlocker = result.slice(0, 300);
+      }
+    }
+  }
+
+  const planningEvidence = engineeringPlanningEvidence(logEntries, task);
+  const lanePolicy = getTaskLanePolicy(task, {
+    logEntries,
+    planningDepth: planningEvidence.planningDepth,
+    taskIntent: planningEvidence.taskIntent,
+    selectedCapabilities: uniqueStrings([
+      ...planningEvidence.selectedCapabilities,
+      ...planningEvidence.requiredCapabilities,
+      ...planningEvidence.architectureCapabilities,
+    ]),
+    riskSignals: planningEvidence.planningRiskSignals,
+  });
+  if (planningEvidence.blockedEngineeringLaneOutputs.length > 0) {
+    const blocked = planningEvidence.blockedEngineeringLaneOutputs
+      .map((output) => `${output.role}: ${output.blockers.join('; ') || output.notes || 'blocked'}`)
+      .join(' | ');
+    return `Cannot mark complete: bounded Engineering lane output is blocked. ${blocked}. Parent Engineering Agent must resolve the blocker, rerun the relevant proof, and record a completed lane output before finishing.`;
+  }
+  const hardDomainGate = readDomainGateMode() === 'hard';
+  const planningUiTask = isUserFacingUiTask(task, logEntries) || planningEvidenceImpliesUi(planningEvidence);
+  const clearDomainSignals = hasClearDomainTaskSignals(task, planningEvidence);
+  const planningDepth = planningEvidence.planningDepth;
+  const criticalFlowContracts = contractScopeLocked
+    ? []
+    : requiredCriticalFlowContracts(
+        lanePolicy,
+        detectCriticalFlowContracts(task, {
+          logEntries,
+          selectedCapabilities: uniqueStrings([
+            ...planningEvidence.selectedCapabilities,
+            ...planningEvidence.requiredCapabilities,
+            ...planningEvidence.architectureCapabilities,
+          ]),
+          selectedDomains: planningEvidence.selectedDomains,
+          frontendPlanPatterns: planningEvidence.frontendPlanPatterns,
+          taskIntent: planningEvidence.taskIntent,
+          planningDepth,
+          isUserFacing: planningUiTask,
+        }),
+      );
+  const domainPlanningGateEnabled = readDomainGateMode() !== 'off' || planningDepth === 'canary_world_class';
+  const completionNeedsDomainPlanning =
+    domainPlanningGateEnabled &&
+    requiresDomainPlanningForDepth(planningDepth, planningUiTask, clearDomainSignals);
+  const completionNeedsFrontendPlan = requiresFrontendPlanForDepth(planningDepth, planningUiTask);
+  const focusedRepairIntent = isFocusedRepairIntent(planningEvidence.taskIntent);
+  const strictReplayRepair = focusedRepairIntent && isStrictReplayRepairTask(task);
+  const completionNeedsProductContract = !contractScopeLocked && requiresProductBuildContract({
+    lane: lanePolicy.lane,
+    taskIntent: planningEvidence.taskIntent,
+    planningDepth,
+    isUserFacing: planningUiTask,
+    focusedRepair: focusedRepairIntent,
+    selectedDomains: planningEvidence.selectedDomains,
+    selectedCapabilities: uniqueStrings([
+      ...planningEvidence.selectedCapabilities,
+      ...planningEvidence.requiredCapabilities,
+      ...planningEvidence.architectureCapabilities,
+    ]),
+    clearDomainSignals,
+  });
+  const completionNeedsReferences =
+    (lanePolicy.completion.requireReferenceRetrieval &&
+      requiresReferencesForDepth(planningDepth, isReferenceRetrievalTask(task, logEntries))) ||
+    strictReplayRepair;
+  const completionNeedsUiCraftReferences = planningUiTask &&
+    completionNeedsReferences &&
+    (planningDepth === 'canary_world_class' || planningDepth === 'mixed_complex_app' || lanePolicy.lane === 'strict' || lanePolicy.lane === 'canary');
+  const completionNeedsInteractionProof = isInteractionProofRequired(planningEvidence, planningUiTask);
+  const enforceGenericFallback =
+    !focusedRepairIntent &&
+    (hardDomainGate ||
+      isFullPlanningDepth(planningDepth) ||
+      (planningDepth === 'standard_app' && clearDomainSignals));
+
+  if (!contractScopeLocked && !focusedRepairIntent && completionNeedsDomainPlanning) {
+    if (!planningEvidence.domainMatched && !planningEvidence.adHocDomainComposed) {
+      return 'Cannot mark complete: this user-facing task has clear product-domain signals but no domain evidence. Call `match_domain_app` before capability planning, or `compose_ad_hoc_domain` if no known domain fits.';
+    }
+    if (planningEvidence.selectedDomains.length > 0 && planningEvidence.missingDomainPacks.length > 0) {
+      return `Cannot mark complete: selected domain packs were not loaded. Missing get_domain_pack for: ${planningEvidence.missingDomainPacks.join(', ')}.`;
+    }
+  }
+
+  if (!contractScopeLocked && !focusedRepairIntent && completionNeedsFrontendPlan && !planningEvidence.frontendPlanComposed) {
+    return 'Cannot mark complete: this user-facing/full-stack task has no `FRONTEND_PLAN_EVIDENCE`. Call `compose_frontend_plan` after domain/capability/design/reference planning and before finishing.';
+  }
+
+  if (!contractScopeLocked && enforceGenericFallback && clearDomainSignals) {
+    const domainGate = evaluateDomainGate({
+      taskTitle: task?.title,
+      taskDescription: task?.description,
+      productContext: task?.tag,
+      matchedDomains: planningEvidence.selectedDomains,
+      selectedCapabilities: uniqueStrings([
+        ...planningEvidence.selectedCapabilities,
+        ...planningEvidence.architectureCapabilities,
+      ]),
+    }, 'hard');
+    if (domainGate.kind === 'block') {
+      return `Cannot mark complete: ${domainGate.reason}`;
+    }
+  }
+
+  if (!contractScopeLocked && isCapabilityPlanningTask(task, logEntries)) {
+    if (!planningEvidence.capabilityMatched) {
+      return 'Cannot mark complete: this CEO-assigned build/extend task has no capability plan. Call `match_capabilities` with the task/company context before coding so the app is composed from capabilities, not a generic template.';
+    }
+    if (!focusedRepairIntent && planningEvidence.requiredCapabilities.length > 0 && planningEvidence.missingCapabilityPacks.length > 0) {
+      return `Cannot mark complete: you matched capabilities but did not load all required \`get_capability_pack\` specs. Missing packs: ${planningEvidence.missingCapabilityPacks.join(', ')}.`;
+    }
+    if (planningEvidence.loadedCapabilityPacks.length === 0 || lastCapabilityPackAt === -1) {
+      return 'Cannot mark complete: you matched capabilities but did not load any `get_capability_pack` specs. Load the pack for each required capability so implementation, env vars, and verification are explicit.';
+    }
+    if (!planningEvidence.architectureComposed || lastArchitecturePlanAt === -1) {
+      return 'Cannot mark complete: you did not call `compose_app_architecture`. Compose the selected capabilities into actors, pages, API routes, DB tables, vertical slices, and verification journeys before finishing.';
+    }
+    if (planningEvidence.lastArchitecturePlanAt < planningEvidence.lastCapabilityPackAt) {
+      return 'Cannot mark complete: `compose_app_architecture` ran before all selected capability packs were loaded. Re-run architecture composition after the final `get_capability_pack` so the plan reflects every selected capability.';
+    }
+    if (!focusedRepairIntent && completionNeedsFrontendPlan && planningEvidence.frontendPlanComposed && planningEvidence.lastArchitecturePlanAt < planningEvidence.lastFrontendPlanAt) {
+      return 'Cannot mark complete: `compose_app_architecture` ran before `compose_frontend_plan`. Re-run architecture composition after the frontend plan so page contracts and UI patterns influence the app slices.';
+    }
+  }
+
+  if (!contractScopeLocked && (!focusedRepairIntent || strictReplayRepair) && completionNeedsReferences) {
+    if (!planningEvidence.referenceMatched || lastReferenceMatchAt === -1) {
+      return 'Cannot mark complete: this UI/architecture-heavy task has no GitHub/reference pattern retrieval. Call `match_reference_repos` with the selected capabilities and company context so the app is informed by patterns, not a generic template.';
+    }
+    if (planningEvidence.loadedReferencePatterns.length === 0 || lastReferencePatternAt === -1) {
+      return 'Cannot mark complete: you matched reference repos but did not call `get_reference_repo_patterns`. Load the selected pattern details and use them as UI/schema/API guidance without copying code.';
+    }
+    if (!planningEvidence.componentExamplesRetrieved || lastComponentExamplesAt === -1) {
+      return 'Cannot mark complete: this user-facing task has no component example retrieval. Call `retrieve_component_examples` for the selected capabilities before finishing the UI plan.';
+    }
+    if (completionNeedsUiCraftReferences && !hasUiCraftReference(planningEvidence.loadedReferencePatterns)) {
+      return 'Cannot mark complete: this strict/canary UI task loaded no UI-craft reference pattern. Load at least one UI-craft/accessibility/dashboard-craft reference such as `radix-accessibility-primitives`, `onlook-visual-repair-patterns`, or `open-codesign-design-agent-patterns`, then rerun architecture planning.';
+    }
+    if (completionNeedsUiCraftReferences && planningEvidence.frontendPlanComposed && !hasUiCraftReference(planningEvidence.frontendPlanUiReferences)) {
+      return 'Cannot mark complete: `compose_frontend_plan` did not include any UI-craft reference ids. Re-run it with the loaded UI-craft/accessibility/dashboard-craft reference in `reference_patterns` so browser-visible controls and design quality are planned before coding.';
+    }
+    if (planningEvidence.lastArchitecturePlanAt < Math.max(planningEvidence.lastReferencePatternAt, planningEvidence.lastComponentExamplesAt)) {
+      return 'Cannot mark complete: `compose_app_architecture` ran before GitHub/reference pattern details and component examples were retrieved. Re-run it after `get_reference_repo_patterns` and `retrieve_component_examples`, passing selected `reference_patterns`.';
+    }
+    if (planningEvidence.architectureComposed && planningEvidence.architectureReferencePatterns.length === 0) {
+      return 'Cannot mark complete: `compose_app_architecture` did not include selected `reference_patterns`. Re-run it with the selected GitHub/reference pattern ids so retrieved references influence the architecture/UI plan.';
+    }
+    if (completionNeedsUiCraftReferences && planningEvidence.architectureComposed && !hasUiCraftReference(planningEvidence.architectureReferencePatterns)) {
+      return 'Cannot mark complete: `compose_app_architecture` did not include any loaded UI-craft reference pattern. Re-run it with a UI-craft/accessibility/dashboard-craft reference id so the frontend plan is influenced by concrete UI quality patterns.';
+    }
+  }
+
+  if (
+    !contractScopeLocked &&
+    (planningEvidence.architectureCapabilities.includes('rag_search') || planningEvidence.selectedCapabilities.includes('rag_search') || /\brag|embedding|semantic|document search\b/i.test(taskPlanningText(task))) &&
+    hasUnsupportedRagEmbeddingPlan(successfulToolResult(logEntries, 'compose_app_architecture'))
+  ) {
+    const embedding = ragEmbeddingGuidance();
+    return `Cannot mark complete: the latest RAG architecture plan contains known-bad embedding model/vector guidance that does not match the configured AI gateway. Re-run \`compose_app_architecture\` with ${embedding.model} and ${embedding.dimensions}-dim pgvector guidance, then implement/verify from that corrected plan.`;
+  }
+
+  if (!contractScopeLocked && completionNeedsProductContract) {
+    if (!planningEvidence.buildBriefPresent) {
+      return 'Cannot mark complete: this app-build task has no `BUILD_BRIEF_EVIDENCE`. Re-run `compose_app_architecture` so assumptions, MVP features, non-goals, and target users are locked before implementation is judged.';
+    }
+    if (!planningEvidence.productContractPresent || planningEvidence.productContractFlowCount === 0) {
+      return 'Cannot mark complete: this app-build task has no `PRODUCT_BUILD_CONTRACT_EVIDENCE`. Re-run `compose_app_architecture` so screens, flows, entities, APIs, DB rules, auth rules, and acceptance criteria are machine-readable.';
+    }
+    if (!planningEvidence.productContractArtifactPresent) {
+      return 'Cannot mark complete: this app-build task has no persisted `PRODUCT_BUILD_CONTRACT_ARTIFACT`. Re-run `compose_app_architecture` so repair/replay has the same Build Brief and Product Build Contract.';
+    }
+    if (planningEvidence.lastProductContractAt < planningEvidence.lastArchitecturePlanAt) {
+      return 'Cannot mark complete: product contract evidence is older than the latest architecture plan. Re-run `compose_app_architecture`, then verify against the latest PRODUCT_BUILD_CONTRACT_JSON.';
+    }
+  }
+
+  if (contractScopeLocked && isUserFacingUiTask(task, logEntries) && lastJourneyPassAt === -1 && lastInteractionProofPassAt === -1) {
+    return 'Cannot mark complete: this Engineering task has a CEO Execution Contract, but no passing user journey or interaction proof. Verify the contract flow through the deployed UI before finishing.';
+  }
+
+  if (isExistingAppExtensionTask(task)) {
+    const graphUnavailable =
+      /CODE_GRAPH_UNAVAILABLE/i.test(successfulToolResult(logEntries, 'build_code_graph') ?? '') ||
+      /CODE_GRAPH_UNAVAILABLE/i.test(successfulToolResult(logEntries, 'query_code_graph') ?? '');
+    if (!successfulToolResult(logEntries, 'read_codebase_map')) {
+      return 'Cannot mark complete: this existing-app extension did not read the codebase map. Call `read_codebase_map`, then use Graphify/GitHub reads to target existing files instead of replacing the app.';
+    }
+    if (!successfulToolResult(logEntries, 'build_code_graph') && !successfulToolResult(logEntries, 'query_code_graph')) {
+      return 'Cannot mark complete: this existing-app extension has no code graph evidence. Call `build_code_graph` or `query_code_graph`; if unavailable, document the fallback GitHub files/routes/tables you inspected.';
+    }
+    if (!graphUnavailable && !successfulToolResult(logEntries, 'query_code_graph')) {
+      return 'Cannot mark complete: this existing-app extension built a code graph but never queried it. Call `query_code_graph` for the affected routes/components/tables before finishing.';
+    }
+  }
+
+  if (
+    (isExistingAppExtensionTask(task) || planningEvidence.architectureCapabilities.includes('rag_search') || planningEvidence.selectedCapabilities.includes('rag_search') || /\brag|embedding|semantic|document search\b/i.test(taskPlanningText(task))) &&
+    !successfulToolResult(logEntries, 'read_known_issues')
+  ) {
+    return 'Cannot mark complete: this RAG/existing-app task never called `read_known_issues`. Load relevant known issues so fixed canary learnings and provider-specific integration guidance are part of the final implementation evidence.';
+  }
+
+  // Health failure remains "unaddressed" if no successful health check
+  // followed the last failed one.
+  if (lastHealthFailed && lastHealthAt > lastHealthSuccessAt) {
+    return `Cannot mark complete: \`check_url_health\` returned non-2xx and you have not re-run it successfully after a fix. Read \`render_get_logs\`, push a fix commit, redeploy, and re-run \`check_url_health\` until it returns 2xx. Details: ${lastHealthFailed}`;
+  }
+
+  // HIGH static scan finding remains "unaddressed" if no clean scan followed it.
+  if (lastScanHigh && lastScanAt > lastScanCleanAt) {
+    return `Cannot mark complete: \`static_code_scan\` reported HIGH-severity finding(s) that have not been addressed. Push a fix via \`github_create_commit\`, then re-run \`static_code_scan\` to verify the finding is gone. Details: ${lastScanHigh}`;
+  }
+
+  // HIGH review_pushed_code finding remains "unaddressed" if no clean review
+  // followed it. Verifier hard-fails on llm_code_review_clean; gate must too.
+  // Equityzen run 2026-05-12 task #6 (/api/server-info) burned a credit on
+  // this exact asymmetry — the agent stopped after a HIGH-flagged review,
+  // gate let it pass, verifier rejected.
+  if (lastReviewHigh && lastReviewAt > lastReviewCleanAt) {
+    return `Cannot mark complete: \`review_pushed_code\` reported HIGH-severity finding(s) (auth bypass, race condition, missing input validation, etc.) that have not been addressed. Read the review output, push a fix via \`github_create_commit\`, then re-run \`review_pushed_code\` until it returns CODE REVIEW PASS (or high=0). Details: ${lastReviewHigh}`;
+  }
+
+  if (lastRenderInfrastructureBlockerAt >= 0) {
+    const lastAppChangeAt = Math.max(lastPushAt, lastDeployOrPushAt);
+    if (lastPushAt >= 0 && lastScanAt < lastPushAt) {
+      return 'Cannot mark complete: Render is blocked by external pipeline_minutes_exhausted, but you still need a `static_code_scan` after the latest code push before writing the blocker report.';
+    }
+    if (lastPushAt >= 0 && lastReviewAt < lastPushAt) {
+      return 'Cannot mark complete: Render is blocked by external pipeline_minutes_exhausted, but you still need `review_pushed_code` after the latest code push before writing the blocker report.';
+    }
+    if (lastCodebaseMapSavedAt < Math.max(lastAppChangeAt, lastRenderInfrastructureBlockerAt)) {
+      return 'Cannot mark complete: Render is blocked by external `pipeline_minutes_exhausted`, but the codebase map has not been updated after the latest app state/blocker evidence. Call `write_codebase_map` before the final blocker report.';
+    }
+    const reportInputMentionsBlocker = logEntries.some((entry, index) => {
+      if (index !== lastReportAt || entry.tool !== 'create_report') return false;
+      const inputText = JSON.stringify(entry.input ?? {});
+      const resultText = typeof entry.result === 'string' ? entry.result : '';
+      return RENDER_INFRASTRUCTURE_BLOCKER_RE.test(inputText)
+        || /pipeline[-_\s]?minutes[-_\s]?exhausted|Render.*quota|build minutes/i.test(inputText)
+        || RENDER_INFRASTRUCTURE_BLOCKER_RE.test(resultText);
+    });
+    if (lastReportAt < Math.max(lastRenderInfrastructureBlockerAt, lastCodebaseMapSavedAt) || !reportInputMentionsBlocker) {
+      return `Cannot mark complete: Render is blocked by external \`pipeline_minutes_exhausted\`. Create a final blocker report after the codebase map, explicitly naming the blocker and rerun condition. Details: ${lastRenderInfrastructureBlockerDetail ?? 'pipeline_minutes_exhausted'}`;
+    }
+    return null;
+  }
+
+  // Static scan must be run AFTER the most recent code push. Catches the
+  // "agent pushed a fix then skipped re-scan" pattern.
+  if (lastPushAt >= 0 && lastScanAt < lastPushAt) {
+    return `Cannot mark complete: you pushed code (\`github_push_file\`/\`github_create_commit\`) without running \`static_code_scan\` afterward. Run \`static_code_scan\` now to verify the new code doesn't introduce HIGH-severity findings, then continue.`;
+  }
+
+  // Render logs are mandatory after any deploy-shaped action. A passing
+  // health check can still hide missing env vars, database boot failures, or
+  // runtime errors that only appear in Render logs.
+  if (lastDeployOrPushAt >= 0 && lastRenderLogsAt < lastDeployOrPushAt) {
+    return `Cannot mark complete: \`${lastDeployOrPushTool ?? 'deploy'}\` triggered a deploy or auto-deploy, but you have not run \`render_get_logs\` afterward. Fetch the latest Render logs, confirm there are no startup/runtime errors, then continue to health and journey verification.`;
+  }
+  if (lastRenderLogsErrorAt > lastRenderLogsCleanAt && lastRenderLogsErrorAt > lastDeployOrPushAt) {
+    return `Cannot mark complete: the latest \`render_get_logs\` output contains error signatures. Fix the root cause, redeploy, then re-run \`render_get_logs\` until it is clean. Details: ${lastRenderLogsError ?? '(no detail)'}`;
+  }
+
+  // check_url_health is mandatory after any deploy-shaped action. The verifier
+  // (verification.service.ts render_health_evidence) hard-fails the task if no
+  // check_url_health call is found post-deploy. The earlier "health failed"
+  // block above only catches "called and failed" — this block catches "never
+  // called at all", which is what equityzen pilot 2026-05-12 surfaced.
+  // Symmetric in spirit to the render_get_logs mandate above it.
+  if (lastDeployOrPushAt >= 0 && lastHealthAt < lastDeployOrPushAt) {
+    return `Cannot mark complete: \`${lastDeployOrPushTool ?? 'deploy'}\` triggered a deploy or auto-deploy, but you have not run \`check_url_health\` afterward. Confirm at least the landing route returns 2xx (and if \`/api/health\` exists, also check it — \`body.checks.*\` should all be "ok"). The verifier hard-requires this evidence for any deploy-shaped task.`;
+  }
+
+  const isUiTask = isUserFacingUiTask(task, logEntries) || planningEvidenceImpliesUi(planningEvidence);
+  const fastUiLane = lanePolicy.lane === 'fast' && isUiTask;
+
+  // verify_user_journey is mandatory for engineering tasks. It must be called
+  // and must have passed. Iteration 2 of equityzen skipped it at the end →
+  // verifier rejected. Gate now enforces it.
+  if (lastJourneyAt === -1 && !fastUiLane) {
+    return `Cannot mark complete: you have not called \`verify_user_journey\` yet. Walk the critical user flow end-to-end against the deployed URL (e.g. POST to the feature endpoint, assert the response shape). For an AI Q&A app this means: POST /api/ask with a real question and assert the response contains "ok":true. Mandatory before stopping.`;
+  }
+  if (lastJourneyPassAt < lastJourneyAt) {
+    return `Cannot mark complete: \`verify_user_journey\` last returned a FAIL. Read the failure detail, fix the underlying bug (code, env var, schema), redeploy, then re-run \`verify_user_journey\` until you get JOURNEY PASS. Details: ${lastJourneyFailDetail ?? '(no detail)'}`;
+  }
+  // If push happened after the last passing journey, demand a fresh journey.
+  if (lastPushAt > lastJourneyPassAt && !fastUiLane) {
+    return `Cannot mark complete: you pushed code AFTER your last successful \`verify_user_journey\`. The new code is unverified. Run \`verify_user_journey\` against the deployed app again and confirm JOURNEY PASS.`;
+  }
+
+  if (isDbStateRequiredTask(task, planningEvidence)) {
+    if (lastDbStateAt === -1) {
+      return `Cannot mark complete: this task writes to the database, but you have not called \`verify_db_state\`. After the passing user journey, run a SELECT-based assertion proving at least one row landed in the founder database.`;
+    }
+    if (lastDbStatePassAt < lastDbStateAt) {
+      return `Cannot mark complete: \`verify_db_state\` last returned a FAIL. Fix the schema/API/env issue or retry after transient database failure, then re-run \`verify_db_state\` until it returns DB STATE PASS. Details: ${lastDbStateFailDetail ?? '(no detail)'}`;
+    }
+    if (lastPushAt > lastDbStatePassAt) {
+      return `Cannot mark complete: you pushed code AFTER your last successful \`verify_db_state\`. Re-run \`verify_db_state\` to prove the latest deployed code still writes expected rows.`;
+    }
+  }
+
+  // Design checks only apply when the task is user-facing. Backend-only
+  // tasks (webhooks, cron workers, JSON-API endpoints, internal scripts)
+  // produce no rendered UI for design_audit/design_critique to evaluate —
+  // requiring them would create an impossible gate.
+  //
+  // Centralized classifier — same logic the stack-lock check uses above.
+  if (isUiTask) {
+    if (lastBrowserUiAt === -1) {
+      return `Cannot mark complete: this user-facing/full-stack UI has no real browser UI proof. Run \`verify_browser_ui\` against the deployed URL with capability-specific \`required_text\` and \`required_buttons\` from \`compose_app_architecture\`. This catches React hydration/runtime errors, missing buttons, blank shells, and panels that cannot be submitted from the UI.`;
+    }
+    if (lastBrowserUiPassAt < lastBrowserUiAt) {
+      return `Cannot mark complete: \`verify_browser_ui\` last returned FAIL. Fix the browser-visible UI issue, redeploy, and re-run \`verify_browser_ui\` until it returns BROWSER UI PASS. Details: ${lastBrowserUiFailDetail ?? '(no detail)'}`;
+    }
+    if (lastPushAt > lastBrowserUiPassAt) {
+      return `Cannot mark complete: you pushed code AFTER your last successful \`verify_browser_ui\`. Re-run \`verify_browser_ui\` on the deployed URL to prove the latest UI still works in a real browser. This is a finalization sweep step: do not edit code unless the check fails; if it passes, continue with interaction/design/map/report evidence and finish.`;
+    }
+
+    if (completionNeedsInteractionProof) {
+      if (lastInteractionProofAt === -1) {
+        return 'Cannot mark complete: this frontend plan produced interaction contracts but no `verify_interaction_contract` proof. Click each critical button/form, submit realistic data, and prove the UI readback before finishing.';
+      }
+      if (lastInteractionProofPassAt < lastInteractionProofAt || !planningEvidence.interactionProofPassed) {
+        return 'Cannot mark complete: `verify_interaction_contract` did not prove every critical interaction. Fix the failed button/form, redeploy, and rerun it until `INTERACTION_PROOF_EVIDENCE` reports failed=0.';
+      }
+      if (planningEvidence.interactionProofPassedCount < planningEvidence.interactionContractCount) {
+        return `Cannot mark complete: the frontend plan declared ${planningEvidence.interactionContractCount} interaction contract(s), but the latest \`verify_interaction_contract\` only proved ${planningEvidence.interactionProofPassedCount}. Pass every planned contract into the verifier, click each critical button/form, and rerun until all are proved.`;
+      }
+      if (lastPushAt > lastInteractionProofPassAt) {
+        return 'Cannot mark complete: you pushed code AFTER your last successful `verify_interaction_contract`. Rerun the interaction proof against the latest deployed UI.';
+      }
+    }
+
+    if (completionNeedsProductContract) {
+      if (!planningEvidence.acceptanceProofPresent || lastInteractionProofAt === -1) {
+        return `Cannot mark complete: PRODUCT_BUILD_CONTRACT_EVIDENCE declared ${planningEvidence.productContractFlowCount} flow(s), but no ACCEPTANCE_PROOF_EVIDENCE was produced. Run \`verify_interaction_contract\` using contract_flow_id for each required product flow.`;
+      }
+      if (planningEvidence.acceptanceProofFailedCount > 0 || planningEvidence.productContractMissingFlowIds.length > 0) {
+        return `Cannot mark complete: acceptance proof did not cover the exact Product Build Contract flow ids. Missing/failed: ${planningEvidence.productContractMissingFlowIds.join(', ') || planningEvidence.acceptanceProofFailedFlowIds.join(', ') || 'unknown'}. Required: ${planningEvidence.productContractRequiredFlowIds.join(', ') || 'unknown'}. Proved: ${planningEvidence.acceptanceProofPassedFlowIds.join(', ') || 'none'}.`;
+      }
+      if (planningEvidence.productContractMissingFieldProofs.length > 0) {
+        const missing = planningEvidence.productContractMissingFieldProofs
+          .slice(0, 5)
+          .map((requirement) => `${requirement.flowId}:${requirement.entity}[${requirement.fields.join(',')}]`)
+          .join('; ');
+        return `Cannot mark complete: Product Build Contract field proof is missing for required data fields. Re-run \`verify_interaction_contract\` with realistic fields for each data flow. Missing: ${missing}.`;
+      }
+      if (
+        (planningEvidence.productContractAuthBaseline || planningEvidence.productContractUserIsolation) &&
+        (!planningEvidence.authIsolationProofPresent || !planningEvidence.authIsolationProofPassed)
+      ) {
+        return `Cannot mark complete: Product Build Contract requires auth isolation, but AUTH_ISOLATION_PROOF_EVIDENCE is missing or failed. Run \`verify_interaction_contract\` with auth_isolation.anonymous_path and forbidden_text from the created private record.`;
+      }
+      if (planningEvidence.lastAcceptanceProofAt < Math.max(lastPushAt, planningEvidence.lastProductContractAt)) {
+        return 'Cannot mark complete: ACCEPTANCE_PROOF_EVIDENCE is stale. Re-run `verify_interaction_contract` after the latest push/product contract and prove every contract_flow_id again.';
+      }
+      if (
+        (planningEvidence.productContractAuthBaseline || planningEvidence.productContractUserIsolation) &&
+        planningEvidence.lastAuthIsolationProofAt < Math.max(lastPushAt, planningEvidence.lastProductContractAt)
+      ) {
+        return 'Cannot mark complete: AUTH_ISOLATION_PROOF_EVIDENCE is stale. Re-run `verify_interaction_contract` with auth_isolation after the latest push/product contract.';
+      }
+    }
+
+    const failedCriticalFlow = criticalFlowEvidenceChecks(logEntries, criticalFlowContracts)
+      .find((check) => !check.passed);
+    if (failedCriticalFlow) {
+      return `Cannot mark complete: ${failedCriticalFlow.detail}`;
+    }
+
+    // Design audit must be clean. If never run on a UI task, force it.
+    if (lastDesignAuditAt === -1) {
+      return `Cannot mark complete: this task produces a user-facing page and you have not called \`design_audit\` yet. Run \`design_audit\` against the deployed URL to catch AI-default tells (API docs on landing, indigo gradients, emoji in headings, placeholder copy, etc.). Mandatory for UI tasks before stopping.`;
+    }
+    if (lastDesignAuditHigh && lastDesignAuditAt > lastDesignAuditCleanAt) {
+      return `Cannot mark complete: \`design_audit\` reported HIGH findings that have not been addressed. Fix each finding via \`github_create_commit\`, redeploy, and re-run \`design_audit\` until it returns CLEAN. Details: ${lastDesignAuditHigh}`;
+    }
+    if (lastPushAt > lastDesignAuditAt) {
+      return `Cannot mark complete: you pushed code AFTER your last \`design_audit\`. Re-run \`design_audit\` on the deployed URL to confirm the new code didn't introduce AI-default tells.`;
+    }
+
+    // Vision critique: only required when Gemini is configured AND the task
+    // is UI. Backend-only tasks already exited above; configurations missing
+    // GEMINI_API_KEY skip the critique requirement (design_audit covers the
+    // floor; critique is the upper-bound polish bar).
+    const critiqueConfigured = isDesignCritiqueConfigured();
+    if (critiqueConfigured) {
+      const critiqueRequired = isDesignCritiqueRequiredForTask(
+        task,
+        planningEvidence,
+        Boolean(lastCritiqueBlocker && lastCritiqueAt > lastCritiqueCleanAt),
+      );
+      if (critiqueRequired && lastCritiqueAt === -1) {
+        return `Cannot mark complete: you have not called \`design_critique\` yet. After \`design_audit\` passes, run \`design_critique\` on the deployed URL — it screenshots the page and uses Gemini 2.5 Flash to judge typography rhythm, visual hierarchy, copy quality, mobile state, and "soul" (the dimensions design_audit regex cannot see). Mandatory for UI tasks before stopping.`;
+      }
+      if (lastCritiqueBlocker && lastCritiqueAt > lastCritiqueCleanAt) {
+        return `Cannot mark complete: \`design_critique\` reported BLOCKER findings that have not been addressed. Fix each via \`github_create_commit\`, redeploy, and re-run \`design_critique\` until it returns CLEAN with 0 BLOCKERs. Details: ${lastCritiqueBlocker}`;
+      }
+      if (critiqueRequired && lastPushAt > lastCritiqueAt) {
+        return `Cannot mark complete: you pushed code AFTER your last \`design_critique\`. Re-run \`design_critique\` on the deployed URL to confirm the new code didn't introduce visual quality regressions.`;
+      }
+    }
+  }
+
+  const reportRequired = lanePolicy.completion.requireFinalReport && (
+    isCapabilityPlanningTask(task, logEntries) ||
+    isExistingAppExtensionTask(task) ||
+    lastDeployOrPushAt >= 0
+  );
+  if (reportRequired) {
+    if (lastCodebaseMapAt === -1) {
+      return 'Cannot mark complete: this deployed Engineering task has no updated codebase map. Call `write_codebase_map` after final verification and before `create_report` so future extend/debug tasks can read the shipped app state.';
+    }
+    if (lastCodebaseMapSavedAt < lastCodebaseMapAt) {
+      return 'Cannot mark complete: the latest `write_codebase_map` did not save successfully. Re-call it with the corrected full map before creating the final report.';
+    }
+    if (lastCodebaseMapSavedAt < lastDeployOrPushAt) {
+      return 'Cannot mark complete: `write_codebase_map` ran before the latest app-changing push/deploy. Re-run `write_codebase_map` after final verification so it reflects the shipped app state.';
+    }
+    if (lastReportAt === -1) {
+      return 'Cannot mark complete: this engineering task has no final report. Call `create_report` after verification, including the live URL, capabilities built, verification evidence, and remaining gaps.';
+    }
+    const reportMustFollow = Math.max(
+      lastDeployOrPushAt,
+      lastRenderLogsCleanAt,
+      lastHealthSuccessAt,
+      lastScanCleanAt,
+      lastReviewCleanAt,
+      lastJourneyPassAt,
+      isDbStateRequiredTask(task, planningEvidence) ? lastDbStatePassAt : -1,
+      isUiTask ? lastBrowserUiPassAt : -1,
+      isUiTask && (completionNeedsInteractionProof || criticalFlowContracts.length > 0) ? lastInteractionProofPassAt : -1,
+      isUiTask ? lastDesignAuditCleanAt : -1,
+      isUiTask && isDesignCritiqueConfigured() ? lastCritiqueCleanAt : -1,
+      lastCodebaseMapSavedAt,
+    );
+    if (lastReportAt < reportMustFollow) {
+      return 'Cannot mark complete: `create_report` ran before the latest required verification evidence. Re-run `create_report` now so the final report includes the latest deploy, journey, DB, code review, static scan, and UI/design proof.';
+    }
+  }
+
+  const completionRequiresLaneOutputs =
+    completionNeedsProductContract &&
+    (
+      planningEvidence.taskIntent === 'new_app_build' ||
+      planningDepth === 'mixed_complex_app' ||
+      planningDepth === 'canary_world_class' ||
+      lanePolicy.lane === 'strict' ||
+      lanePolicy.lane === 'canary'
+    );
+  if (completionRequiresLaneOutputs) {
+    const requiredLaneRoles = planningEvidence.engineeringLaneRequiredRoles.length > 0
+      ? planningEvidence.engineeringLaneRequiredRoles
+      : selectEngineeringLanes({
+          taskText: taskPlanningText(task),
+          lane: lanePolicy.lane,
+          taskIntent: planningEvidence.taskIntent,
+          planningDepth,
+          isUserFacing: planningUiTask,
+          selectedCapabilities: uniqueStrings([
+            ...planningEvidence.selectedCapabilities,
+            ...planningEvidence.requiredCapabilities,
+            ...planningEvidence.architectureCapabilities,
+          ]),
+          selectedDomains: planningEvidence.selectedDomains,
+          productContractRequired: completionNeedsProductContract,
+        });
+    const laneFreshnessMinLogIndex = Math.max(
+      planningEvidence.lastProductContractAt,
+      lastPushAt,
+      lastDeployOrPushAt,
+      planningEvidence.lastAcceptanceProofAt,
+      planningEvidence.lastAuthIsolationProofAt,
+    );
+    const laneIssues = engineeringLaneCompletionIssues(requiredLaneRoles, planningEvidence.engineeringLaneOutputs, {
+      minLogIndex: laneFreshnessMinLogIndex,
+    });
+    if (laneIssues.length > 0) {
+      const missing = laneIssues.filter((issue) => issue.reason === 'missing' || issue.reason === 'not_completed');
+      if (missing.length > 0) {
+        return `Cannot mark complete: this app-build task is missing completed bounded Engineering lane output for: ${missing.map((issue) => issue.role).join(', ')}. Call \`record_engineering_lane_output\` for each selected lane after that lane's work/proof is done. Lane output is supporting evidence only; exact Product Build Contract proof is still required.`;
+      }
+      const details = laneIssues.map((issue) => `${issue.role} ${issue.reason}: ${issue.detail}`).join(' | ');
+      return `Cannot mark complete: bounded Engineering lane output is incomplete or stale. ${details}. Re-record completed lane output after the latest Product Build Contract, push/deploy, and verification proof.`;
+    }
+  }
+
+  return null;
+}
 
 // Anthropic prompt-caching helpers. The worker agent loop accumulates large
 // static context (system prompt + 30-tool definitions + read_skill results
@@ -1835,6 +4361,7 @@ async function runWithClaude(
   watchdog: Watchdog,
   log_entries: Record<string, unknown>[],
   modelId: string = CLAUDE_MODEL_SONNET,
+  abortSignal?: AbortSignal,
 ): Promise<AgentResult> {
   let anthropic: Anthropic | null = null;
   let isOAuth = false;
@@ -1842,10 +4369,15 @@ async function runWithClaude(
   // OAuth piggybacks on the operator's Pro/Max subscription; preferred in
   // dev (no extra creds) and in prod (no per-call billing surprise).
   if (isAnthropicOAuthAvailable()) {
-    const oauthClient = await createAnthropicWithOAuthAsync();
-    if (oauthClient.isOAuth) {
+    try {
+      const oauthClient = await createAnthropicWithOAuthAsync();
       anthropic = oauthClient.client;
-      isOAuth = true;
+      isOAuth = oauthClient.isOAuth;
+    } catch (err) {
+      pushLog(log_entries, {
+        event: 'anthropic_oauth_unusable',
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
   if (!anthropic && isDirectAnthropicAvailable()) {
@@ -1867,10 +4399,8 @@ async function runWithClaude(
     }
     if (modelId === CLAUDE_MODEL_SONNET) modelId = process.env.AWS_BEDROCK_MODEL_ID || 'us.anthropic.claude-sonnet-4-20250514-v1:0';
     if (modelId === CLAUDE_MODEL_HAIKU) modelId = process.env.AWS_BEDROCK_HAIKU_MODEL_ID || 'us.anthropic.claude-haiku-4-5-20251001-v1:0';
-  } else if (!anthropic) {
-    anthropic = new Anthropic();
   }
-  if (!anthropic) throw new Error('Anthropic client unavailable');
+  if (!anthropic) throw new Error('Anthropic client unavailable: no usable OAuth, direct API key, or Bedrock credentials');
 
   // For full_agent engineering tasks: force immediate tool use in the first turn.
   // A text-only "planning" response on turn 1 causes the loop to break on turn 2
@@ -1886,8 +4416,17 @@ async function runWithClaude(
   ];
 
   let turnCount = 0;
+  const gateState: GateState = { forcedContinuations: 0 };
 
   while (true) {
+    // Abort check (P0.3): if the launcher's AbortController fired (watchdog
+    // idle-kill or MAX_EXECUTION_MS hard-cap), exit the loop cleanly instead
+    // of running another turn that would land late writes after the parent
+    // gave up.
+    if (abortSignal?.aborted) {
+      pushLog(log_entries, { turn: turnCount, event: 'aborted', reason: 'abort signal fired (watchdog or timeout)' });
+      break;
+    }
     // 2A-3: Pre-turn watchdog health check (idle/stuck detection)
     const healthVerdict = watchdog.checkHealth();
     if (healthVerdict === 'kill') {
@@ -1900,6 +4439,20 @@ async function runWithClaude(
     // marked as ephemeral cache breakpoints. The trailing tool_result is also
     // marked so accumulated read_skill / tool output gets cached after its
     // first turn instead of being re-charged on every subsequent call.
+    if (isOAuth) {
+      try {
+        const refreshedOAuthClient = await createAnthropicWithOAuthAsync();
+        anthropic = refreshedOAuthClient.client;
+        isOAuth = refreshedOAuthClient.isOAuth;
+      } catch (err) {
+        pushLog(log_entries, {
+          turn: turnCount + 1,
+          event: 'anthropic_oauth_refresh_failed',
+          error: err instanceof Error ? err.message : String(err),
+        });
+        throw err;
+      }
+    }
     const response = await callAnthropicWithTimeout(
       anthropic,
       {
@@ -1909,7 +4462,7 @@ async function runWithClaude(
         tools: buildCachedTools(tools),
         messages: withTrailingToolResultCache(messages),
       },
-      { label: `agent_turn_${turnCount + 1}`, timeoutMs: getAgentCallTimeoutMs(agentId) }
+      { label: `agent_turn_${turnCount + 1}`, timeoutMs: getAgentCallTimeoutMs(agentId), externalSignal: abortSignal }
     ) as Anthropic.Message;
 
     turnCount++;
@@ -1960,6 +4513,11 @@ async function runWithClaude(
     );
 
     if (toolUseBlocks.length === 0) {
+      const gate = evaluateGateOnExit(agentId, log_entries, task, turnCount, gateState);
+      if (!gate.shouldBreak && gate.gateMessage) {
+        messages.push({ role: 'user', content: gate.gateMessage });
+        continue;
+      }
       // No more tool calls — agent is done
       const textBlock = assistantContent.find(
         (block): block is Anthropic.TextBlock => block.type === 'text'
@@ -1979,7 +4537,7 @@ async function runWithClaude(
     let loopKill = false;
     for (const toolBlock of toolUseBlocks) {
       // H-AGENT-020: Loop detection — track each tool call
-      const loopVerdict = watchdog.recordToolCall(toolBlock.name);
+      const loopVerdict = watchdog.recordToolCall(toolBlock.name, toolBlock.input);
       if (loopVerdict === 'kill') {
         pushLog(log_entries, { turn: turnCount, event: 'loop_kill', tool: toolBlock.name, reason: 'Repeated tool-call loop detected' });
         loopKill = true;
@@ -1991,7 +4549,9 @@ async function runWithClaude(
         toolBlock.input as Record<string, unknown>,
         task,
         agentId,
+        log_entries,
       );
+      watchdog.recordHeartbeat(`completed tool ${toolBlock.name}`, toolBlock.name);
       toolResults.push({
         type: 'tool_result',
         tool_use_id: toolBlock.id,
@@ -2030,6 +4590,7 @@ async function runWithOpenAI(
   watchdog: Watchdog,
   log_entries: Record<string, unknown>[],
   modelId: string = OPENAI_MODELS.GPT_4O,
+  abortSignal?: AbortSignal,
 ): Promise<AgentResult> {
   const apiKey = getOpenAIApiKey();
   if (!apiKey) throw new Error('No OpenAI API key available');
@@ -2038,7 +4599,7 @@ async function runWithOpenAI(
   // Branch to the pi-ai-based Codex tool loop. Detect 3-part JWT starting with `eyJ`.
   const isCodexJwt = apiKey.startsWith('eyJ') && apiKey.split('.').length === 3;
   if (isCodexJwt) {
-    return runWithCodex(systemPrompt, tools, task, agentId, watchdog, log_entries, apiKey);
+    return runWithCodex(systemPrompt, tools, task, agentId, watchdog, log_entries, apiKey, abortSignal);
   }
 
   const OpenAI = (await import('openai')).default;
@@ -2062,8 +4623,13 @@ async function runWithOpenAI(
   ];
 
   let turnCount = 0;
+  const gateState: GateState = { forcedContinuations: 0 };
 
   while (true) {
+    if (abortSignal?.aborted) {
+      pushLog(log_entries, { turn: turnCount, event: 'aborted', reason: 'abort signal fired (watchdog or timeout)' });
+      break;
+    }
     const healthVerdict = watchdog.checkHealth();
     if (healthVerdict === 'kill') {
       pushLog(log_entries, { turn: turnCount + 1, event: 'watchdog_health_kill', reason: 'idle/stuck detected' });
@@ -2077,7 +4643,7 @@ async function runWithOpenAI(
         tools: openaiTools,
         max_tokens: getAgentMaxTokens(agentId),
       },
-      { timeout: getAgentCallTimeoutMs(agentId) }
+      { timeout: getAgentCallTimeoutMs(agentId), signal: abortSignal }
     );
 
     turnCount++;
@@ -2108,6 +4674,11 @@ async function runWithOpenAI(
     messages.push(assistantMessage as any);
 
     if (!toolCalls || toolCalls.length === 0) {
+      const gate = evaluateGateOnExit(agentId, log_entries, task, turnCount, gateState);
+      if (!gate.shouldBreak && gate.gateMessage) {
+        messages.push({ role: 'user', content: gate.gateMessage } as any);
+        continue;
+      }
       pushLog(log_entries, { turn: turnCount, event: 'completed', summary: (assistantMessage.content ?? '').substring(0, 500) });
       break;
     }
@@ -2118,17 +4689,18 @@ async function runWithOpenAI(
       const tc = toolCalls[i];
       if (!('function' in tc)) continue; // skip non-standard tool call types
       const fnName = tc.function.name;
-      const loopVerdict = watchdog.recordToolCall(fnName);
+      let args: Record<string, unknown> = {};
+      try { args = JSON.parse(tc.function.arguments || '{}'); } catch { args = {}; }
+
+      const loopVerdict = watchdog.recordToolCall(fnName, args);
       if (loopVerdict === 'kill') {
         pushLog(log_entries, { turn: turnCount, event: 'loop_kill', tool: fnName, reason: 'Repeated tool-call loop detected' });
         loopKill = true;
         break;
       }
 
-      let args: Record<string, unknown> = {};
-      try { args = JSON.parse(tc.function.arguments || '{}'); } catch { args = {}; }
-
-      const toolResult = await handleToolCall(fnName, args, task, agentId);
+      const toolResult = await handleToolCall(fnName, args, task, agentId, log_entries);
+      watchdog.recordHeartbeat(`completed tool ${fnName}`, fnName);
       pushLog(log_entries, { turn: turnCount, tool: fnName, input: args, result: toolResult });
 
       // Append per-turn budget summary to the LAST tool result so the agent
@@ -2158,6 +4730,7 @@ async function runWithCodex(
   watchdog: Watchdog,
   log_entries: Record<string, unknown>[],
   apiKey: string,
+  abortSignal?: AbortSignal,
 ): Promise<AgentResult> {
   const { runCodexAgentTurn } = await import('@/lib/llm-provider');
 
@@ -2172,13 +4745,27 @@ async function runWithCodex(
   ];
 
   let turnCount = 0;
+  const gateState: GateState = { forcedContinuations: 0 };
   while (true) {
+    if (abortSignal?.aborted) {
+      pushLog(log_entries, { turn: turnCount, event: 'aborted', reason: 'abort signal fired (watchdog or timeout)' });
+      break;
+    }
     const healthVerdict = watchdog.checkHealth();
     if (healthVerdict === 'kill') {
       pushLog(log_entries, { turn: turnCount + 1, event: 'watchdog_health_kill', reason: 'idle/stuck detected' });
       break;
     }
 
+    // Codex doesn't go through the LLM-safety wrapper that
+    // Anthropic/OpenAI/Gemini/OpenRouter use. We compose the timeout signal
+    // with the parent abort signal manually so a watchdog/timeout kill
+    // cancels the in-flight Codex call instead of waiting on its own
+    // timeout (audit P2.3, 2026-05-12).
+    const codexTimeoutSig = AbortSignal.timeout(getAgentCallTimeoutMs(agentId));
+    const codexSignal = abortSignal
+      ? AbortSignal.any([codexTimeoutSig, abortSignal])
+      : codexTimeoutSig;
     const turn = await runCodexAgentTurn({
       apiKey,
       systemPrompt,
@@ -2186,7 +4773,7 @@ async function runWithCodex(
       tools: codexTools,
       maxTokens: getAgentMaxTokens(agentId),
       reasoning: 'medium',
-      signal: AbortSignal.timeout(getAgentCallTimeoutMs(agentId)),
+      signal: codexSignal,
     });
 
     turnCount++;
@@ -2218,6 +4805,11 @@ async function runWithCodex(
     }
 
     if (turn.toolCalls.length === 0) {
+      const gate = evaluateGateOnExit(agentId, log_entries, task, turnCount, gateState);
+      if (!gate.shouldBreak && gate.gateMessage) {
+        messages.push({ role: 'user', content: gate.gateMessage });
+        continue;
+      }
       pushLog(log_entries, { turn: turnCount, event: 'completed', summary: turn.text.substring(0, 500) });
       break;
     }
@@ -2226,14 +4818,15 @@ async function runWithCodex(
     const lastIdx = turn.toolCalls.length - 1;
     for (let i = 0; i < turn.toolCalls.length; i++) {
       const tc = turn.toolCalls[i];
-      const loopVerdict = watchdog.recordToolCall(tc.name);
+      const loopVerdict = watchdog.recordToolCall(tc.name, tc.arguments);
       if (loopVerdict === 'kill') {
         pushLog(log_entries, { turn: turnCount, event: 'loop_kill', tool: tc.name, reason: 'Repeated tool-call loop detected' });
         loopKill = true;
         break;
       }
 
-      const toolResult = await handleToolCall(tc.name, tc.arguments, task, agentId);
+      const toolResult = await handleToolCall(tc.name, tc.arguments, task, agentId, log_entries);
+      watchdog.recordHeartbeat(`completed tool ${tc.name}`, tc.name);
       pushLog(log_entries, { turn: turnCount, tool: tc.name, input: tc.arguments, result: toolResult });
 
       const content = i === lastIdx ? `${toolResult}\n\n[${watchdog.getBudgetSummary()}]` : toolResult;
@@ -2256,6 +4849,7 @@ async function runWithGemini(
   watchdog: Watchdog,
   log_entries: Record<string, unknown>[],
   modelId: string = GEMINI_MODEL,
+  abortSignal?: AbortSignal,
 ): Promise<AgentResult> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY not set');
@@ -2263,29 +4857,17 @@ async function runWithGemini(
   const { GoogleGenerativeAI } = await import('@google/generative-ai');
   const genAI = new GoogleGenerativeAI(apiKey);
 
-  // Gemini's function_declarations format rejects `additionalProperties`
-  // anywhere in the schema (it's valid JSON Schema and works for OpenAI/Anthropic
-  // but not Gemini). Strip it recursively before sending. Properties whose
+  // Convert shared JSON Schema tool definitions to Gemini's narrower
+  // function-declaration subset at the provider boundary. Properties whose
   // schema had additionalProperties become free-form objects in Gemini's view —
   // the agent can still populate them, just without structural hints.
-  function sanitizeForGemini(schema: unknown): unknown {
-    if (!schema || typeof schema !== 'object') return schema;
-    if (Array.isArray(schema)) return schema.map(sanitizeForGemini);
-    const cleaned: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(schema as Record<string, unknown>)) {
-      if (key === 'additionalProperties') continue;
-      cleaned[key] = sanitizeForGemini(value);
-    }
-    return cleaned;
-  }
-
   const model = genAI.getGenerativeModel({
     model: modelId,
     systemInstruction: systemPrompt,
     tools: [{ functionDeclarations: tools.map((t) => ({
       name: t.name,
       description: t.description,
-      parameters: sanitizeForGemini(t.input_schema),
+      parameters: sanitizeSchemaForGeminiTool(t.input_schema),
     })) as any }],
   });
 
@@ -2294,9 +4876,18 @@ async function runWithGemini(
   });
 
   let turnCount = 0;
-  let currentMessage = 'Execute the task described in your briefing. Begin.';
+  const gateState: GateState = { forcedContinuations: 0 };
+  let currentMessage: unknown = 'Execute the task described in your briefing. Begin.';
 
   while (true) {
+    // Abort check (P0.3): if the launcher's AbortController fired (watchdog
+    // idle-kill or MAX_EXECUTION_MS hard-cap), exit the loop cleanly instead
+    // of running another turn that would land late writes after the parent
+    // gave up.
+    if (abortSignal?.aborted) {
+      pushLog(log_entries, { turn: turnCount, event: 'aborted', reason: 'abort signal fired (watchdog or timeout)' });
+      break;
+    }
     // 2A-3: Pre-turn watchdog health check (idle/stuck detection)
     const healthVerdict = watchdog.checkHealth();
     if (healthVerdict === 'kill') {
@@ -2306,8 +4897,8 @@ async function runWithGemini(
 
     // G-LLM-001: Timeout + retry on Gemini API calls
     const result = await callGeminiWithTimeout(
-      () => chat.sendMessage(currentMessage),
-      { label: `gemini_turn_${turnCount + 1}`, timeoutMs: getAgentCallTimeoutMs(agentId) }
+      () => chat.sendMessage(currentMessage as any),
+      { label: `gemini_turn_${turnCount + 1}`, timeoutMs: getAgentCallTimeoutMs(agentId), externalSignal: abortSignal }
     ) as { response: {
       candidates?: Array<{ content?: { parts?: Array<Record<string, unknown>> } }>;
       text: () => string;
@@ -2342,7 +4933,12 @@ async function runWithGemini(
     const functionCalls = parts.filter((p) => 'functionCall' in p);
 
     if (functionCalls.length === 0) {
-      // Done
+      const gate = evaluateGateOnExit(agentId, log_entries, task, turnCount, gateState);
+      if (!gate.shouldBreak && gate.gateMessage) {
+        // Gemini's chat.sendMessage accepts a plain string as the next turn.
+        currentMessage = gate.gateMessage;
+        continue;
+      }
       const text = response.text();
       pushLog(log_entries, { turn: turnCount, event: 'completed', summary: text.substring(0, 500) });
       break;
@@ -2358,7 +4954,7 @@ async function runWithGemini(
         if (!fc.name) continue;
 
         // H-AGENT-020: Loop detection — track each tool call
-        const loopVerdict = watchdog.recordToolCall(fc.name);
+        const loopVerdict = watchdog.recordToolCall(fc.name, fc.args ?? {});
         if (loopVerdict === 'kill') {
           pushLog(log_entries, { turn: turnCount, event: 'loop_kill', tool: fc.name, reason: 'Repeated tool-call loop detected' });
           geminiLoopKill = true;
@@ -2370,7 +4966,9 @@ async function runWithGemini(
           (fc.args ?? {}) as Record<string, unknown>,
           task,
           agentId,
+          log_entries,
         );
+        watchdog.recordHeartbeat(`completed tool ${fc.name}`, fc.name);
         functionResponses.push({
           functionResponse: {
             name: fc.name,
@@ -2401,6 +4999,7 @@ async function runWithOpenRouter(
   watchdog: Watchdog,
   log_entries: Record<string, unknown>[],
   modelId: string = OPENROUTER_MODELS.FULL_AGENT,
+  abortSignal?: AbortSignal,
 ): Promise<AgentResult> {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) throw new Error('OPENROUTER_API_KEY not set');
@@ -2431,8 +5030,13 @@ async function runWithOpenRouter(
   ];
 
   let turnCount = 0;
+  const gateState: GateState = { forcedContinuations: 0 };
 
   while (true) {
+    if (abortSignal?.aborted) {
+      pushLog(log_entries, { turn: turnCount, event: 'aborted', reason: 'abort signal fired (watchdog or timeout)' });
+      break;
+    }
     // Pre-turn watchdog health check
     const healthVerdict = watchdog.checkHealth();
     if (healthVerdict === 'kill') {
@@ -2440,19 +5044,22 @@ async function runWithOpenRouter(
       break;
     }
 
+    const reasoningEffort = getOpenRouterReasoningEffort();
     const response = await callOpenRouterWithTimeout(
       async (signal) => {
+        const requestBody = {
+          model: modelId,
+          messages: messages as Parameters<typeof client.chat.completions.create>[0]['messages'],
+          tools: openaiTools,
+          max_tokens: getAgentMaxTokens(agentId),
+          ...(reasoningEffort ? { reasoning: { effort: reasoningEffort } } : {}),
+        };
         return client.chat.completions.create(
-          {
-            model: modelId,
-            messages: messages as Parameters<typeof client.chat.completions.create>[0]['messages'],
-            tools: openaiTools,
-            max_tokens: getAgentMaxTokens(agentId),
-          },
+          requestBody as Parameters<typeof client.chat.completions.create>[0],
           { signal }
         );
       },
-      { label: `openrouter_${modelId}_turn_${turnCount + 1}`, timeoutMs: getAgentCallTimeoutMs(agentId) }
+      { label: `openrouter_${modelId}_turn_${turnCount + 1}`, timeoutMs: getAgentCallTimeoutMs(agentId), externalSignal: abortSignal }
     ) as {
       choices: Array<{ message: { role: string; content?: string | null; tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }> } }>;
       usage?: { prompt_tokens?: number; completion_tokens?: number };
@@ -2487,7 +5094,11 @@ async function runWithOpenRouter(
     messages.push(assistantMessage as any);
 
     if (!toolCalls || toolCalls.length === 0) {
-      // No tool calls — agent is done
+      const gate = evaluateGateOnExit(agentId, log_entries, task, turnCount, gateState);
+      if (!gate.shouldBreak && gate.gateMessage) {
+        messages.push({ role: 'user', content: gate.gateMessage } as any);
+        continue;
+      }
       pushLog(log_entries, { turn: turnCount, event: 'completed', summary: (assistantMessage.content ?? '').substring(0, 500) });
       break;
     }
@@ -2499,13 +5110,147 @@ async function runWithOpenRouter(
       const tc = toolCalls[i];
       const fnName = tc.function.name;
 
+      let args: Record<string, unknown> = {};
+      try {
+        args = JSON.parse(tc.function.arguments || '{}');
+      } catch {
+        args = {};
+      }
+
       // Loop detection
-      const loopVerdict = watchdog.recordToolCall(fnName);
+      const loopVerdict = watchdog.recordToolCall(fnName, args);
       if (loopVerdict === 'kill') {
         pushLog(log_entries, { turn: turnCount, event: 'loop_kill', tool: fnName, reason: 'Repeated tool-call loop detected' });
         loopKill = true;
         break;
       }
+
+      const toolResult = await handleToolCall(fnName, args, task, agentId, log_entries);
+      watchdog.recordHeartbeat(`completed tool ${fnName}`, fnName);
+      pushLog(log_entries, { turn: turnCount, tool: fnName, input: args, result: toolResult });
+
+      const content = i === lastIdx ? `${toolResult}\n\n[${watchdog.getBudgetSummary()}]` : toolResult;
+      messages.push({
+        role: 'tool',
+        content,
+        tool_call_id: tc.id,
+      });
+    }
+
+    if (loopKill) break;
+  }
+
+  return { turnCount, log: log_entries };
+}
+
+// â”€â”€ Moonshot execution (Kimi, OpenAI-compatible) â”€â”€
+
+async function runWithMoonshot(
+  systemPrompt: string,
+  tools: ReturnType<typeof getAgentTools>,
+  task: Task,
+  agentId: number,
+  watchdog: Watchdog,
+  log_entries: Record<string, unknown>[],
+  modelId: string = MOONSHOT_MODELS.KIMI_K2_6,
+  abortSignal?: AbortSignal,
+): Promise<AgentResult> {
+  const apiKey = process.env.MOONSHOT_API_KEY;
+  if (!apiKey) throw new Error('MOONSHOT_API_KEY not set');
+
+  const OpenAI = (await import('openai')).default;
+  const client = new OpenAI({
+    baseURL: MOONSHOT_API_BASE,
+    apiKey,
+  });
+
+  const openaiTools = tools.map((t) => ({
+    type: 'function' as const,
+    function: {
+      name: t.name,
+      description: t.description,
+      parameters: t.input_schema,
+    },
+  }));
+
+  const messages: Array<{ role: 'system' | 'user' | 'assistant' | 'tool'; content: string; tool_call_id?: string }> = [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: 'Execute the task described in your briefing. Begin.' },
+  ];
+
+  let turnCount = 0;
+  const gateState: GateState = { forcedContinuations: 0 };
+
+  while (true) {
+    if (abortSignal?.aborted) {
+      pushLog(log_entries, { turn: turnCount, event: 'aborted', reason: 'abort signal fired (watchdog or timeout)' });
+      break;
+    }
+
+    const healthVerdict = watchdog.checkHealth();
+    if (healthVerdict === 'kill') {
+      pushLog(log_entries, { turn: turnCount + 1, event: 'watchdog_health_kill', reason: 'idle/stuck detected' });
+      break;
+    }
+
+    const response = await callMoonshotWithTimeout(
+      async (signal) => {
+        return client.chat.completions.create(
+          {
+            model: modelId,
+            messages: messages as Parameters<typeof client.chat.completions.create>[0]['messages'],
+            tools: openaiTools,
+            max_tokens: getAgentMaxTokens(agentId),
+          },
+          { signal }
+        );
+      },
+      { label: `moonshot_${modelId}_turn_${turnCount + 1}`, timeoutMs: getAgentCallTimeoutMs(agentId), externalSignal: abortSignal }
+    ) as {
+      choices: Array<{ message: { role: string; content?: string | null; tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }> } }>;
+      usage?: { prompt_tokens?: number; completion_tokens?: number };
+    };
+
+    turnCount++;
+
+    const verdict = watchdog.recordTurn(null);
+    if (verdict === 'kill') {
+      pushLog(log_entries, { turn: turnCount, event: 'watchdog_kill', reason: 'turn/time limit' });
+      break;
+    }
+
+    const costVerdict = watchdog.recordTokens(
+      response.usage?.prompt_tokens ?? 0,
+      response.usage?.completion_tokens ?? 0,
+      modelId,
+    );
+    if (costVerdict === 'kill') {
+      pushLog(log_entries, { turn: turnCount, event: 'cost_kill', reason: 'cost ceiling exceeded' });
+      break;
+    }
+
+    const choice = response.choices[0];
+    if (!choice) break;
+
+    const assistantMessage = choice.message;
+    const toolCalls = assistantMessage.tool_calls;
+    messages.push(assistantMessage as any);
+
+    if (!toolCalls || toolCalls.length === 0) {
+      const gate = evaluateGateOnExit(agentId, log_entries, task, turnCount, gateState);
+      if (!gate.shouldBreak && gate.gateMessage) {
+        messages.push({ role: 'user', content: gate.gateMessage } as any);
+        continue;
+      }
+      pushLog(log_entries, { turn: turnCount, event: 'completed', summary: (assistantMessage.content ?? '').substring(0, 500) });
+      break;
+    }
+
+    let loopKill = false;
+    const lastIdx = toolCalls.length - 1;
+    for (let i = 0; i < toolCalls.length; i++) {
+      const tc = toolCalls[i];
+      const fnName = tc.function.name;
 
       let args: Record<string, unknown> = {};
       try {
@@ -2514,7 +5259,15 @@ async function runWithOpenRouter(
         args = {};
       }
 
-      const toolResult = await handleToolCall(fnName, args, task, agentId);
+      const loopVerdict = watchdog.recordToolCall(fnName, args);
+      if (loopVerdict === 'kill') {
+        pushLog(log_entries, { turn: turnCount, event: 'loop_kill', tool: fnName, reason: 'Repeated tool-call loop detected' });
+        loopKill = true;
+        break;
+      }
+
+      const toolResult = await handleToolCall(fnName, args, task, agentId, log_entries);
+      watchdog.recordHeartbeat(`completed tool ${fnName}`, fnName);
       pushLog(log_entries, { turn: turnCount, tool: fnName, input: args, result: toolResult });
 
       const content = i === lastIdx ? `${toolResult}\n\n[${watchdog.getBudgetSummary()}]` : toolResult;

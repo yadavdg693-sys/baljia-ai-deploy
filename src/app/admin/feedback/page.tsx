@@ -31,6 +31,10 @@ export default async function PlatformOpsFeedbackQueue() {
       description: platformFeedback.description,
       severity: platformFeedback.severity,
       status: platformFeedback.status,
+      source: platformFeedback.source,
+      area: platformFeedback.area,
+      occurrence_count: platformFeedback.occurrence_count,
+      last_seen_at: platformFeedback.last_seen_at,
       diagnosis: platformFeedback.diagnosis,
       estimated_risk: platformFeedback.estimated_risk,
       ops_run_id: platformFeedback.ops_run_id,
@@ -83,6 +87,8 @@ export default async function PlatformOpsFeedbackQueue() {
             <tr>
               <th style={{ padding: 8 }}>Severity</th>
               <th style={{ padding: 8 }}>Status</th>
+              <th style={{ padding: 8 }}>Source</th>
+              <th style={{ padding: 8 }}>Seen</th>
               <th style={{ padding: 8 }}>Risk</th>
               <th style={{ padding: 8 }}>Title</th>
               <th style={{ padding: 8 }}>Triaged</th>
@@ -106,6 +112,11 @@ export default async function PlatformOpsFeedbackQueue() {
                   <td style={{ padding: 8 }}>
                     <span style={{ color: statusColor, fontSize: 12, fontWeight: 600 }}>{row.status}</span>
                   </td>
+                  <td style={{ padding: 8, fontSize: 12 }}>
+                    <span>{row.source ?? 'user'}</span>
+                    {row.area && <span style={{ color: '#777' }}> / {row.area}</span>}
+                  </td>
+                  <td style={{ padding: 8, fontSize: 12 }}>{row.occurrence_count ?? 1}x</td>
                   <td style={{ padding: 8, fontSize: 12 }}>{row.estimated_risk ?? '—'}</td>
                   <td style={{ padding: 8 }}>
                     <Link href={`/admin/feedback/${row.id}`} style={{ color: '#1e40af', textDecoration: 'none' }}>{row.title}</Link>

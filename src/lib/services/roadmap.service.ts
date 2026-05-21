@@ -100,7 +100,7 @@ const SAAS_MILESTONES: MilestoneTemplate[] = [
     suggested_task_tags: ['landing-page', 'deploy', 'seo'],
     night_shift_hint: 'Build or improve the landing page with clear value prop, CTA, and SEO meta tags.',
     criteria: [
-      { title: 'Landing page deployed', auto_evaluatable: true, evaluation_query: { table: 'companies', check: 'render_service_id IS NOT NULL' } },
+      { title: 'Landing page deployed', auto_evaluatable: true, evaluation_query: { table: 'companies', check: 'subdomain IS NOT NULL' } },
       { title: 'SEO meta tags set', auto_evaluatable: false },
       { title: 'Email capture form working', auto_evaluatable: false },
     ],

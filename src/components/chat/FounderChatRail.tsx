@@ -27,8 +27,8 @@ const HOW_IT_WORKS_STEPS = [
 ];
 
 const MIN_WIDTH = 260;
-const MAX_WIDTH = 640;
-const DEFAULT_WIDTH = 320;
+const MAX_WIDTH = 760;
+const DEFAULT_WIDTH = 380;
 
 export function FounderChatRail({ companyId, warnings = [], onAction }: FounderChatRailProps) {
   const [messages, setMessages] = useState<ChatMessageType[]>([]);
@@ -37,6 +37,7 @@ export function FounderChatRail({ companyId, warnings = [], onAction }: FounderC
   const [streamingText, setStreamingText] = useState('');
   const [panelWidth, setPanelWidth] = useState(DEFAULT_WIDTH);
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLElement>(null);
@@ -173,7 +174,7 @@ export function FounderChatRail({ companyId, warnings = [], onAction }: FounderC
       >
         <button
           className="chat-sidebar__expand-btn"
-          onClick={() => setIsCollapsed(false)}
+          onClick={() => { setIsCollapsed(false); setIsFullscreen(false); }}
           type="button"
           aria-label="Expand chat"
         >
@@ -187,19 +188,21 @@ export function FounderChatRail({ companyId, warnings = [], onAction }: FounderC
   return (
     <section
       ref={panelRef}
-      className={`chat-sidebar ${isDragging ? 'is-dragging' : ''}`}
-      style={{ width: panelWidth, minWidth: MIN_WIDTH, maxWidth: MAX_WIDTH }}
+      className={`chat-sidebar ${isDragging ? 'is-dragging' : ''}${isFullscreen ? ' chat-sidebar--fullscreen' : ''}`}
+      style={isFullscreen ? undefined : { width: panelWidth, minWidth: MIN_WIDTH, maxWidth: MAX_WIDTH }}
       aria-label="Baljia Chat"
     >
       {/* Drag handle on left edge */}
-      <button
-        className="chat-sidebar__drag-handle"
-        onPointerDown={handleDragStart}
-        type="button"
-        aria-label="Resize chat panel"
-      >
-        <span className="chat-sidebar__drag-dots" />
-      </button>
+      {!isFullscreen && (
+        <button
+          className="chat-sidebar__drag-handle"
+          onPointerDown={handleDragStart}
+          type="button"
+          aria-label="Resize chat panel"
+        >
+          <span className="chat-sidebar__drag-dots" />
+        </button>
+      )}
 
       <div className="chat-sidebar__inner">
         {/* Header */}
@@ -217,6 +220,15 @@ export function FounderChatRail({ companyId, warnings = [], onAction }: FounderC
               <span className="chat-sidebar__status-dot" />
               ONLINE
             </span>
+            <button
+              className="chat-sidebar__collapse-btn chat-sidebar__mode-btn"
+              onClick={() => setIsFullscreen((value) => !value)}
+              type="button"
+              aria-label={isFullscreen ? 'Dock chat panel' : 'Expand chat panel'}
+              title={isFullscreen ? 'Dock chat' : 'Full screen'}
+            >
+              {isFullscreen ? 'Dock' : 'Full'}
+            </button>
             <button
               className="chat-sidebar__collapse-btn"
               onClick={() => setIsCollapsed(true)}

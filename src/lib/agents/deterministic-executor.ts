@@ -24,7 +24,7 @@ You are executing a mechanical, straightforward task. Follow these rules strictl
 3. Use the minimum number of tool calls needed
 4. If the task is ambiguous or unclear, immediately report it as blocked — do NOT guess
 5. Complete in under ${MAX_DETERMINISTIC_TURNS} turns
-6. Create a brief report summarizing exactly what was changed
+6. Summarize exactly what changed in your final answer; call create_report only if the Task Lane Policy explicitly requires it
 
 This is a deterministic task — speed and precision over creativity.`;
 

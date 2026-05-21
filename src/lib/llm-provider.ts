@@ -1,7 +1,8 @@
 // LLM Provider — determines which provider to use based on available API keys
 // Default chain: OpenAI (Codex OAuth) → Anthropic → OpenRouter → Gemini
-// Override with PRIMARY_LLM_PROVIDER env var: 'openai' | 'anthropic' | 'openrouter' | 'gemini'
-// OpenRouter provides access to GLM-4 and Qwen models via OpenAI-compatible API
+// Override the first provider with PRIMARY_LLM_PROVIDER, or the full chain with
+// LLM_PROVIDER_ORDER (example: anthropic,openrouter,openai,moonshot,gemini).
+// OpenRouter provides access to DeepSeek, GLM, Qwen, and other OpenAI-compatible models.
 // OpenAI Codex OAuth provides GPT-5.4 via stored Codex credentials
 
 import { getCodexApiKeySync } from '@/lib/codex-oauth';
@@ -31,7 +32,6 @@ export function isAnthropicAvailable(): boolean {
 export function isAnthropicOAuthAvailable(): boolean {
   // Lazy require to avoid pulling node:fs into the Edge Runtime bundle.
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const mod = require('@/lib/anthropic-oauth') as typeof import('@/lib/anthropic-oauth');
     return mod.isAnthropicOAuthAvailable();
   } catch {
@@ -156,6 +156,7 @@ export async function callMoonshot(params: {
 // ── OpenRouter model IDs ────────────────────────
 
 export const OPENROUTER_MODELS = {
+  DEEPSEEK_V4_PRO: 'deepseek/deepseek-v4-pro',
   GLM_5_1: 'z-ai/glm-5.1',
   QWEN_3_6_PLUS: 'qwen/qwen3.6-plus',
   /** Moonshot AI Kimi K2.6 — latest Kimi release (via OpenRouter) */
@@ -166,7 +167,7 @@ export const OPENROUTER_MODELS = {
   KIMI_K2_THINKING: 'moonshotai/kimi-k2-thinking',
   /** Kimi K2 (original, Sep 2024 snapshot) */
   KIMI_K2: 'moonshotai/kimi-k2',
-  FULL_AGENT: 'z-ai/glm-5.1',
+  FULL_AGENT: process.env.OPENROUTER_FULL_AGENT_MODEL ?? 'deepseek/deepseek-v4-pro',
   TEMPLATE: 'qwen/qwen3.6-plus',
   DETERMINISTIC: 'qwen/qwen3.6-plus',
 } as const;
@@ -204,11 +205,31 @@ const PROVIDER_CHECK: Record<Provider, () => boolean> = {
 /** Default fallback order — OpenAI first since Codex OAuth is primary */
 const DEFAULT_ORDER: Provider[] = ['openai', 'anthropic', 'openrouter', 'moonshot', 'gemini'];
 
-function getProviderOrder(): Provider[] {
+function uniqueProviders(providers: Provider[]): Provider[] {
+  return [...new Set(providers)];
+}
+
+function parseProviderOrder(raw: string | undefined): Provider[] | null {
+  if (!raw?.trim()) return null;
+  const configured = raw
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
+    .filter((value): value is Provider => value in PROVIDER_CHECK);
+  if (configured.length === 0) return null;
+  return uniqueProviders([
+    ...configured,
+    ...DEFAULT_ORDER.filter((provider) => !configured.includes(provider)),
+  ]);
+}
+
+export function getProviderOrder(): Provider[] {
+  const configuredOrder = parseProviderOrder(process.env.LLM_PROVIDER_ORDER);
+  if (configuredOrder) return configuredOrder;
+
   const primary = (process.env.PRIMARY_LLM_PROVIDER ?? '').toLowerCase() as Provider;
   if (primary && PROVIDER_CHECK[primary]) {
     // Move the chosen primary to front, keep others in default order
-    return [primary, ...DEFAULT_ORDER.filter(p => p !== primary)];
+    return [primary, ...DEFAULT_ORDER.filter((p) => p !== primary)];
   }
   return DEFAULT_ORDER;
 }

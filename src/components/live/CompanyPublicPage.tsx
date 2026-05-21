@@ -7,7 +7,6 @@ interface CompanyPublicPageProps {
     name: string;
     slug: string;
     one_liner: string | null;
-    stage: string;
     created_at: string;
   };
   stats: {
@@ -21,17 +20,7 @@ interface CompanyPublicPageProps {
   }>;
 }
 
-const STAGE_LABELS: Record<string, { label: string; color: string }> = {
-  early: { label: 'Early Stage', color: '#6366f1' },
-  validation: { label: 'Validation', color: '#8b5cf6' },
-  monetization: { label: 'Monetization', color: '#f59e0b' },
-  retention: { label: 'Retention', color: '#22c55e' },
-  scale: { label: 'Scale', color: '#f97316' },
-  compounding: { label: 'Compounding', color: '#ef4444' },
-};
-
 export function CompanyPublicPage({ company, stats, recentActivity }: CompanyPublicPageProps) {
-  const stage = STAGE_LABELS[company.stage] ?? STAGE_LABELS.early;
   const daysSinceCreation = Math.floor(
     (Date.now() - new Date(company.created_at).getTime()) / 86400000
   );
@@ -53,9 +42,6 @@ export function CompanyPublicPage({ company, stats, recentActivity }: CompanyPub
         {company.one_liner && (
           <p className={styles.oneLiner}>{company.one_liner}</p>
         )}
-        <div className={styles.stageBadge} style={{ borderColor: stage.color, color: stage.color }}>
-          {stage.label}
-        </div>
       </section>
 
       {/* Stats */}

@@ -75,6 +75,23 @@ describe('runJourney — failure paths', () => {
     expect(result.allPassed).toBe(true);
   });
 
+  it('sends same-origin headers on mutating requests', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
+      const headers = init?.headers as Record<string, string>;
+      if (headers.Origin !== 'https://x.com') return new Response('missing origin', { status: 403 });
+      if (headers.Referer !== 'https://x.com/') return new Response('missing referer', { status: 403 });
+      return new Response('ok', { status: 201 });
+    }));
+
+    const result = await runJourney({
+      journey_name: 'better-auth-compatible-post',
+      base_url: 'https://x.com',
+      steps: [{ step: 'create', method: 'POST', path: '/api/create', body: { title: 'A' }, body_type: 'json', expect_status: 201 }],
+    });
+
+    expect(result.allPassed).toBe(true);
+  });
+
   it('expect_body_not_contains catches forbidden text', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('Registration failed: try again', { status: 200 })));
     const result = await runJourney({

@@ -73,7 +73,6 @@ async function main() {
   };
 
   for (const family of FAMILIES) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const html = renderLandingHtml(SAMPLE, tokens, vars as any, family as any);
     const path = join(OUT_DIR, `${family}.html`);
     writeFileSync(path, html, 'utf-8');

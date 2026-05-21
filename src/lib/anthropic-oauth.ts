@@ -45,8 +45,8 @@ export const CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official C
  *  version doesn't matter; it just needs to look like a CLI build. */
 const CLAUDE_CODE_USER_AGENT = 'claude-cli/2.0.0 (claude-code-oauth-shim)';
 
-/** Refresh tokens 5 minutes before they expire to absorb clock skew. */
-const REFRESH_LEEWAY_MS = 5 * 60 * 1000;
+/** Refresh well before expiry because Engineering turns can run 10-15 minutes. */
+const REFRESH_LEEWAY_MS = 30 * 60 * 1000;
 
 interface ClaudeAiOauth {
   accessToken: string;
@@ -136,13 +136,17 @@ export async function getAnthropicOAuthToken(): Promise<string | null> {
     });
     return updated.accessToken;
   } catch (err) {
+    const latest = readCredentials()?.claudeAiOauth;
+    if (latest?.accessToken && latest.accessToken !== oauth.accessToken && latest.expiresAt - Date.now() > REFRESH_LEEWAY_MS) {
+      log.info('Anthropic OAuth token refresh raced; using token refreshed by another caller', {
+        expiresInMin: Math.round((latest.expiresAt - Date.now()) / 60_000),
+      });
+      return latest.accessToken;
+    }
     log.error('Failed to refresh Anthropic OAuth token', {
       err: err instanceof Error ? err.message : String(err),
     });
-    // Return the current (possibly-expired) token so the caller can try once
-    // — many providers surface 401 cleanly which is better than a hard fail
-    // here.
-    return oauth.accessToken;
+    return null;
   }
 }
 
@@ -171,6 +175,11 @@ export function anthropicOAuthHeaders(extraBeta: string[] = []): Record<string, 
 export function getAnthropicOAuthTokenSync(): string | null {
   const creds = readCredentials();
   return creds?.claudeAiOauth?.accessToken ?? null;
+}
+
+function hasUsableDirectAnthropicApiKey(): boolean {
+  const key = process.env.ANTHROPIC_API_KEY;
+  return !!key && key !== 'placeholder' && key.startsWith('sk-ant-');
 }
 
 /**
@@ -213,8 +222,38 @@ export function createAnthropicWithOAuth(): { client: Anthropic; isOAuth: boolea
       return { client, isOAuth: true };
     }
   }
-  // Falls through to ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) from env.
-  return { client: new Anthropic(), isOAuth: false };
+  if (hasUsableDirectAnthropicApiKey()) {
+    // Falls through to ANTHROPIC_API_KEY from env.
+    return { client: new Anthropic(), isOAuth: false };
+  }
+  throw new Error('No usable Anthropic OAuth or direct API key available');
+}
+
+/**
+ * Async variant for long-running workers. It waits for token refresh before
+ * constructing the SDK client, avoiding a first-turn 401 from an expired
+ * Claude Code OAuth token.
+ */
+export async function createAnthropicWithOAuthAsync(): Promise<{ client: Anthropic; isOAuth: boolean }> {
+  if (isAnthropicOAuthAvailable()) {
+    const token = await getAnthropicOAuthToken();
+    if (token) {
+      const client = new Anthropic({
+        apiKey: null as unknown as string,
+        authToken: token,
+        dangerouslyAllowBrowser: true,
+        defaultHeaders: anthropicOAuthHeaders(),
+      });
+      return { client, isOAuth: true };
+    }
+    log.warn('Anthropic OAuth credentials are present but unusable; falling back to non-OAuth Anthropic auth when configured');
+  }
+
+  if (hasUsableDirectAnthropicApiKey()) {
+    return { client: new Anthropic(), isOAuth: false };
+  }
+
+  throw new Error('No usable Anthropic OAuth or direct API key available');
 }
 
 /**

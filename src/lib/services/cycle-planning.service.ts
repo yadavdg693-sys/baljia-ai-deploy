@@ -16,7 +16,6 @@ export async function getCycleContext(companyId: string): Promise<{
   cycle_number: number | null;
   started_at: string;
   summary: string;
-  stage: string;
   tasks_completed: number;
   tasks_created: number;
 }> {
@@ -26,7 +25,6 @@ export async function getCycleContext(companyId: string): Promise<{
         cycle_number: nightShiftCycles.cycle_number,
         started_at: nightShiftCycles.started_at,
         summary: nightShiftCycles.summary,
-        company_stage: nightShiftCycles.company_stage,
         executed_tasks: nightShiftCycles.executed_tasks,
         planned_tasks: nightShiftCycles.planned_tasks,
       })
@@ -40,7 +38,6 @@ export async function getCycleContext(companyId: string): Promise<{
         cycle_number: null,
         started_at: 'never',
         summary: 'No night shift cycles have run yet for this company.',
-        stage: 'early',
         tasks_completed: 0,
         tasks_created: 0,
       };
@@ -53,7 +50,6 @@ export async function getCycleContext(companyId: string): Promise<{
       cycle_number: latest.cycle_number,
       started_at: latest.started_at?.toISOString() ?? 'unknown',
       summary: latest.summary ?? 'No summary available.',
-      stage: latest.company_stage ?? 'early',
       tasks_completed: executed,
       tasks_created: planned,
     };

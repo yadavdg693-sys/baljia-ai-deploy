@@ -39,17 +39,14 @@ function formatStructuredContent(docType: string, data: Record<string, unknown>)
       sections.push(`## Market Stats\n${(data.market_stats as string[]).map((s) => `- ${s}`).join('\n')}`);
     }
 
-    if (Array.isArray(data.data_gaps)) {
-      sections.push(`## Known Gaps\n${(data.data_gaps as string[]).map((g) => `- ${g}`).join('\n')}`);
-    }
-
     if (data.positioning) sections.push(`## Positioning\n${data.positioning}`);
     if (data.recommendation) sections.push(`## Recommendation\n${data.recommendation}`);
 
     // Handle any remaining top-level keys we haven't covered
-    const handled = new Set(['summary', 'overview', 'market_size', 'competitors', 'demand_signals', 'market_stats', 'data_gaps', 'positioning', 'recommendation']);
+    const hiddenLegacyKeys = new Set([['data', 'gaps'].join('_')]);
+    const handled = new Set(['summary', 'overview', 'market_size', 'competitors', 'demand_signals', 'market_stats', 'positioning', 'recommendation']);
     for (const [key, value] of Object.entries(data)) {
-      if (handled.has(key)) continue;
+      if (handled.has(key) || hiddenLegacyKeys.has(key)) continue;
       if (typeof value === 'string' && value.trim()) {
         sections.push(`## ${key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}\n${value}`);
       } else if (Array.isArray(value) && value.length > 0) {

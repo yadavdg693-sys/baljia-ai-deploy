@@ -47,12 +47,33 @@ export async function runJourney(input: JourneyInput): Promise<JourneyResult> {
     return [...m.entries()].map(([k, v]) => `${k}=${v}`).join('; ');
   };
 
+  // SSRF defense: per-step URL safety check. `new URL(s.path, base_url)`
+  // treats `s.path` as absolute if it starts with a scheme — so an agent
+  // passing base_url=https://safe.com and steps[0].path='http://169.254.169.254/'
+  // would have the journey runner fetch the metadata endpoint despite the
+  // base_url being safe. Re-validate each resolved URL.
+  const { assertUrlSafe } = await import('@/lib/agents/url-safety');
+
   for (let i = 0; i < steps.length; i++) {
     const s = steps[i];
     const method = (s.method ?? 'GET').toUpperCase();
     const url = new URL(s.path, base_url).toString();
+    const safety = await assertUrlSafe(url);
+    if (!safety.ok) {
+      results.push({
+        idx: i, step: s.step, method, path: s.path, status: 0,
+        pass: false,
+        checks: [{ name: 'url_safety', expected: 'public http(s) host', actual: safety.reason, pass: false }],
+      });
+      break; // stop immediately — agent passed a forbidden URL
+    }
     const headers: Record<string, string> = { 'User-Agent': 'Baljia/1.0 journey-runner' };
-    const host = new URL(url).host;
+    const resolvedUrl = new URL(url);
+    const host = resolvedUrl.host;
+    if (method !== 'GET' && method !== 'HEAD') {
+      headers.Origin = resolvedUrl.origin;
+      headers.Referer = `${resolvedUrl.origin}/`;
+    }
     const cookieHeader = buildCookieHeader(host);
     if (cookieHeader) headers.Cookie = cookieHeader;
 

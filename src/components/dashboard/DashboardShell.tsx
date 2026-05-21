@@ -7,6 +7,8 @@
 
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
+import { Film } from 'lucide-react';
 import {
   DndContext,
   closestCenter,
@@ -25,7 +27,7 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import type { Company, Task, Document, Report, User, ChatAction } from '@/types';
+import type { Company, Task, Document, Report, User, ChatAction, PromoVideoJob } from '@/types';
 import { TaskDetailDialog } from './TaskDetailDialog';
 import { DocumentDialog } from './DocumentDialog';
 import { PurchaseCreditsDialog } from './PurchaseCreditsDialog';
@@ -34,6 +36,9 @@ import { DashboardMenu } from './DashboardMenu';
 import { CelebrationOverlay } from './CelebrationOverlay';
 import { DocumentSuggestionPanel } from './DocumentSuggestionPanel';
 import { NewTaskDialog } from './NewTaskDialog';
+import { RunAdsDialog } from './RunAdsDialog';
+import { PromoVideoDialog } from './PromoVideoDialog';
+import { PromoVideoPanel } from './PromoVideoPanel';
 import { RecurringTasksDialog } from './RecurringTasksDialog';
 import { AddLinkDialog } from './AddLinkDialog';
 import { FounderChatRail } from '@/components/chat/FounderChatRail';
@@ -43,11 +48,12 @@ interface DocumentSuggestion { id: string; document_id: string; suggested_conten
 interface EmailRow { id: string; subject: string | null; to_address: string; from_address: string | null; direction: string | null; body: string | null; created_at: string; }
 interface DashboardLinkRow { id: string; label: string; url: string; }
 interface SetupEventRow { id: string; event_type: string; payload: Record<string, unknown>; created_at: string; }
+interface AdCampaignRow { id: string; status: string | null; daily_budget: string | null; spend: string | null; created_at: string | null; }
 
 interface DashboardShellProps {
   company: Company; tasks: Task[]; documents: Document[]; reports: Report[];
   creditBalance: number; recentUsage: number[]; pendingSuggestions: DocumentSuggestion[];
-  emails: EmailRow[]; links?: DashboardLinkRow[]; setupEvents?: SetupEventRow[]; user: User;
+  emails: EmailRow[]; links?: DashboardLinkRow[]; setupEvents?: SetupEventRow[]; ads?: AdCampaignRow[]; promoVideos?: PromoVideoJob[]; user: User;
 }
 
 function formatAge(iso: string | null | undefined): string {
@@ -192,7 +198,7 @@ function SortableTaskCard({
   );
 }
 
-export function DashboardShell({ company: initialCompany, tasks: initialTasks, documents, reports: _reports, creditBalance: initialCreditBalance, recentUsage: _recentUsage, pendingSuggestions: _pendingSuggestions, emails: initialEmails, links: initialLinks, setupEvents: initialSetupEvents, user }: DashboardShellProps) {
+export function DashboardShell({ company: initialCompany, tasks: initialTasks, documents, reports: _reports, creditBalance: initialCreditBalance, recentUsage: _recentUsage, pendingSuggestions: _pendingSuggestions, emails: initialEmails, links: initialLinks, setupEvents: initialSetupEvents, ads: initialAds, promoVideos: initialPromoVideos, user }: DashboardShellProps) {
   const [company, setCompany] = useState(initialCompany);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [selectedDoc, setSelectedDoc] = useState<Document | null>(null);
@@ -206,14 +212,18 @@ export function DashboardShell({ company: initialCompany, tasks: initialTasks, d
   const [creditBalance, setCreditBalance] = useState(initialCreditBalance);
   const [links, setLinks] = useState<DashboardLinkRow[]>(initialLinks ?? []);
   const [setupEvents, setSetupEvents] = useState<SetupEventRow[]>(initialSetupEvents ?? []);
+  const [ads, setAds] = useState<AdCampaignRow[]>(initialAds ?? []);
+  const [promoVideos, setPromoVideos] = useState<PromoVideoJob[]>(initialPromoVideos ?? []);
   const [celebrateTask, setCelebrateTask] = useState<{ id: string; title: string } | null>(null);
   const [newTaskOpen, setNewTaskOpen] = useState(false);
+  const [runAdsOpen, setRunAdsOpen] = useState(false);
+  const [promoVideoOpen, setPromoVideoOpen] = useState(false);
   const [recurringOpen, setRecurringOpen] = useState(false);
   const [addLinkOpen, setAddLinkOpen] = useState(false);
   const [editingLink, setEditingLink] = useState<DashboardLinkRow | null>(null);
 
   const companyEmailAddress = (company as unknown as { company_email?: string | null; email_identity?: string | null }).company_email ?? (company as unknown as { company_email?: string | null; email_identity?: string | null }).email_identity ?? null;
-  const sitePath = company.subdomain ? `https://${company.subdomain}.baljia.app` : '';
+  const sitePath = company.custom_domain ? (/^https?:\/\//i.test(company.custom_domain) ? company.custom_domain : `https://${company.custom_domain}`) : company.subdomain ? `https://${company.subdomain}.baljia.app` : '';
   const inboxAddress = companyEmailAddress ?? '';
   const onboardingFailed = company.onboarding_status === 'failed';
 
@@ -229,6 +239,8 @@ export function DashboardShell({ company: initialCompany, tasks: initialTasks, d
       if (data.credits?.balance !== undefined) setCreditBalance(data.credits.balance);
       if (Array.isArray(data.links)) setLinks(data.links);
       if (Array.isArray(data.setup_events)) setSetupEvents(data.setup_events);
+      if (Array.isArray(data.ads)) setAds(data.ads);
+      if (Array.isArray(data.promo_videos)) setPromoVideos(data.promo_videos);
     } catch { /* silent */ }
   }, [company.id]);
 
@@ -372,6 +384,8 @@ export function DashboardShell({ company: initialCompany, tasks: initialTasks, d
   }, [setupEvents]);
 
   const docsSorted = useMemo(() => [...docs].filter(d => !d.is_empty || (d.content && d.content.trim().length > 0)).sort((a, b) => new Date(b.updated_at ?? b.created_at ?? 0).getTime() - new Date(a.updated_at ?? a.created_at ?? 0).getTime()), [docs]);
+  const activeAdCount = useMemo(() => ads.filter(ad => ad.status === 'active').length, [ads]);
+  const totalAdSpend = useMemo(() => ads.reduce((sum, ad) => sum + Number(ad.spend ?? 0), 0), [ads]);
 
   return (
     <div style={S.page}>
@@ -415,13 +429,15 @@ export function DashboardShell({ company: initialCompany, tasks: initialTasks, d
       {/* Topbar */}
       <header style={{ ...S.topbar, animationDelay: '0ms' }} className="dashboard-reveal">
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <img src="/mascot.png" alt="Baljia" style={S.mascotSm} />
+          <Image src="/mascot.png" alt="Baljia" width={36} height={36} style={S.mascotSm} />
           <div>
             <div style={S.topbarTitle}>{company.name}</div>
             {company.one_liner && <div style={S.topbarSubtitle}>{company.one_liner}</div>}
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
+          <button style={S.btnPrimary} onClick={() => setPromoVideoOpen(true)}><Film size={14} aria-hidden="true" /> Promo video</button>
+          <Link href={`/dashboard/${company.slug ?? company.id}/settings/payments`} style={{ ...S.btn, textDecoration: 'none' }} title="Connect Stripe or Razorpay so your app can accept payments">Payments</Link>
           <Link href="/portfolio" style={{ ...S.btn, textDecoration: 'none' }}>Portfolio</Link>
           <Link href="/onboarding" style={{ ...S.btn, textDecoration: 'none' }}>+ New</Link>
           <button style={S.btn} onClick={() => setMenuOpen(v => !v)}>Menu</button>
@@ -434,7 +450,7 @@ export function DashboardShell({ company: initialCompany, tasks: initialTasks, d
         <div style={{ ...S.colLeft, animationDelay: '180ms' }} className="dashboard-col-left dashboard-reveal">
           <div style={S.panelHeading}><span style={{ fontFamily: "'Newsreader', Georgia, serif" }}>Baljia</span></div>
           <div style={{ marginBottom: 20 }}>
-            <img src="/mascot.png" alt="Baljia" style={S.mascotMd} className="animate-bob" />
+            <Image src="/mascot.png" alt="Baljia" width={64} height={64} style={S.mascotMd} className="animate-bob" />
           </div>
 
           {false && (
@@ -477,7 +493,7 @@ export function DashboardShell({ company: initialCompany, tasks: initialTasks, d
                   <div style={S.workboardSurface}>
                     {previewTasks.length === 0 ? (
                       <p style={{ fontSize: 12, color: 'var(--text-dim)', padding: '10px 0' }}>
-                        {onboardingActive ? 'Your first tasks are being prepared. They will appear here as soon as setup reaches the task step.' : 'Message Baljia to set up your first company.'}
+                        {onboardingActive ? 'Your first plan is being prepared. Tasks will appear here after Baljia scopes them.' : 'Message Baljia to set up your first company.'}
                       </p>
                     ) : previewTasks.map(task => {
                       const agentName = task.assigned_to_agent_id !== null ? FOUNDER_AGENT_LABELS[task.assigned_to_agent_id] ?? 'AI Team' : null;
@@ -521,9 +537,32 @@ export function DashboardShell({ company: initialCompany, tasks: initialTasks, d
               )}
 
               <div style={S.section} className="dashboard-reveal">
+                <div style={S.panelHeading}><span style={{ fontFamily: "'Newsreader', Georgia, serif" }}>Promo videos</span></div>
+                <PromoVideoPanel
+                  videos={promoVideos}
+                  onCreate={() => setPromoVideoOpen(true)}
+                  onApproved={(job) => {
+                    setPromoVideos(prev => [job, ...prev.filter(item => item.id !== job.id)]);
+                    void refreshDashboard();
+                  }}
+                />
+              </div>
+
+              <div style={S.section} className="dashboard-reveal">
                 <div style={S.panelHeading}><span style={{ fontFamily: "'Newsreader', Georgia, serif" }}>Campaigns</span></div>
-                <button style={{ ...S.btn, ...S.btnSm, opacity: 0.5, cursor: 'not-allowed' }} disabled>Run Ads</button>
-                <p style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 8 }}>No campaigns. Spend: $0.00</p>
+                <div style={S.softPanel}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
+                    <div style={{ minWidth: 0 }}>
+                      <strong style={{ display: 'block', fontSize: 13, color: 'var(--ink)' }}>
+                        {ads.length > 0 ? `${ads.length} campaign${ads.length === 1 ? '' : 's'}` : 'No campaigns'}
+                      </strong>
+                      <p style={{ fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.45, marginTop: 4 }}>
+                        {activeAdCount} active. Spend: ${totalAdSpend.toFixed(2)}
+                      </p>
+                    </div>
+                    <button style={{ ...S.btnPrimary, ...S.btnSm, flexShrink: 0 }} onClick={() => setRunAdsOpen(true)}>Run Ads</button>
+                  </div>
+                </div>
               </div>
 
               <div style={S.section} className="dashboard-reveal">
@@ -606,6 +645,8 @@ export function DashboardShell({ company: initialCompany, tasks: initialTasks, d
       <PurchaseCreditsDialog open={purchaseOpen} onOpenChange={setPurchaseOpen} currentBalance={creditBalance} />
       <UpgradeDialog open={upgradeOpen} onOpenChange={setUpgradeOpen} companyId={company.id} />
       <NewTaskDialog open={newTaskOpen} onOpenChange={setNewTaskOpen} companyId={company.id} onCreated={() => { void refreshDashboard(); }} />
+      <RunAdsDialog open={runAdsOpen} onOpenChange={setRunAdsOpen} companyId={company.id} defaultPromotedItem={company.name} defaultLandingUrl={sitePath} companyOneLiner={company.one_liner} companyOriginalIdea={company.original_idea} onCreated={() => { void refreshDashboard(); }} />
+      <PromoVideoDialog open={promoVideoOpen} onOpenChange={setPromoVideoOpen} companyId={company.id} defaultCta={`Try ${company.name}`} onCreated={(job) => { setPromoVideos(prev => [job, ...prev.filter(item => item.id !== job.id)]); void refreshDashboard(); }} />
       <RecurringTasksDialog open={recurringOpen} onOpenChange={setRecurringOpen} companyId={company.id} />
       <AddLinkDialog open={addLinkOpen} onOpenChange={o => { setAddLinkOpen(o); if (!o) setEditingLink(null); }} companyId={company.id} initialLabel={editingLink?.label} initialUrl={editingLink?.url} onSaved={() => { void refreshDashboard(); }} />
       {celebrateTask && <CelebrationOverlay taskTitle={celebrateTask.title} onDismiss={() => setCelebrateTask(null)} />}

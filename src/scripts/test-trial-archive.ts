@@ -69,9 +69,9 @@ async function main() {
     route = await addWorkerRoute({ pattern: routePattern, scriptName });
     console.log(`2. Route registered: ${route ? '✓' : '⚠'}\n`);
 
-    // 2. Set hosting_state=active so the archive will run
-    await db.update(companies).set({ hosting_state: 'active' }).where(eq(companies.id, company.id));
-    console.log('3. Set company hosting_state=active (precondition for archive)\n');
+    // 2. Set hosting_state=live so the archive will run
+    await db.update(companies).set({ hosting_state: 'live' }).where(eq(companies.id, company.id));
+    console.log('3. Set company hosting_state=live (precondition for archive)\n');
 
     // 3. Run archive
     console.log('4. archiveExpiredTrialApp...');
@@ -116,10 +116,10 @@ async function main() {
     }
     console.log();
 
-    // 6. Verify: company.hosting_state is no longer 'active'
+    // 6. Verify: company.hosting_state is no longer 'live'
     console.log('7. Verify company.hosting_state...');
     const [updated] = await db.select({ hosting_state: companies.hosting_state }).from(companies).where(eq(companies.id, company.id));
-    const stateChanged = updated?.hosting_state !== 'active';
+    const stateChanged = updated?.hosting_state !== 'live';
     console.log(`   hosting_state: ${updated?.hosting_state} ${stateChanged ? '✓' : '✗'}\n`);
     if (!stateChanged) exitCode = 1;
 

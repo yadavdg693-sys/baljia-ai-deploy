@@ -175,3 +175,49 @@ describe('sanitizeForFounder — edge cases', () => {
     expect(idxs).toEqual([...idxs].sort((a, b) => a - b));
   });
 });
+
+describe('sanitizeForFounder — allowedTerms (per-callsite opt-in)', () => {
+  // The allowedTerms option lets internal-only callsites permit specific banned
+  // phrases through unredacted. Use VERY sparingly — only when the callsite is
+  // genuinely internal and the text never lands on a founder-visible surface.
+
+  it('without allowedTerms, banned phrase is redacted in soft mode', () => {
+    // Use a phrase that's actually in the strict banlist. "Neon DB" is.
+    const r = sanitizeForFounder('Use Neon DB for storage', { mode: 'soft' });
+    expect(r.hadViolations).toBe(true);
+    expect(r.clean).not.toContain('Neon DB');
+  });
+
+  it('with allowedTerms including the phrase, it passes through unredacted', () => {
+    const r = sanitizeForFounder('Use Neon DB for storage', {
+      mode: 'soft',
+      allowedTerms: ['Neon DB'],
+    });
+    expect(r.hadViolations).toBe(false);
+    expect(r.clean).toBe('Use Neon DB for storage');
+  });
+
+  it('allowedTerms is case-insensitive', () => {
+    const r = sanitizeForFounder('use neon db here', {
+      mode: 'soft',
+      allowedTerms: ['NEON DB'],
+    });
+    expect(r.hadViolations).toBe(false);
+  });
+
+  it('only allowed phrases pass through; other banned phrases still redact', () => {
+    const r = sanitizeForFounder('Use Neon DB and Cloudflare Worker', {
+      mode: 'soft',
+      allowedTerms: ['Neon DB'],
+    });
+    expect(r.hadViolations).toBe(true); // Cloudflare Worker still violates
+    expect(r.clean).toContain('Neon DB');
+    expect(r.clean).not.toContain('Cloudflare Worker');
+  });
+
+  it('empty allowedTerms behaves like no option (all banned phrases caught)', () => {
+    const a = sanitizeForFounder('Use Neon DB for storage', { mode: 'soft', allowedTerms: [] });
+    const b = sanitizeForFounder('Use Neon DB for storage', { mode: 'soft' });
+    expect(a.violations.length).toBe(b.violations.length);
+  });
+});

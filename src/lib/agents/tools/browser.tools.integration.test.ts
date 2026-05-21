@@ -10,11 +10,17 @@
 // Cleans up after itself.
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { db, contacts, domainSkills, providerPacks, companies } from '@/lib/db';
-import { and, eq } from 'drizzle-orm';
-import { handleBrowserTool } from './browser.tools';
-import { handleToolCall } from '@/lib/agents/agent-factory';
-import { getAgentTools } from '@/lib/agents/agent-factory';
+
+let db: typeof import('@/lib/db')['db'];
+let contacts: typeof import('@/lib/db')['contacts'];
+let domainSkills: typeof import('@/lib/db')['domainSkills'];
+let providerPacks: typeof import('@/lib/db')['providerPacks'];
+let companies: typeof import('@/lib/db')['companies'];
+let and: typeof import('drizzle-orm')['and'];
+let eq: typeof import('drizzle-orm')['eq'];
+let handleBrowserTool: typeof import('./browser.tools')['handleBrowserTool'];
+let handleToolCall: typeof import('@/lib/agents/agent-factory')['handleToolCall'];
+let getAgentTools: typeof import('@/lib/agents/agent-factory')['getAgentTools'];
 
 const TEST_DOMAIN = '__browser_integration.example';
 const TEST_CONTACT_EMAIL = '__browser_integration_contact@example.invalid';
@@ -25,6 +31,21 @@ const skipIfNoDB = !process.env.DATABASE_URL;
 
 describe.skipIf(skipIfNoDB)('Browser agent — real-DB integration', () => {
   beforeAll(async () => {
+    const dbModule = await import('@/lib/db');
+    const drizzle = await import('drizzle-orm');
+    const browserTools = await import('./browser.tools');
+    const agentFactory = await import('@/lib/agents/agent-factory');
+    db = dbModule.db;
+    contacts = dbModule.contacts;
+    domainSkills = dbModule.domainSkills;
+    providerPacks = dbModule.providerPacks;
+    companies = dbModule.companies;
+    and = drizzle.and;
+    eq = drizzle.eq;
+    handleBrowserTool = browserTools.handleBrowserTool;
+    handleToolCall = agentFactory.handleToolCall;
+    getAgentTools = agentFactory.getAgentTools;
+
     const [company] = await db.select({ id: companies.id }).from(companies).limit(1);
     if (!company) {
       console.warn('No company in DB — skipping integration tests');

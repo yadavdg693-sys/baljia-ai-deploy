@@ -161,6 +161,47 @@ function ruleSqlInterpolation(content: string): Array<Omit<Finding, 'file'>> {
   return findings;
 }
 
+function ruleSessionImportedFromUtils(content: string): Array<Omit<Finding, 'file'>> {
+  const findings: Array<Omit<Finding, 'file'>> = [];
+  const lines = content.split('\n');
+  lines.forEach((line, i) => {
+    if (/import\s*\{[^}]*\b(requireSession|getSession)\b[^}]*\}\s*from\s*['"]@\/lib\/utils['"]/.test(line)) {
+      findings.push({
+        severity: 'high',
+        lineHint: i + 1,
+        rule: 'session-imported-from-utils',
+        message: 'Server session helpers live in `@/lib/session`, not `@/lib/utils`. Importing getSession/requireSession from utils breaks Next builds because utils is shared by client components.',
+      });
+    }
+  });
+  return findings;
+}
+
+function ruleStorageArrayBufferPitfalls(content: string, path: string): Array<Omit<Finding, 'file'>> {
+  if (!/lib\/storage\.(t|j)s$/i.test(path)) return [];
+  const findings: Array<Omit<Finding, 'file'>> = [];
+  const lines = content.split('\n');
+  lines.forEach((line, i) => {
+    if (/\.buffer\.slice\s*\(/.test(line)) {
+      findings.push({
+        severity: 'high',
+        lineHint: i + 1,
+        rule: 'storage-arraybuffer-slice',
+        message: 'Storage helper uses `.buffer.slice(...)`, which can produce ArrayBufferLike typing and byte-offset bugs under Node 26. Allocate a real ArrayBuffer and copy with `new Uint8Array(target).set(bytes)`.',
+      });
+    }
+    if (/\b(size|contentLength|byteLength)\s*:\s*\w+\.length\b/.test(line) && /ArrayBuffer|body|upload/i.test(content)) {
+      findings.push({
+        severity: 'high',
+        lineHint: i + 1,
+        rule: 'storage-arraybuffer-length',
+        message: 'ArrayBuffer size must use `.byteLength`, not `.length`. `.length` is undefined and corrupts upload metadata.',
+      });
+    }
+  });
+  return findings;
+}
+
 // Express main entry only: detect when the agent has removed core hardening
 // from the skeleton. These rules don't flag every possible app — only the
 // shape that started from skeletons/express-render and lost protection.
@@ -248,6 +289,8 @@ const RULES: Array<(content: string, path: string) => Array<Omit<Finding, 'file'
   (c, p) => ruleSessionWithoutTrustProxy(c, p),
   (c) => ruleHardcodedTestEmail(c),
   (c) => ruleSqlInterpolation(c),
+  (c) => ruleSessionImportedFromUtils(c),
+  (c, p) => ruleStorageArrayBufferPitfalls(c, p),
   (c, p) => ruleMissingHelmet(c, p),
   (c, p) => ruleAuthRouteWithoutRateLimit(c, p),
   (c, p) => ruleHealthWithoutDbProbe(c, p),

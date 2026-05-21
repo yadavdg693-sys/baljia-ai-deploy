@@ -27,7 +27,6 @@ export async function POST(request: NextRequest) {
         executed_tasks: cycle.executed_tasks,
         planned_tasks: cycle.planned_tasks,
         summary: cycle.summary,
-        company_stage: cycle.company_stage,
       },
     });
   } catch (error) {

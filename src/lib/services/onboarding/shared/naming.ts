@@ -4,11 +4,43 @@ import { db, companies } from '@/lib/db';
 import { eq, and, ne } from 'drizzle-orm';
 import { createLogger } from '@/lib/logger';
 import { callSmallLLM } from '../llm/small-llm';
-import { emitActivity } from '../stage-runner';
+import { emitActivity, recordOnboardingIssue } from '../stage-runner';
 import type { PipelineContext } from '../types';
 
 const log = createLogger('OnboardingNaming');
 const MAX_NAME_RETRIES = 3;
+
+function titleCase(word: string): string {
+  return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+}
+
+function deterministicFallbackName(ctx: PipelineContext, triedNames: string[] = []): string {
+  const source = [
+    ctx.businessProfile?.business_name,
+    ctx.refinedIdea?.refined_idea,
+    ctx.inventedIdea?.invented_idea,
+    ctx.input,
+    ctx.strategy,
+  ].find((value) => value?.trim()) || 'New Venture';
+
+  const stopwords = new Set([
+    'the', 'and', 'for', 'with', 'from', 'that', 'this', 'your', 'into', 'like',
+    'build', 'create', 'make', 'company', 'business', 'platform', 'tool', 'app',
+  ]);
+  const words = source
+    .replace(/https?:\/\/\S+/gi, ' ')
+    .replace(/[^a-zA-Z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .map((word) => word.trim())
+    .filter((word) => word.length >= 3 && !stopwords.has(word.toLowerCase()))
+    .slice(0, 2);
+
+  const base = (words.length ? words.map(titleCase).join(' ') : 'New Venture').slice(0, 42).trim();
+  if (!triedNames.includes(base)) return base;
+
+  const suffix = ctx.companyId.replace(/-/g, '').slice(0, 4).toUpperCase() || '01';
+  return `${base} ${suffix}`.slice(0, 50).trim();
+}
 
 export async function nameCompany(ctx: PipelineContext): Promise<void> {
   // Resume guard (Bug 1): if the orchestrator hydrated ctx from a DB row
@@ -21,6 +53,17 @@ export async function nameCompany(ctx: PipelineContext): Promise<void> {
       name: ctx.companyName,
     });
     await emitActivity(ctx, `Company name: ${ctx.companyName}`, 'naming');
+    return;
+  }
+
+  if (ctx.journey === 'grow_my_company' && ctx.businessProfile?.business_name?.trim()) {
+    const existingName = ctx.businessProfile.business_name.trim().replace(/\s+/g, ' ').slice(0, 80);
+    ctx.companyName = existingName;
+    log.info('Using existing business name for Grow journey', {
+      companyId: ctx.companyId,
+      name: existingName,
+    });
+    await emitActivity(ctx, `Company name: ${existingName}`, 'naming');
     return;
   }
 
@@ -52,10 +95,32 @@ Rules:
 
 Reply with ONLY the company name. Nothing else.`;
 
-    const name = await callSmallLLM(prompt);
-    const cleanName = name.trim().replace(/[^a-zA-Z0-9\s]/g, '').slice(0, 50);
+    let cleanName: string;
+    try {
+      const name = await callSmallLLM(prompt);
+      cleanName = name.trim().replace(/[^a-zA-Z0-9\s]/g, '').slice(0, 50);
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      await recordOnboardingIssue(ctx, {
+        stage: 'name_company',
+        kind: 'company_name_llm_fallback',
+        severity: 'medium',
+        error,
+        message: 'Company naming model failed, so onboarding used a deterministic fallback name.',
+        fallbackUsed: true,
+      });
+      cleanName = deterministicFallbackName(ctx, triedNames);
+    }
+
     if (!cleanName) {
-      throw new Error(`Company naming failed: LLM returned empty name on attempt ${attempt + 1}`);
+      await recordOnboardingIssue(ctx, {
+        stage: 'name_company',
+        kind: 'company_name_empty_fallback',
+        severity: 'medium',
+        message: 'Company naming returned an empty name, so onboarding used a deterministic fallback name.',
+        fallbackUsed: true,
+      });
+      cleanName = deterministicFallbackName(ctx, triedNames);
     }
 
     const { generateSlug } = await import('@/lib/slug');
@@ -76,7 +141,15 @@ Reply with ONLY the company name. Nothing else.`;
     log.info(`Name collision on attempt ${attempt + 1}: "${cleanName}"`, { companyId: ctx.companyId });
   }
 
-  throw new Error(
-    `Company naming failed: ${MAX_NAME_RETRIES} attempts all had slug collisions (tried: ${triedNames.join(', ')})`,
-  );
+  const fallbackName = deterministicFallbackName(ctx, triedNames);
+  ctx.companyName = fallbackName;
+  await recordOnboardingIssue(ctx, {
+    stage: 'name_company',
+    kind: 'company_name_collision_fallback',
+    severity: 'medium',
+    message: 'All generated company names collided, so onboarding continued with a deterministic fallback name.',
+    fallbackUsed: true,
+    metadata: { tried_names: triedNames },
+  });
+  await emitActivity(ctx, `Company name: ${fallbackName}`, 'naming');
 }

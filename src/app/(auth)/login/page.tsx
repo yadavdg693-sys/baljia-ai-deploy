@@ -1,4 +1,4 @@
-// Login page — production-ready, inline styles, matches prototype.
+// Login page - production-ready, inline styles, matches prototype.
 
 'use client';
 
@@ -25,14 +25,14 @@ export default function LoginPage() {
       const res = await fetch('/api/auth/magic-link', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) });
       if (res.ok) { const data = await res.json(); setDevMagicLink(typeof data.magicLink === 'string' ? data.magicLink : null); setSent(true); }
       else { const data = await res.json(); setError(data.error ?? 'Failed to send login link'); }
-    } catch { setError('Network error — please try again'); }
+    } catch { setError('Network error - please try again'); }
     setLoading(false);
   }
 
   const page: React.CSSProperties = { minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 24, background: 'var(--bg)', color: 'var(--text)', fontFamily: "'Inter', system-ui, sans-serif", transition: 'background .45s, color .45s' };
   const wrap: React.CSSProperties = { width: '100%', maxWidth: 420 };
   const logoWrap: React.CSSProperties = { textAlign: 'center', marginBottom: 40 };
-  const mascot: React.CSSProperties = { width: 80, height: 80, objectFit: 'contain', margin: '0 auto 16px', display: 'block', filter: 'drop-shadow(0 8px 20px rgba(217,119,6,0.38)) brightness(1.1) saturate(1.3)' };
+  const mascot: React.CSSProperties = { width: 80, height: 80, objectFit: 'contain', margin: '0 auto 16px', display: 'block', filter: 'drop-shadow(0 8px 20px rgba(217,119,6,0.38)) brightness(1.1) saturate(1.3)', animation: 'bob 2.4s ease-in-out infinite alternate' };
   const title: React.CSSProperties = { fontFamily: "'Newsreader', Georgia, serif", fontSize: 30, fontWeight: 500, letterSpacing: '-.6px', marginBottom: 6, color: 'var(--ink)' };
   const subtitle: React.CSSProperties = { fontFamily: "'Newsreader', Georgia, serif", fontSize: 14, fontStyle: 'italic', color: '#D97706' };
   const cardStyle: React.CSSProperties = { textAlign: 'center', padding: 32, borderRadius: 16, background: 'var(--bg-card)', border: '1px solid var(--line)', boxShadow: '0 8px 24px rgba(24,18,10,0.06)' };
@@ -49,12 +49,12 @@ export default function LoginPage() {
         <div style={logoWrap}>
           <img src="/mascot.png" alt="Baljia" style={mascot} />
           <h1 style={title}>Welcome to <span style={{ color: '#A35F05' }}>Baljia</span></h1>
-          <p style={subtitle}>Your AI Angel — runs your company while you enjoy life.</p>
+          <p style={subtitle}>Your AI Angel for launching and growing your company.</p>
         </div>
 
         {sent ? (
           <div style={cardStyle}>
-            <div style={{ fontSize: 40, marginBottom: 12 }}>✉️</div>
+            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12, color: '#D97706' }}>Email sent</div>
             <h2 style={{ fontSize: 18, fontWeight: 700, marginBottom: 8, color: 'var(--ink)' }}>Check your email</h2>
             <p style={{ fontSize: 14, color: 'var(--text-muted)', marginBottom: 16 }}>
               We sent a secure login link to <strong style={{ color: 'var(--ink)' }}>{email}</strong>
@@ -91,12 +91,12 @@ export default function LoginPage() {
               </button>
             </form>
 
-            <p style={{ textAlign: 'center', fontSize: 12, color: 'var(--text-dim)' }}>No credit card required · Free to start</p>
+            <p style={{ textAlign: 'center', fontSize: 12, color: 'var(--text-dim)' }}>No credit card required - Free to start</p>
           </div>
         )}
 
         <p style={{ textAlign: 'center', marginTop: 32 }}>
-          <Link href="/" style={{ fontSize: 12, color: 'var(--text-dim)', textDecoration: 'underline' }}>← Back to home</Link>
+          <Link href="/" style={{ fontSize: 12, color: 'var(--text-dim)', textDecoration: 'underline' }}>Back to home</Link>
         </p>
       </div>
     </div>

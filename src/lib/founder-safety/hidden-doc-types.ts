@@ -7,6 +7,8 @@
 
 export const FOUNDER_HIDDEN_DOC_TYPES = [
   'codebase_map', // Engineering agent's structural map of the deployed app
+  'code_graph_report', // Runtime-only Graphify report for engineering navigation
+  'code_graph_manifest', // Runtime-only Graphify cache manifest
 ] as const;
 
 export type FounderHiddenDocType = typeof FOUNDER_HIDDEN_DOC_TYPES[number];

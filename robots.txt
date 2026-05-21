@@ -1,4 +1,5 @@
 User-agent: *
 Allow: /
+Disallow: /owner/
 
 Sitemap: https://baljia.ai/sitemap.xml
