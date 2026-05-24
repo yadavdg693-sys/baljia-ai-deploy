@@ -57,6 +57,7 @@ export const PROMO_VIDEO_VISUAL_MODE_LABELS: Record<PromoVideoVisualMode, string
 
 export const PROMO_VIDEO_VOICE_LABELS: Record<PromoVideoVoiceMode, string> = {
   deepgram: 'Deepgram voice',
+  supertonic: 'Supertonic voice',
   founder_avatar: 'Founder avatar voice',
 };
 
@@ -142,6 +143,7 @@ export function isSupportedPromoVideoOption(input: {
 }
 
 export function normalizePromoVideoVoiceMode(value: string | null | undefined): PromoVideoVoiceMode {
+  if (value === 'supertonic') return 'supertonic';
   if (value === 'founder_avatar') return 'founder_avatar';
   return 'deepgram';
 }

@@ -201,6 +201,9 @@ export interface LandingPageBrief {
   capabilities: string[];
   steps: string[];
   differentiators: string[];
+  generator_version?: 'v1' | 'v2';
+  source_idea_hash?: string;
+  template_kind?: string;
 }
 
 export interface OnboardingBrief {

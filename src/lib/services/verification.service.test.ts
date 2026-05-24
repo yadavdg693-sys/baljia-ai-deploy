@@ -22,6 +22,15 @@ vi.mock('@/lib/db', () => ({
 
 vi.mock('@/lib/services/task.service', () => ({}));
 vi.mock('@/lib/services/event.service', () => ({}));
+vi.mock('@/lib/agents/ceo/ceo.rolling-plan', () => ({
+  releaseNextRollingPlanBatch: vi.fn(async () => ({
+    released: 0,
+    skipped: 0,
+    remaining: 0,
+    activeCount: 0,
+    limit: 5,
+  })),
+}));
 
 describe('verification requested path extraction', () => {
   it('extracts explicit app paths from task text', async () => {
@@ -116,6 +125,15 @@ describe('verifyAndUpdate execution persistence', () => {
       updateTask,
     }));
     vi.doMock('@/lib/services/event.service', () => ({ emit }));
+    vi.doMock('@/lib/agents/ceo/ceo.rolling-plan', () => ({
+      releaseNextRollingPlanBatch: vi.fn(async () => ({
+        released: 0,
+        skipped: 0,
+        remaining: 0,
+        activeCount: 0,
+        limit: 5,
+      })),
+    }));
 
     const { verifyAndUpdate } = await import('@/lib/services/verification.service');
     const result = await verifyAndUpdate('task-1');

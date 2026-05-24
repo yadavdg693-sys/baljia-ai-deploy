@@ -65,6 +65,7 @@ import {
   type ContractFlowProofEvidence,
 } from './product-build-contract';
 import { formatExecutionContractForPrompt, hasCompleteExecutionContract } from './execution-contract';
+import { detectHardEngineeringInfraBlocker } from './engineering-infra-guard';
 import { callAnthropicWithTimeout, callOpenRouterWithTimeout, callMoonshotWithTimeout, callGeminiWithTimeout } from '@/lib/llm-safety';
 import { isAnthropicAvailable, isBedrockAvailable, isDirectAnthropicAvailable, isAnthropicOAuthAvailable, isOpenAIAvailable, getOpenAIApiKey, isOpenRouterAvailable, isMoonshotAvailable, isGeminiAvailable, OPENROUTER_MODELS, MOONSHOT_MODELS, MOONSHOT_API_BASE, OPENAI_MODELS, getProviderOrder } from '@/lib/llm-provider';
 import { createAnthropicWithOAuthAsync, withClaudeCodeIdentity } from '@/lib/anthropic-oauth';
@@ -75,6 +76,18 @@ import { createLogger } from '@/lib/logger';
 import type { Task, TaskExecution } from '@/types';
 
 const log = createLogger('AgentFactory');
+
+function shouldStopForHardEngineeringInfraBlocker(
+  agentId: number,
+  logEntries: Record<string, unknown>[],
+  turnCount: number,
+): boolean {
+  if (agentId !== 30) return false;
+  const reason = detectHardEngineeringInfraBlocker(logEntries);
+  if (!reason) return false;
+  pushLog(logEntries, { turn: turnCount, event: 'hard_infra_blocker_kill', reason });
+  return true;
+}
 
 // Worker agents (engineering / research / data / browser / etc.) use Sonnet
 // 4.6 — strong on code generation + tool use, cheaper than Opus, and the
@@ -138,15 +151,15 @@ These rules ALWAYS apply on engineering tasks, regardless of any operator-author
 
 1. **CEO task intake + adaptive planning** — You are executing a CEO-allocated company task, not a raw user prompt. Before coding, call \`get_company_tech\`, then plan at the depth the task deserves. Simple one-feature work can use lightweight planning: \`match_capabilities\`, only needed \`get_capability_pack\` calls, and \`compose_app_architecture\`. Standard user-facing apps add domain/design/frontend planning when product shape or UI is involved. Mixed/complex/canary/world-class tasks use the full chain: \`match_domain_app\` or \`compose_ad_hoc_domain\`, \`get_domain_pack\`, \`match_capabilities\`, all \`get_capability_pack\` calls, \`match_design_system\`/\`get_design_system\`, \`match_reference_repos\`/\`get_reference_repo_patterns\`/\`retrieve_component_examples\`, \`compose_frontend_plan\`, then \`compose_app_architecture\`. For app builds, \`compose_app_architecture\` must emit \`BUILD_BRIEF_EVIDENCE\` and \`PRODUCT_BUILD_CONTRACT_EVIDENCE\`; build from that contract, not from labels on a landing page. Existing-app work must call \`read_codebase_map\` plus \`build_code_graph\` or \`query_code_graph\` before editing. The template is chassis only; do not collapse mixed or product-shaped apps into one generic template.
 
-2. **Stack** — Any task producing a user-facing page MUST start with \`github_fork_skeleton\` (Next.js + shadcn/ui). \`fork_express_skeleton\` is for backend-only APIs/webhooks/cron with NO user-facing pages. If you forked Express on a UI task, restart with the Next.js skeleton — the completion gate will block you otherwise.
+2. **Stack** — Any fresh full-stack/user-facing Render app MUST start with \`ensure_founder_app_instance\` (legacy alias: \`create_instance\`). It reuses the company repo, Neon DB, and Render service created during onboarding, hydrates the canonical slug repo with the Next.js skeleton when needed, injects Baljia runtime env vars, and writes the local \`@baljia/*\` runtime modules. Do not manually call \`github_create_repo\` or \`render_create_service\` for first deploys unless \`ensure_founder_app_instance\` explicitly tells you a manual fallback is required. \`github_fork_skeleton\` is the lower-level skeleton hydrator; \`fork_express_skeleton\` is backend-only for APIs/webhooks/cron with NO user-facing pages. If you forked Express on a UI task, restart with the Next.js path — the completion gate will block you otherwise.
 
-3. **Design language + references** — Before writing user-facing UI, call \`match_design_system\` to choose the closest vendored design-language reference, then call \`get_design_system(name)\`. Use \`compose_frontend_plan\`, \`match_reference_repos\`, \`get_reference_repo_patterns\`, and \`retrieve_component_examples\` only when the lane policy, UI/architecture complexity, or canary/world-class bar requires them. Apply conventions and patterns, NOT brand identity or copied code.
+3. **Design language + references** — Before writing user-facing UI, call \`match_design_system\`. If \`get_company_tech\` shows an existing company design system, \`match_design_system\` will reuse it; do not choose a different design language unless the CEO task explicitly asks for a rebrand/new design system. Then call \`get_design_system(name)\`. Use \`compose_frontend_plan\`, \`match_reference_repos\`, \`get_reference_repo_patterns\`, and \`retrieve_component_examples\` only when the lane policy, UI/architecture complexity, or canary/world-class bar requires them. Apply conventions and patterns, NOT brand identity or copied code.
 
 4. **Components** — Use \`@/components/ui/...\` (shadcn) for buttons/cards/inputs/dialogs. Never hand-roll an equivalent. Use \`lucide-react\` for icons. Never emoji in \`<h*>\`, button text, or icon slots. Buttons, links styled as buttons, selects, dropdown triggers, and native \`option\` rows must have readable foreground/background contrast in every light/dark state; white text on white/light buttons, black text on dark cards, and unstyled white native dropdown menus are blocker bugs.
 
 5. **Tenant ownership** — Every \`github_*\` and \`render_*\` call operates on the calling company's repo + service. Don't pass another tenant's repo or service_id. The dispatch layer enforces this; if you receive an ownership error, do not retry — you have the wrong target.
 
-6. **Completion sequence** — A task is complete only when the lane-required evidence is clean: capability plan complete when needed → Product Build Contract present for app builds only when no Execution Contract exists → deploy live when code changed → \`render_get_logs\` no errors → \`check_url_health\` 2xx → \`verify_user_journey\` PASS → \`verify_db_state\` PASS for DB-writing apps → \`verify_browser_ui\` PASS for user-facing/full-stack UI → \`verify_interaction_contract\` PASS for required interactions; include \`contract_flow_id\` and \`ACCEPTANCE_PROOF_EVIDENCE\` only for Product Build Contract flows → \`design_audit\` CLEAN for UI → \`design_critique\` with 0 BLOCKERs only when required. Missing required evidence = the completion gate blocks you with a specific reason. Address that reason. Do not retry the same broken step.
+6. **Completion sequence** — A task is complete only when the lane-required evidence is clean. Normal v2 path: \`ensure_founder_app_instance → github_create_commit → run_drizzle_push/run_migration when schema changes → static_code_scan → render_deploy → verify_release → write_codebase_map → create_report\`. \`verify_release\` bundles Render deploy/logs, health, journey, DB proof, browser UI proof, design proof, static scan, and final Baljia domain proof; if it returns VERIFY_RELEASE_FAIL, fix the whole blocker checklist before rerunning. Missing required evidence = the completion gate blocks you with a specific reason. Address that reason. Do not retry the same broken step.
 
 6.1. **Finalization sweep after any late code push** — If you push code after any verification has passed, do not stop and do not keep editing unless a check fails. Run the final sweep in this order against the latest deploy: \`render_get_deploy_status\` → \`render_get_logs\` → \`check_url_health\` → \`verify_user_journey\` → \`verify_db_state\` for DB flows → \`verify_browser_ui\` for UI → \`verify_interaction_contract\` when contracts exist → \`design_audit\` → \`design_critique\` when configured → \`write_codebase_map\` → \`create_report\`. A passing sweep means finish immediately.
 
@@ -306,6 +319,7 @@ const COMPLETION_LOG_TRIGGER_TOOLS = new Set([
   'render_deploy',
   'render_set_env_vars',
   'deploy_to_render',
+  'ensure_founder_app_instance',
   'create_instance',
 ]);
 const COMPLETION_TRIGGER_FAILURE_RE = /\b(error|failed|failure|missing required|invalid|blocked|skipped|not configured|not found)\b/i;
@@ -348,6 +362,9 @@ const RENDER_INFRASTRUCTURE_BLOCKER_CODE_REPAIR_TOOLS = new Set([
 const CUSTOM_DOMAIN_FAILURE_RE = /\b(Failed to attach custom domain|custom domain quota|Hobby Tier is limited to \d+ custom domains?|No custom domain configured|Domain ".*" is not yet verified)\b/i;
 const SERVICE_PROVISION_SUCCESS_RE = /\b(Render service created!|Instance ready!|Service ID:\s*srv-[a-z0-9]+|App URL:\s*https?:\/\/\S+\.onrender\.com)\b/i;
 const SERVICE_PROVISION_TOOLS = new Set(['create_instance', 'render_create_service']);
+const MANUAL_FIRST_DEPLOY_INFRA_TOOLS = new Set(['github_create_repo', 'render_create_service']);
+const CREATE_INSTANCE_MANUAL_RENDER_FALLBACK_RE = /\b(?:Manual step:\s*Create a Render web service|cannot create Render service automatically)\b/i;
+const CREATE_INSTANCE_MANUAL_REPO_FALLBACK_RE = /\b(?:Manual step:\s*Create (?:a )?GitHub repo|use github_create_repo)\b/i;
 const SKILL_LIST_TOOL = 'list_skills';
 
 function qualityResultHasHighFinding(result: string): boolean {
@@ -704,6 +721,36 @@ function successfulToolResult(logEntries: Record<string, unknown>[], toolName: s
   return null;
 }
 
+function latestToolResult(logEntries: Record<string, unknown>[], toolName: string): string | null {
+  for (let i = logEntries.length - 1; i >= 0; i--) {
+    const entry = logEntries[i];
+    if (entry.tool !== toolName) continue;
+    return typeof entry.result === 'string' ? entry.result : '';
+  }
+  return null;
+}
+
+function createInstancePermitsManualFirstDeployTool(
+  logEntries: Record<string, unknown>[],
+  toolName: string,
+): boolean {
+  const result = latestToolResult(logEntries, 'create_instance');
+  if (!result) return false;
+
+  if (toolName === 'render_create_service') {
+    return (
+      CREATE_INSTANCE_MANUAL_RENDER_FALLBACK_RE.test(result) ||
+      (SERVICE_PROVISION_SUCCESS_RE.test(result) && !COMPLETION_TRIGGER_FAILURE_RE.test(result))
+    );
+  }
+
+  if (toolName === 'github_create_repo') {
+    return CREATE_INSTANCE_MANUAL_REPO_FALLBACK_RE.test(result);
+  }
+
+  return false;
+}
+
 function isExplicitTeardownTask(task?: { title?: string; description?: string | null; tag?: string | null }): boolean {
   const text = taskPlanningText(task);
   return /\b(delete|remove|tear\s*down|teardown|decommission|destroy|cleanup)\b[\s\S]{0,80}\b(render\s+service|service|deployment|app)\b/i.test(text);
@@ -748,6 +795,13 @@ export function engineeringDeployChurnGate(
     return [
       'DEPLOY_CHURN_GATE: this task already provisioned a repo/DB/Render service. Do not call `create_instance` again.',
       'Continue by editing the existing repo and redeploying the existing service. Recreating the instance loses deploy history, can reset the database, and turns a working app into a starter shell.',
+    ].join('\n');
+  }
+
+  if (toolName === 'render_create_service' && hasServiceProvisionEvidence(logEntries)) {
+    return [
+      'DEPLOY_CHURN_GATE: this task already provisioned a repo/DB/Render service. Do not call `render_create_service` again.',
+      'Continue by editing the existing repo and using `render_deploy`, `render_set_env_vars`, or `render_update_service_config` against the existing service.',
     ].join('\n');
   }
 
@@ -1384,6 +1438,28 @@ export function engineeringPreToolGate(
     evidence.architectureCapabilities.includes('rag_search') ||
     /\brag|embedding|semantic|document search\b/i.test(taskPlanningText(task));
 
+  if (
+    MANUAL_FIRST_DEPLOY_INFRA_TOOLS.has(toolName) &&
+    isUiTask &&
+    !existingAppExtension &&
+    !focusedRepairIntent &&
+    !createInstancePermitsManualFirstDeployTool(logEntries, toolName)
+  ) {
+    const createInstanceResult = latestToolResult(logEntries, 'create_instance');
+    if (createInstanceResult) {
+      return [
+        'PRE_CODE_PLANNING_GATE: blocked duplicate manual first-deploy infrastructure for this full-stack founder app.',
+        '`create_instance` did not request this manual fallback. Use the canonical onboarding repo/DB/Render path instead of creating duplicate infrastructure.',
+        'Only call `render_create_service` manually when `create_instance` explicitly says: "Manual step: Create a Render web service".',
+      ].join('\n');
+    }
+    return [
+      'PRE_CODE_PLANNING_GATE: blocked manual first-deploy infrastructure for this full-stack founder app.',
+      'Call `create_instance` first so Engineering reuses the canonical onboarding repo/DB/Render service instead of creating duplicate infrastructure.',
+      'After `create_instance` succeeds, continue with github_create_commit/github_push_file and use render_deploy for updates.',
+    ].join('\n');
+  }
+
   if (existingAppExtension) {
     const graphUnavailable =
       /CODE_GRAPH_UNAVAILABLE/i.test(successfulToolResult(logEntries, 'build_code_graph') ?? '') ||
@@ -1442,6 +1518,13 @@ export function engineeringPreToolGate(
     if (!evidence.designSystemLoaded) {
       return 'PRE_CODE_PLANNING_GATE: blocked user-facing implementation before `get_design_system`. Load the selected design system before coding UI.';
     }
+    if (
+      evidence.selectedDesignSystem &&
+      evidence.loadedDesignSystem &&
+      evidence.selectedDesignSystem !== evidence.loadedDesignSystem
+    ) {
+      return `PRE_CODE_PLANNING_GATE: blocked user-facing implementation because the loaded design system (${evidence.loadedDesignSystem}) differs from the matched/company design system (${evidence.selectedDesignSystem}). Re-run \`get_design_system\` with name="${evidence.selectedDesignSystem}".`;
+    }
     if (needsFrontendPlan && !evidence.frontendPlanComposed) {
       return 'PRE_CODE_PLANNING_GATE: blocked user-facing implementation before `compose_frontend_plan`. Compose page map, required text/buttons, form checks, shadcn components, icons, accessibility, and responsive states before coding UI.';
     }
@@ -1489,6 +1572,14 @@ export function engineeringPreToolGate(
   }
   if (isUiTask && !evidence.architectureDesignSystem) {
     return 'PRE_CODE_PLANNING_GATE: blocked implementation because `compose_app_architecture` did not include the selected design_system. Re-run it with the selected design system.';
+  }
+  if (
+    isUiTask &&
+    evidence.loadedDesignSystem &&
+    evidence.architectureDesignSystem &&
+    evidence.loadedDesignSystem !== evidence.architectureDesignSystem
+  ) {
+    return `PRE_CODE_PLANNING_GATE: blocked implementation because \`compose_app_architecture\` used design_system=${evidence.architectureDesignSystem}, but the loaded/company design system is ${evidence.loadedDesignSystem}. Re-run architecture composition with design_system=${evidence.loadedDesignSystem}.`;
   }
   if (
     (evidence.architectureCapabilities.includes('rag_search') || evidence.selectedCapabilities.includes('rag_search') || /\brag|embedding|semantic|document search\b/i.test(taskPlanningText(task))) &&
@@ -1644,7 +1735,7 @@ You operate as a **deploy-and-fix loop**, not a one-shot writer. The single most
 
 To prevent that:
 
-- **First runnable state ASAP.** After the FIRST batch of commits that produces a runnable app (skeleton fork + minimal customizations + DB migration), you MUST call \`render_create_service\` (or \`render_deploy\` on update) and proceed to the verification gate. Do not keep batching commits hoping to "finish first then deploy at the end."
+- **First runnable state ASAP.** For a fresh full-stack Next.js founder app, call \`create_instance\` first so the canonical onboarding repo/DB/Render service are reused. Then make the first small batch of feature commits and proceed to deploy/verification via the existing service. For backend-only Express first deploys, use \`fork_express_skeleton\` then \`render_create_service\`; for updates, use \`render_deploy\`. Do not keep batching commits hoping to "finish first then deploy at the end."
 - **Cap pre-deploy commits.** Hard cap: ≤ 6 \`github_create_commit\` calls before the first deploy. If you've made 6 commits and haven't deployed, stop committing — deploy now and iterate from there.
 - **Iterate after deploy, not before.** The right loop is: deploy → \`render_get_deploy_status\` → \`check_url_health\` → \`render_get_logs\` → if broken, ONE focused fix commit → \`render_deploy\` → re-verify. Repeat until \`JOURNEY PASS\`. Use small, focused fix commits (1–3 files each), not large batches. **When a journey step fails after a successful deploy, invoke the \`debug-deployed-app\` skill** (read with \`read_skill\`) — it codifies the exact diagnose → fix → redeploy → re-verify ritual using \`render_get_logs\` + \`http_fetch_full\` + \`read_known_issues\` so you fix the bug in THIS run instead of handing off to remediation.
 - **Budget discipline.** Your per-turn budget summary shows remaining cost. If you see <40% remaining and you haven't deployed yet, abandon any remaining "nice-to-have" customizations and ship what you have. A deployed minimum-viable feature beats a pre-deploy zero.
@@ -1652,9 +1743,9 @@ To prevent that:
 - **A SINGLE non-2xx on \`check_url_health\` means the deploy is broken.** Not "mostly working." Not "good enough." If even ONE health check returns non-2xx (502, 504, 500), you MUST: (1) read \`render_get_logs\`, (2) identify the root cause, (3) push a fix, (4) redeploy, (5) re-run \`check_url_health\` until you get THREE consecutive 2xxs. Founders see "Failure" if you ship a partially-broken app — partial doesn't count.
 - **HIGH-severity \`static_code_scan\` findings are NOT optional.** If \`static_code_scan\` returns any HIGH findings, you MUST push a fix commit BEFORE declaring complete. Don't argue, don't justify, don't decide they're "fine for v1" — fix them. The verifier will reject the task if HIGH findings remain.
 - **Env vars must match the code.** Whatever \`process.env.X\` your code reads, that X MUST be set on the Render service. Two places:
-  - At first deploy: pass \`env_vars\` to \`render_create_service\` (DATABASE_URL, AI gateway vars, and platform Stripe vars are auto-injected when configured; everything else is your responsibility).
+  - At first full-stack Next.js deploy: pass additional runtime \`env_vars\` to \`create_instance\`; it injects DATABASE_URL, AI gateway vars, platform Stripe vars, auth URL, and app URL when configured. For backend-only Express first deploys, pass env vars to \`render_create_service\`. Everything else your code reads is your responsibility.
   - On existing service: call \`render_set_env_vars\` with \`service_id\` and the keys to set. It upserts each var and triggers a redeploy.
-  - Do NOT use \`render_set_env_vars\` for \`BUILD_COMMAND\`, \`START_COMMAND\`, runtime, plan, health check path, or root directory. Those are Render service config, not runtime env vars. Use \`render_update_service_config\` on existing services. For the Next.js skeleton's first deploy, pass \`build_command: "pnpm install --no-frozen-lockfile --prod=false && pnpm build"\` to \`render_create_service\` after schema changes are already applied with \`run_migration\` or \`run_drizzle_push\`.
+  - Do NOT use \`render_set_env_vars\` for \`BUILD_COMMAND\`, \`START_COMMAND\`, runtime, plan, health check path, or root directory. Those are Render service config, not runtime env vars. Use \`render_update_service_config\` on existing services. For a fresh Next.js app, \`create_instance\` owns first service provisioning and passes the skeleton build/start commands. Only call \`render_create_service\` yourself if \`create_instance\` explicitly returns "Manual step: Create a Render web service"; in that manual fallback, pass the exact build/start commands printed by \`create_instance\` after schema changes are synced.
   - For Next.js on Render, the start command must bind to Render's injected port: \`pnpm exec next start -H 0.0.0.0 -p $PORT\`. Hardcoded \`next start -p 3000\` can build successfully and then fail Render's deploy/update phase.
   - If \`render_deploy\` returns \`RENDER_DEPLOY_BLOCKED_RECENT_PIPELINE_MINUTES_EXHAUSTED\`, or \`render_get_deploy_status\` / \`render_get_logs\` returns \`RENDER_INFRASTRUCTURE_BLOCKER: pipeline_minutes_exhausted\`, stop code/config churn immediately. This is a Render account quota failure before app logs exist, not an app bug. Do not change \`package.json\`, \`render.yaml\`, build/start commands, env vars, or delete/recreate services for this signal. Record the blocker and report that deploy verification must be rerun only after Render pipeline minutes are restored; if the operator confirms restoration, make one controlled retry with \`force_after_quota_restored=true\` and poll that exact deploy id.
 - **Verify the actual feature, not just the landing.** When you run \`verify_user_journey\` or \`http_fetch_full\`, hit the ENDPOINT THE TASK BUILT (\`POST /api/ask\`, \`GET /api/leads\`, etc.) — not just \`GET /\`. A passing root-URL health check while \`POST /api/feature\` returns 502 is a verifier-fooling false pass. The verifier will tighten and reject this pattern.
@@ -1681,7 +1772,7 @@ You are building software for a non-technical founder's customers. Treat \`/\` (
 - **The landing's title and copy must be specific to THIS company, not the API name.** "Equityzen — AI Stock Research API" → wrong (mentions the implementation detail "API"). "Equityzen — research any Indian stock in plain English" → right (describes what a USER gets).
 - **No generic or internal starter surface.** The deployed \`/\` page and every authenticated app/dashboard page must not still show skeleton copy such as "Your app, generated. Yours to keep.", "Baljia App", "This is your authenticated app shell", "Specialist agents will add features", "Your database", "AI is pre-wired", \`db/schema.ts\`, Neon implementation copy, SDK import guidance, or gateway internals. Replace the chassis with the actual product before verification.
 - **Verify visually after deploy.** Call \`design_audit\` after the deploy is live. The audit returns a list of AI-default violations on the rendered HTML. Fix every violation before declaring complete. Also treat unreadable rendered controls as broken: white-on-white buttons, black text on dark cards, invisible icons, and native \`select\`/\`option\` dropdowns whose foreground/background colors collapse must be fixed before completion.
-- **Use the Next.js skeleton for UI work.** ANY task that produces a user-facing surface (landing, chat UI, dashboard, signup/login, founder app) MUST use \`github_fork_skeleton\` (Next.js 15 + Tailwind 4 + shadcn/ui). \`fork_express_skeleton\` is BACKEND-ONLY — pure JSON APIs, webhooks, cron workers. Express + hand-rolled HTML cannot pass the Frontend Quality Bar and the completion gate will block it.
+- **Use the canonical Next.js instance for UI work.** ANY fresh task that produces a user-facing full-stack surface (landing, chat UI, dashboard, signup/login, founder app) MUST call \`create_instance\` before manual repo/Render provisioning. That tool reuses onboarding infrastructure and hydrates the canonical slug repo with the Next.js 15 + Tailwind 4 + shadcn/ui skeleton. \`github_fork_skeleton\` is only the lower-level skeleton hydrator; do not pair it with manual \`render_create_service\` for first deploy. \`fork_express_skeleton\` is BACKEND-ONLY — pure JSON APIs, webhooks, cron workers. Express + hand-rolled HTML cannot pass the Frontend Quality Bar and the completion gate will block it.
 - **Repo layout discipline, not product guessing.** CEO decides WHAT to build. You decide WHERE code belongs. For Next.js apps: pages in \`app/<route>/page.tsx\`, API handlers in \`app/api/<feature>/route.ts\`, reusable UI in \`components/<feature>/\`, business/provider logic in \`lib/<feature>/\`, schema changes in \`db/schema.ts\`, and proofs/tests in the verification tools or \`tests/e2e/\` when the repo already uses tests. For existing apps, extend the current structure instead of moving files. For UI fixes and bug fixes, touch only the affected path.
 - **Import, don't hand-roll.** The skeleton ships with 14 production shadcn/ui components in \`components/ui/\` (Button, Card, Input, Dialog, Badge, Dropdown, ScrollArea, Skeleton, Tabs, Textarea, Toast, ThemeToggle, MarkdownBody). Call \`list_components\` to see the catalog. \`<div className="border rounded-lg p-4">\` instead of \`<Card>\`, bare \`<button style="...">\` instead of \`<Button>\`, bare \`<input>\` instead of \`<Input>+<Label>\` — all violations.
 
@@ -1704,7 +1795,7 @@ You are building software for a non-technical founder's customers. Treat \`/\` (
 2.5. **Read past failures before risky work.** Before \`render_create_service\`, \`run_migration\`, \`fork_express_skeleton\`, or any first-time integration work, call \`read_known_issues\` with a one-line description of what you're about to do. The platform records every recurring infra failure (Render API shape changes, env-var quirks, DNS gotchas, token format bugs) with the exact fix that worked. Spending one tool call to check known issues is cheaper than re-discovering the same failure. If a [FIXED] entry applies, follow its fix_notes.
 3. **Default deploy path for engineering tasks is Render — and for plain Express + Postgres apps you fork the hardened skeleton, you do NOT write server.js from scratch.**
    - **First deploy of an Express app** (no Render service yet, plain Express stack): call \`fork_express_skeleton\` first. It pushes a single atomic commit containing server.js (with all Backend Quality Bar P0 patterns pre-wired: Zod env validation, trust-proxy, Postgres sessions, /api/health that probes DB + session + Stripe, structured logging, withTimeout helper, discriminated unions, register/login/logout flows), package.json, render.yaml, db/schema.sql, tests/{config,auth,health}.test.js, README.md. Then \`run_migration\` with db/schema.sql, customize landingPage()/dashboardPage()/feature routes via \`github_create_commit\`, and \`render_create_service\` with plan "free". Every from-scratch attempt has shipped with at least one P0 violation; the skeleton has them all pre-wired.
-   - **First deploy of a Next.js app**: use \`github_fork_skeleton\` (the existing Next.js skeleton at BALAJIapps/Balaji) instead.
+   - **First deploy of a Next.js app**: call \`create_instance\` first. It reuses the canonical onboarding repo/Neon DB/Render service and hydrates the existing slug repo from BALAJIapps/Balaji when needed. Do not create a suffixed repo or duplicate Render service.
    - **Update** (render_service_id exists): your briefing already contains an "Existing app (codebase map)" section with the deployed app's stack, schema, routes, and shipped features — read it FIRST. If the briefing's map looks stale or missing, call \`read_codebase_map\` to refresh. Then edit only what the task requires via \`github_create_commit\` (atomic multi-file), call \`render_deploy\`, then check deploy status and health.
    - **At the END of every successful task** (first deploy or extend): call \`write_codebase_map\` with the FULL updated map — refresh \`last_commit_sha\`, \`last_deployed_at\`, append the new feature to \`shipped_features\`, add any new tables/routes. This is what the NEXT task's agent will read; skipping it makes future extends blind.
    - **Existing-app code graph:** before editing an existing repo, call \`build_code_graph\` and \`query_code_graph\` after \`read_codebase_map\` so you can target the right files/routes/entities instead of rebuilding a generic app. If Graphify is unavailable, keep going with the codebase map and GitHub read tools.
@@ -1712,10 +1803,10 @@ You are building software for a non-technical founder's customers. Treat \`/\` (
    - Do not create duplicate Render services. One company gets one trial Render service.
    - Do not modify the skeleton's framework files (the Zod schema, trust-proxy line, session middleware, /api/health, withTimeout helper, register/login/logout handlers). Customize ONLY: landing copy in landingPage(), dashboard rendering in dashboardPage(), feature routes (rename /api/items to your feature noun), and add feature-specific tables to db/schema.sql.
    - **Keep individual files under ~20KB of code.** Large inline HTML/JS strings in server.js cause your tool calls to be truncated at the output token cap, after which github_push_file/github_create_commit will fail with "content missing" errors. If \`landingPage()\` or \`dashboardPage()\` would exceed ~20KB of HTML, externalize the HTML into \`public/index.html\` (or \`public/dashboard.html\`) and serve it via \`app.use(express.static('public'))\` + a tiny route handler. Two small files always beat one large file you cannot push.
-4. **Provision before deploy.** If the app needs a DB, call provision_database FIRST, then pass DATABASE_URL/NEON_CONNECTION_STRING as a Render env var. The tool will replace masked DB URLs with the real company DB URL.
+4. **Provision before deploy.** For fresh full-stack Next.js apps, \`create_instance\` is the provisioning step; it reuses or creates the DB and injects DATABASE_URL. For backend-only/manual deploy paths, call \`provision_database\` first, then pass DATABASE_URL/NEON_CONNECTION_STRING as a Render env var. Never create a second DB/service when the company already has one.
 5. **Verification gate — you cannot finish without this.** A 200 response does NOT mean the app works. After every deploy you MUST run, in order. Two of the steps run BEFORE deploy (against the pushed code) and the rest run AFTER:
 
-   PRE-DEPLOY (after github_create_commit, before render_create_service):
+   PRE-DEPLOY (after github_create_commit, before render_deploy or a manual render_create_service fallback):
    - \`static_code_scan\` — fast pattern-based check over the JS/TS files. Catches silent catch blocks, secret-in-log, template-SQL injection, missing trust-proxy, hardcoded test emails. Address all HIGH-severity findings via github_create_commit before deploying.
    - \`review_pushed_code\` — Haiku-based semantic review of the diff. Catches auth bypass, race conditions, async ordering bugs the static scanner can't see. Address all HIGH-severity findings before deploying.
 
@@ -1736,7 +1827,7 @@ Any landing page, dashboard, or in-app page you produce must clear this bar befo
 
 ### Before you write a single line of UI: pick a design language
 
-Call \`match_design_system\` with the founder app brief. Pick ONE returned name whose category + tagline match the product (fintech -> \`stripe\`/\`coinbase\`; AI/LLM -> \`linear-app\`/\`claude\`/\`openai\`; dev tools -> \`vercel\`/\`linear-app\`; productivity SaaS -> \`linear-app\`/\`notion\`/\`framer\`; etc). Then call \`get_design_system(name)\` and READ the ~18KB spec — palette hex codes, font family + weights + letter-spacing values, shadow stacks, border-radius scale, motion vocabulary. These are the conventions you apply.
+Call \`match_design_system\` with the founder app brief. If the company already has a stored design system, reuse that selected name across later UI tasks for consistency. Only switch design systems when the CEO task explicitly says rebrand, brand refresh, new design system, or different design language. If no stored design system exists, pick ONE returned name whose category + tagline match the product (fintech -> \`stripe\`/\`coinbase\`; AI/LLM -> \`linear-app\`/\`claude\`/\`openai\`; dev tools -> \`vercel\`/\`linear-app\`; productivity SaaS -> \`linear-app\`/\`notion\`/\`framer\`; etc). Then call \`get_design_system(name)\` and READ the ~18KB spec — palette hex codes, font family + weights + letter-spacing values, shadow stacks, border-radius scale, motion vocabulary. These are the conventions you apply.
 
 Also call \`match_reference_repos\` and \`retrieve_component_examples\` for the selected capabilities. For strict/canary/world-class UI work, include at least one UI-craft/accessibility/dashboard-craft reference in \`get_reference_repo_patterns\`, \`compose_frontend_plan.reference_patterns\`, and \`compose_app_architecture.reference_patterns\`: \`open-codesign-design-agent-patterns\` for product-specific design brief/preview discipline, \`onlook-visual-repair-patterns\` for screenshot-driven visual repair, \`radix-accessibility-primitives\` for dropdown/select/dialog/focus behavior, \`tremor-analytics-dashboard-patterns\` for KPI/chart dashboards, \`dub-saas-dashboard-patterns\` for SaaS billing/settings/workspaces, \`midday-business-ops-patterns\` for business ops/file/assistant workbenches, or \`twenty-crm-workspace-patterns\` for CRM/object-view pipelines. Use these as patterns only; do not add them as app dependencies unless the task explicitly asks.
 
@@ -3613,10 +3704,10 @@ export function engineeringCompletionGate(
     for (const entry of logEntries) {
       const tool = entry.tool as string | undefined;
       if (tool === 'fork_express_skeleton') usedExpress = true;
-      if (tool === 'github_fork_skeleton') usedNext = true;
+      if (tool === 'github_fork_skeleton' || tool === 'create_instance' || tool === 'ensure_founder_app_instance') usedNext = true;
     }
     if (usedExpress && !usedNext) {
-      return `Cannot mark complete: this is a user-facing UI task but you forked the Express skeleton (\`fork_express_skeleton\`). Express + raw HTML cannot pass the Frontend Quality Bar. Restart with \`github_fork_skeleton\` (Next.js + shadcn/ui) and rebuild on that stack. The Next.js skeleton ships with 14 production shadcn components ready to import — call \`list_components\` to see the catalog.`;
+      return `Cannot mark complete: this is a user-facing UI task but you forked the Express skeleton (\`fork_express_skeleton\`). Express + raw HTML cannot pass the Frontend Quality Bar. Restart with \`create_instance\` (Next.js + shadcn/ui, canonical onboarding infra reuse) and rebuild on that stack. The Next.js skeleton ships with 14 production shadcn components ready to import — call \`list_components\` to see the catalog.`;
     }
   }
 
@@ -3646,6 +3737,9 @@ export function engineeringCompletionGate(
   let lastBrowserUiAt = -1;
   let lastBrowserUiPassAt = -1;
   let lastBrowserUiFailDetail: string | null = null;
+  let lastVerifyReleaseAt = -1;
+  let lastVerifyReleasePassAt = -1;
+  let lastVerifyReleaseFailDetail: string | null = null;
   let lastInteractionProofAt = -1;
   let lastInteractionProofPassAt = -1;
   let lastDeployOrPushAt = -1;
@@ -3663,6 +3757,7 @@ export function engineeringCompletionGate(
   let lastReferencePatternAt = -1;
   let lastComponentExamplesAt = -1;
   let lastReportAt = -1;
+  let lastReportInputText = '';
   let lastCodebaseMapAt = -1;
   let lastCodebaseMapSavedAt = -1;
   for (let i = 0; i < logEntries.length; i++) {
@@ -3690,6 +3785,13 @@ export function engineeringCompletionGate(
     }
     if (tool === 'create_report') {
       lastReportAt = i;
+      const input = entry.input as Record<string, unknown> | undefined;
+      lastReportInputText = [
+        input?.title,
+        input?.content,
+        input?.summary,
+        input?.report_type,
+      ].filter((value): value is string => typeof value === 'string').join('\n');
     }
     if (tool === 'write_codebase_map') {
       lastCodebaseMapAt = i;
@@ -3765,6 +3867,14 @@ export function engineeringCompletionGate(
         lastBrowserUiPassAt = i;
       } else {
         lastBrowserUiFailDetail = result.slice(0, 300);
+      }
+    }
+    if (tool === 'verify_release') {
+      lastVerifyReleaseAt = i;
+      if (/^VERIFY_RELEASE_PASS\b/m.test(result)) {
+        lastVerifyReleasePassAt = i;
+      } else {
+        lastVerifyReleaseFailDetail = result.slice(0, 500);
       }
     }
     if (tool === 'verify_interaction_contract') {
@@ -3972,7 +4082,13 @@ export function engineeringCompletionGate(
     }
   }
 
-  if (contractScopeLocked && isUserFacingUiTask(task, logEntries) && lastJourneyPassAt === -1 && lastInteractionProofPassAt === -1) {
+  if (
+    contractScopeLocked &&
+    isUserFacingUiTask(task, logEntries) &&
+    lastJourneyPassAt === -1 &&
+    lastInteractionProofPassAt === -1 &&
+    lastVerifyReleasePassAt === -1
+  ) {
     return 'Cannot mark complete: this Engineering task has a CEO Execution Contract, but no passing user journey or interaction proof. Verify the contract flow through the deployed UI before finishing.';
   }
 
@@ -3998,14 +4114,20 @@ export function engineeringCompletionGate(
     return 'Cannot mark complete: this RAG/existing-app task never called `read_known_issues`. Load relevant known issues so fixed canary learnings and provider-specific integration guidance are part of the final implementation evidence.';
   }
 
+  const latestAppChangeAtForRelease = Math.max(lastPushAt, lastDeployOrPushAt);
+  const verifyReleaseFresh = lastVerifyReleasePassAt >= latestAppChangeAtForRelease;
+  if (lastVerifyReleaseAt > lastVerifyReleasePassAt && lastVerifyReleaseAt >= latestAppChangeAtForRelease) {
+    return `Cannot mark complete: \`verify_release\` returned blockers. Fix every blocker in the bundled checklist, redeploy if needed, then rerun \`verify_release\` until it returns VERIFY_RELEASE_PASS. Details: ${lastVerifyReleaseFailDetail ?? '(no detail)'}`;
+  }
+
   // Health failure remains "unaddressed" if no successful health check
   // followed the last failed one.
-  if (lastHealthFailed && lastHealthAt > lastHealthSuccessAt) {
+  if (!verifyReleaseFresh && lastHealthFailed && lastHealthAt > lastHealthSuccessAt) {
     return `Cannot mark complete: \`check_url_health\` returned non-2xx and you have not re-run it successfully after a fix. Read \`render_get_logs\`, push a fix commit, redeploy, and re-run \`check_url_health\` until it returns 2xx. Details: ${lastHealthFailed}`;
   }
 
   // HIGH static scan finding remains "unaddressed" if no clean scan followed it.
-  if (lastScanHigh && lastScanAt > lastScanCleanAt) {
+  if (!verifyReleaseFresh && lastScanHigh && lastScanAt > lastScanCleanAt) {
     return `Cannot mark complete: \`static_code_scan\` reported HIGH-severity finding(s) that have not been addressed. Push a fix via \`github_create_commit\`, then re-run \`static_code_scan\` to verify the finding is gone. Details: ${lastScanHigh}`;
   }
 
@@ -4045,17 +4167,17 @@ export function engineeringCompletionGate(
 
   // Static scan must be run AFTER the most recent code push. Catches the
   // "agent pushed a fix then skipped re-scan" pattern.
-  if (lastPushAt >= 0 && lastScanAt < lastPushAt) {
+  if (!verifyReleaseFresh && lastPushAt >= 0 && lastScanAt < lastPushAt) {
     return `Cannot mark complete: you pushed code (\`github_push_file\`/\`github_create_commit\`) without running \`static_code_scan\` afterward. Run \`static_code_scan\` now to verify the new code doesn't introduce HIGH-severity findings, then continue.`;
   }
 
   // Render logs are mandatory after any deploy-shaped action. A passing
   // health check can still hide missing env vars, database boot failures, or
   // runtime errors that only appear in Render logs.
-  if (lastDeployOrPushAt >= 0 && lastRenderLogsAt < lastDeployOrPushAt) {
+  if (!verifyReleaseFresh && lastDeployOrPushAt >= 0 && lastRenderLogsAt < lastDeployOrPushAt) {
     return `Cannot mark complete: \`${lastDeployOrPushTool ?? 'deploy'}\` triggered a deploy or auto-deploy, but you have not run \`render_get_logs\` afterward. Fetch the latest Render logs, confirm there are no startup/runtime errors, then continue to health and journey verification.`;
   }
-  if (lastRenderLogsErrorAt > lastRenderLogsCleanAt && lastRenderLogsErrorAt > lastDeployOrPushAt) {
+  if (!verifyReleaseFresh && lastRenderLogsErrorAt > lastRenderLogsCleanAt && lastRenderLogsErrorAt > lastDeployOrPushAt) {
     return `Cannot mark complete: the latest \`render_get_logs\` output contains error signatures. Fix the root cause, redeploy, then re-run \`render_get_logs\` until it is clean. Details: ${lastRenderLogsError ?? '(no detail)'}`;
   }
 
@@ -4065,7 +4187,7 @@ export function engineeringCompletionGate(
   // block above only catches "called and failed" — this block catches "never
   // called at all", which is what equityzen pilot 2026-05-12 surfaced.
   // Symmetric in spirit to the render_get_logs mandate above it.
-  if (lastDeployOrPushAt >= 0 && lastHealthAt < lastDeployOrPushAt) {
+  if (!verifyReleaseFresh && lastDeployOrPushAt >= 0 && lastHealthAt < lastDeployOrPushAt) {
     return `Cannot mark complete: \`${lastDeployOrPushTool ?? 'deploy'}\` triggered a deploy or auto-deploy, but you have not run \`check_url_health\` afterward. Confirm at least the landing route returns 2xx (and if \`/api/health\` exists, also check it — \`body.checks.*\` should all be "ok"). The verifier hard-requires this evidence for any deploy-shaped task.`;
   }
 
@@ -4075,18 +4197,18 @@ export function engineeringCompletionGate(
   // verify_user_journey is mandatory for engineering tasks. It must be called
   // and must have passed. Iteration 2 of equityzen skipped it at the end →
   // verifier rejected. Gate now enforces it.
-  if (lastJourneyAt === -1 && !fastUiLane) {
+  if (!verifyReleaseFresh && lastJourneyAt === -1 && !fastUiLane) {
     return `Cannot mark complete: you have not called \`verify_user_journey\` yet. Walk the critical user flow end-to-end against the deployed URL (e.g. POST to the feature endpoint, assert the response shape). For an AI Q&A app this means: POST /api/ask with a real question and assert the response contains "ok":true. Mandatory before stopping.`;
   }
-  if (lastJourneyPassAt < lastJourneyAt) {
+  if (!verifyReleaseFresh && lastJourneyPassAt < lastJourneyAt) {
     return `Cannot mark complete: \`verify_user_journey\` last returned a FAIL. Read the failure detail, fix the underlying bug (code, env var, schema), redeploy, then re-run \`verify_user_journey\` until you get JOURNEY PASS. Details: ${lastJourneyFailDetail ?? '(no detail)'}`;
   }
   // If push happened after the last passing journey, demand a fresh journey.
-  if (lastPushAt > lastJourneyPassAt && !fastUiLane) {
+  if (!verifyReleaseFresh && lastPushAt > lastJourneyPassAt && !fastUiLane) {
     return `Cannot mark complete: you pushed code AFTER your last successful \`verify_user_journey\`. The new code is unverified. Run \`verify_user_journey\` against the deployed app again and confirm JOURNEY PASS.`;
   }
 
-  if (isDbStateRequiredTask(task, planningEvidence)) {
+  if (!verifyReleaseFresh && isDbStateRequiredTask(task, planningEvidence)) {
     if (lastDbStateAt === -1) {
       return `Cannot mark complete: this task writes to the database, but you have not called \`verify_db_state\`. After the passing user journey, run a SELECT-based assertion proving at least one row landed in the founder database.`;
     }
@@ -4104,7 +4226,7 @@ export function engineeringCompletionGate(
   // requiring them would create an impossible gate.
   //
   // Centralized classifier — same logic the stack-lock check uses above.
-  if (isUiTask) {
+  if (!verifyReleaseFresh && isUiTask) {
     if (lastBrowserUiAt === -1) {
       return `Cannot mark complete: this user-facing/full-stack UI has no real browser UI proof. Run \`verify_browser_ui\` against the deployed URL with capability-specific \`required_text\` and \`required_buttons\` from \`compose_app_architecture\`. This catches React hydration/runtime errors, missing buttons, blank shells, and panels that cannot be submitted from the UI.`;
     }
@@ -4231,6 +4353,7 @@ export function engineeringCompletionGate(
       isUiTask && (completionNeedsInteractionProof || criticalFlowContracts.length > 0) ? lastInteractionProofPassAt : -1,
       isUiTask ? lastDesignAuditCleanAt : -1,
       isUiTask && isDesignCritiqueConfigured() ? lastCritiqueCleanAt : -1,
+      lastVerifyReleasePassAt,
       lastCodebaseMapSavedAt,
     );
     if (lastReportAt < reportMustFollow) {
@@ -4281,6 +4404,17 @@ export function engineeringCompletionGate(
       }
       const details = laneIssues.map((issue) => `${issue.role} ${issue.reason}: ${issue.detail}`).join(' | ');
       return `Cannot mark complete: bounded Engineering lane output is incomplete or stale. ${details}. Re-record completed lane output after the latest Product Build Contract, push/deploy, and verification proof.`;
+    }
+  }
+
+  const reportDesignSystem = planningEvidence.loadedDesignSystem
+    ?? planningEvidence.selectedDesignSystem
+    ?? planningEvidence.architectureDesignSystem;
+  if (reportRequired && isUiTask && reportDesignSystem && lastReportInputText.trim()) {
+    const mentionsDesignSystem = new RegExp(`\\b${reportDesignSystem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(lastReportInputText);
+    const mentionsApplication = /\b(how applied|applied|used|followed|implemented|translated|mapped|design system)\b/i.test(lastReportInputText);
+    if (!mentionsDesignSystem || !mentionsApplication) {
+      return `Cannot mark complete: the final report must include the selected design system (${reportDesignSystem}) and a short note explaining how it was applied to the shipped UI. Re-run \`create_report\` with that design evidence.`;
     }
   }
 
@@ -4558,6 +4692,10 @@ async function runWithClaude(
         content: result,
       });
       pushLog(log_entries, { turn: turnCount, tool: toolBlock.name, input: toolBlock.input, result });
+      if (shouldStopForHardEngineeringInfraBlocker(agentId, log_entries, turnCount)) {
+        loopKill = true;
+        break;
+      }
     }
 
     if (loopKill) break;
@@ -4702,6 +4840,10 @@ async function runWithOpenAI(
       const toolResult = await handleToolCall(fnName, args, task, agentId, log_entries);
       watchdog.recordHeartbeat(`completed tool ${fnName}`, fnName);
       pushLog(log_entries, { turn: turnCount, tool: fnName, input: args, result: toolResult });
+      if (shouldStopForHardEngineeringInfraBlocker(agentId, log_entries, turnCount)) {
+        loopKill = true;
+        break;
+      }
 
       // Append per-turn budget summary to the LAST tool result so the agent
       // sees it once per turn (rather than after every individual tool).
@@ -4828,6 +4970,10 @@ async function runWithCodex(
       const toolResult = await handleToolCall(tc.name, tc.arguments, task, agentId, log_entries);
       watchdog.recordHeartbeat(`completed tool ${tc.name}`, tc.name);
       pushLog(log_entries, { turn: turnCount, tool: tc.name, input: tc.arguments, result: toolResult });
+      if (shouldStopForHardEngineeringInfraBlocker(agentId, log_entries, turnCount)) {
+        loopKill = true;
+        break;
+      }
 
       const content = i === lastIdx ? `${toolResult}\n\n[${watchdog.getBudgetSummary()}]` : toolResult;
       messages.push({ role: 'tool', content, tool_call_id: tc.id, tool_name: tc.name });
@@ -4976,6 +5122,10 @@ async function runWithGemini(
           },
         });
         pushLog(log_entries, { turn: turnCount, tool: fc.name, input: fc.args, result: toolResult });
+        if (shouldStopForHardEngineeringInfraBlocker(agentId, log_entries, turnCount)) {
+          geminiLoopKill = true;
+          break;
+        }
       }
     }
 
@@ -5128,6 +5278,10 @@ async function runWithOpenRouter(
       const toolResult = await handleToolCall(fnName, args, task, agentId, log_entries);
       watchdog.recordHeartbeat(`completed tool ${fnName}`, fnName);
       pushLog(log_entries, { turn: turnCount, tool: fnName, input: args, result: toolResult });
+      if (shouldStopForHardEngineeringInfraBlocker(agentId, log_entries, turnCount)) {
+        loopKill = true;
+        break;
+      }
 
       const content = i === lastIdx ? `${toolResult}\n\n[${watchdog.getBudgetSummary()}]` : toolResult;
       messages.push({
@@ -5269,6 +5423,10 @@ async function runWithMoonshot(
       const toolResult = await handleToolCall(fnName, args, task, agentId, log_entries);
       watchdog.recordHeartbeat(`completed tool ${fnName}`, fnName);
       pushLog(log_entries, { turn: turnCount, tool: fnName, input: args, result: toolResult });
+      if (shouldStopForHardEngineeringInfraBlocker(agentId, log_entries, turnCount)) {
+        loopKill = true;
+        break;
+      }
 
       const content = i === lastIdx ? `${toolResult}\n\n[${watchdog.getBudgetSummary()}]` : toolResult;
       messages.push({

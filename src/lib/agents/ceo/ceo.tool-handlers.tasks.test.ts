@@ -864,6 +864,66 @@ describe('CEO tool handlers — create_task', () => {
   });
 });
 
+describe('CEO tool handlers - create_tasks', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetChains();
+  });
+
+  it('queues multiple scoped tasks in one tool call and returns every task action', async () => {
+    const governance = await import('@/lib/services/governance.service');
+    const taskService = await import('@/lib/services/task.service');
+    const events = await import('@/lib/services/event.service');
+
+    vi.mocked(governance.evaluateTask).mockResolvedValue({
+      can_execute: true,
+      execution_mode: 'full_agent',
+      verification_level: 'browser_flow',
+    });
+    vi.mocked(taskService.createTask)
+      .mockResolvedValueOnce(makeTask({ id: 'task-one', title: 'Research competitors', tag: 'research' }) as never)
+      .mockResolvedValueOnce(makeTask({ id: 'task-two', title: 'Draft launch tweet', tag: 'tweet' }) as never);
+    vi.mocked(events.emit).mockResolvedValue({} as never);
+
+    const { handleToolCall } = await import('@/lib/agents/ceo/ceo.tools');
+    const result = await handleToolCall(
+      'create_tasks',
+      {
+        tasks: [
+          {
+            title: 'Research competitors',
+            description: 'Compare job auto-apply competitors.',
+            tag: 'research',
+            complexity: 4,
+            estimated_hours: 2,
+            priority: 'high',
+          },
+          {
+            title: 'Draft launch tweet',
+            description: 'Write the first public launch tweet.',
+            tag: 'tweet',
+            complexity: 2,
+            estimated_hours: 1,
+            depends_on_indexes: [1],
+          },
+        ],
+      },
+      COMPANY_ID,
+    );
+
+    expect(taskService.createTask).toHaveBeenCalledTimes(2);
+    expect(events.emit).toHaveBeenCalledTimes(2);
+    expect(result.content).toContain('Created 2 tasks');
+    expect(result.content).toContain('Research competitors');
+    expect(result.content).toContain('Draft launch tweet');
+    expect(result.actions).toHaveLength(2);
+    expect(result.actions?.map((action) => action.type)).toEqual(['task_proposal', 'task_proposal']);
+    expect(vi.mocked(taskService.createTask).mock.calls[1]![0]).toMatchObject({
+      related_task_ids: ['task-one'],
+    });
+  });
+});
+
 // ── 3. reject_task ─────────────────────────────────────────────────────────
 
 describe('CEO tool handlers — reject_task', () => {

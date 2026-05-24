@@ -206,6 +206,44 @@ function ruleStorageArrayBufferPitfalls(content: string, path: string): Array<Om
 // from the skeleton. These rules don't flag every possible app — only the
 // shape that started from skeletons/express-render and lost protection.
 
+function ruleRawProviderSdkImport(content: string, path: string): Array<Omit<Finding, 'file'>> {
+  const normalizedPath = path.replace(/\\/g, '/');
+  if (/^src\/baljia\//.test(normalizedPath)) return [];
+  if (/^baljia\.runtime\.json$/.test(normalizedPath)) return [];
+
+  const providerToWrapper: Record<string, string> = {
+    openai: '@baljia/ai',
+    '@anthropic-ai/sdk': '@baljia/ai',
+    '@google/generative-ai': '@baljia/ai',
+    '@google/genai': '@baljia/ai',
+    stripe: '@baljia/payments',
+    '@aws-sdk/client-s3': '@baljia/storage',
+    resend: '@baljia/email',
+    postmark: '@baljia/email',
+    nodemailer: '@baljia/email',
+  };
+  const providers = Object.keys(providerToWrapper)
+    .map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('|');
+  const importRe = new RegExp(
+    `(?:import\\s+(?:type\\s+)?[\\s\\S]*?from\\s*['"](${providers})['"]|require\\(\\s*['"](${providers})['"]\\s*\\))`,
+    'g',
+  );
+
+  const findings: Array<Omit<Finding, 'file'>> = [];
+  let match: RegExpExecArray | null;
+  while ((match = importRe.exec(content)) !== null) {
+    const provider = match[1] ?? match[2] ?? 'provider SDK';
+    findings.push({
+      severity: 'high',
+      lineHint: content.slice(0, match.index).split('\n').length,
+      rule: 'raw-ai-sdk-import',
+      message: `Raw provider SDK import "${provider}" bypasses Baljia usage tracking. Use ${providerToWrapper[provider] ?? '@baljia/*'} instead unless this is an explicit runtime_change task.`,
+    });
+  }
+  return findings;
+}
+
 function isMainEntryFile(path: string): boolean {
   return /server\.[jt]s$|app\.[jt]s$|index\.[jt]s$/.test(path);
 }
@@ -291,6 +329,7 @@ const RULES: Array<(content: string, path: string) => Array<Omit<Finding, 'file'
   (c) => ruleSqlInterpolation(c),
   (c) => ruleSessionImportedFromUtils(c),
   (c, p) => ruleStorageArrayBufferPitfalls(c, p),
+  (c, p) => ruleRawProviderSdkImport(c, p),
   (c, p) => ruleMissingHelmet(c, p),
   (c, p) => ruleAuthRouteWithoutRateLimit(c, p),
   (c, p) => ruleHealthWithoutDbProbe(c, p),

@@ -569,6 +569,62 @@ describe('Engineering pre-code planning gate', () => {
     ], task)).toBeNull();
   });
 
+  it('accepts fresh verify_release pass as bundled release evidence', async () => {
+    const { engineeringCompletionGate } = await import('./agent-factory');
+    const contractedTask = {
+      ...(task as Record<string, unknown>),
+      execution_contract: executionContract,
+    } as never;
+    const log = [
+      { tool: 'ensure_founder_app_instance', result: '{"repo":"BALAJIapps/course-marketplace","repoStatus":"reused"}' },
+      { tool: 'github_create_commit', result: 'Committed 1 file(s) to BALAJIapps/course-marketplace/main\nCommit: abc1234' },
+      { tool: 'render_deploy', result: 'Deployment triggered! Deploy ID: dep-1' },
+      {
+        tool: 'verify_release',
+        result: 'VERIFY_RELEASE_PASS {"passed":true,"selectedVerificationUrl":"https://course.onrender.com","finalFounderUrl":"https://course.baljia.app","checks":[{"name":"all","passed":true,"summary":"ok"}],"blockers":[]}',
+      },
+      { tool: 'write_codebase_map', result: 'Codebase map saved (1 feature(s) tracked, 2 table(s), 4 route(s)).' },
+      { tool: 'create_report', result: 'Report created: "Release verified"' },
+    ];
+
+    expect(engineeringCompletionGate(30, log, contractedTask)).toBeNull();
+  });
+
+  it('requires final UI reports to name the selected design system and how it was applied', async () => {
+    const { engineeringCompletionGate } = await import('./agent-factory');
+    const uiLog = [
+      ...domainFrontendPlanningLog,
+      { tool: 'ensure_founder_app_instance', result: '{"repo":"BALAJIapps/course-marketplace","repoStatus":"reused"}' },
+      { tool: 'github_create_commit', result: 'Committed 1 file(s) to BALAJIapps/course-marketplace/main\nCommit: abc1234' },
+      { tool: 'render_deploy', result: 'Deployment triggered! Deploy ID: dep-1' },
+      {
+        tool: 'verify_release',
+        result: 'VERIFY_RELEASE_PASS {"passed":true,"selectedVerificationUrl":"https://course.onrender.com","finalFounderUrl":"https://course.baljia.app","checks":[{"name":"all","passed":true,"summary":"ok"}],"blockers":[]}',
+      },
+      { tool: 'write_codebase_map', result: 'Codebase map saved (1 feature(s) tracked, 2 table(s), 4 route(s)).' },
+      {
+        tool: 'create_report',
+        input: { title: 'Release verified', content: 'Live URL and verification evidence are included.' },
+        result: 'Report created: "Release verified"',
+      },
+      ...completedLaneOutputs(),
+    ];
+
+    expect(engineeringCompletionGate(30, uiLog, task)).toContain('selected design system');
+
+    const fixed = uiLog.map((entry) => entry.tool === 'create_report'
+      ? {
+        tool: 'create_report',
+        input: {
+          title: 'Release verified',
+          content: 'Design system: linear-app. How applied: used its density, typography rhythm, dashboard spacing, and subdued interaction style across the shipped UI.',
+        },
+        result: 'Report created: "Release verified"',
+      }
+      : entry);
+    expect(engineeringCompletionGate(30, fixed, task)).toBeNull();
+  });
+
   it('keeps complex existing-app extensions on the mixed planning path after graph evidence', async () => {
     const { engineeringPreToolGate } = await import('./agent-factory');
     const existingComplexTask = {
@@ -603,6 +659,56 @@ describe('Engineering pre-code planning gate', () => {
     const { engineeringPreToolGate } = await import('./agent-factory');
     expect(engineeringPreToolGate('create_instance', domainFrontendPlanningLog, task)).toBeNull();
     expect(engineeringPreToolGate('github_push_file', domainFrontendPlanningLog, task)).toBeNull();
+  });
+
+  it('blocks manual first-deploy Render service creation for full-stack apps before create_instance', async () => {
+    const { engineeringPreToolGate } = await import('./agent-factory');
+
+    const result = engineeringPreToolGate('render_create_service', domainFrontendPlanningLog, task);
+
+    expect(result).toContain('create_instance');
+    expect(result).toContain('canonical onboarding repo/DB');
+  });
+
+  it('allows manual Render service creation when create_instance gives an explicit manual fallback', async () => {
+    const { engineeringPreToolGate } = await import('./agent-factory');
+    const manualFallbackLog = [
+      ...domainFrontendPlanningLog,
+      {
+        tool: 'create_instance',
+        result: [
+          'Step 3/4: Repository ready.',
+          'RENDER_API_KEY not configured - cannot create Render service automatically.',
+          'Manual step: Create a Render web service with:',
+          '- repo: BALAJIapps/careerops',
+        ].join('\n'),
+      },
+    ];
+
+    const result = engineeringPreToolGate('render_create_service', manualFallbackLog, task);
+
+    expect(result).toBeNull();
+  });
+
+  it('still blocks duplicate GitHub repo creation when create_instance only gives a Render manual fallback', async () => {
+    const { engineeringPreToolGate } = await import('./agent-factory');
+    const manualRenderFallbackLog = [
+      ...domainFrontendPlanningLog,
+      {
+        tool: 'create_instance',
+        result: [
+          'Step 3/4: Repository ready.',
+          'RENDER_API_KEY not configured - cannot create Render service automatically.',
+          'Manual step: Create a Render web service with:',
+          '- repo: BALAJIapps/careerops',
+        ].join('\n'),
+      },
+    ];
+
+    const result = engineeringPreToolGate('github_create_repo', manualRenderFallbackLog, task);
+
+    expect(result).toContain('create_instance');
+    expect(result).toContain('canonical onboarding repo/DB');
   });
 
   it('allows non-marketplace mixed apps after complete planning evidence', async () => {
@@ -726,6 +832,26 @@ describe('Engineering pre-code planning gate', () => {
     expect(result).toContain('selected reference_patterns');
   });
 
+  it('blocks UI implementation when the loaded design system differs from the matched company design system', async () => {
+    const { engineeringPreToolGate } = await import('./agent-factory');
+    const mismatchLog = domainFrontendPlanningLog.map((entry) => {
+      if (entry.tool === 'match_design_system') {
+        return { ...entry, result: 'DESIGN_SYSTEM_MATCH_EVIDENCE selected=linear-app\nReused existing company design system.' };
+      }
+      if (entry.tool === 'get_design_system') {
+        return { ...entry, result: 'DESIGN_SYSTEM_EVIDENCE name=stripe\nDesign system: stripe' };
+      }
+      if (entry.tool === 'compose_app_architecture') {
+        return { ...entry, result: withProductContractEvidence('ARCHITECTURE_PLAN_EVIDENCE capabilities=marketplace,auth,uploads_storage,payments_stripe,ai_openai,admin_workflow,dashboard,crud,deployment_render reference_patterns=vercel-commerce-marketplace-patterns,open-codesign-design-agent-patterns design_system=stripe', 'auth_session,marketplace_listing,admin_approval') };
+      }
+      return entry;
+    });
+
+    const result = engineeringPreToolGate('create_instance', mismatchLog, task);
+    expect(result).toContain('loaded design system');
+    expect(result).toContain('linear-app');
+  });
+
   it('requires UI-craft reference evidence for strict/canary UI implementation', async () => {
     const { engineeringPreToolGate } = await import('./agent-factory');
     const noUiCraftLoaded = domainFrontendPlanningLog.filter((entry) =>
@@ -817,6 +943,18 @@ describe('Engineering pre-code planning gate', () => {
       expect(result).toContain('compose_frontend_plan');
       expect(engineeringPreToolGate('github_fork_skeleton', domainFrontendPlanningLog, task)).toBeNull();
     });
+  });
+
+  it('blocks duplicate Render service creation after create_instance already provisioned the app', async () => {
+    const { engineeringDeployChurnGate } = await import('./agent-factory');
+    const provisionedLog = [
+      { tool: 'create_instance', result: 'Step 4/4: Instance ready!\nService ID: srv-test\nApp URL: https://careerops.baljia.app' },
+    ];
+
+    const result = engineeringDeployChurnGate('render_create_service', provisionedLog, task);
+
+    expect(result).toContain('already provisioned');
+    expect(result).toContain('render_deploy');
   });
 
   it('hard-mode completion gate blocks missing domain/frontend evidence but does not block backend-only tasks', async () => {

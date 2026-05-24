@@ -1,7 +1,7 @@
-// invent_idea — Surprise Me journey (the "Baljia magic" path)
-// Generates a specific buildable startup idea from founder's background + geo.
-// Falls back to a sampled bucket of pre-vetted Polsia-derived ideas when no
-// background exists, using GeoIP (when present) to pick the regionally-fitting one.
+// invent_idea - Surprise Me journey (the "Baljia magic" path).
+// Generates a specific buildable startup idea from founder background and geo.
+// If no background exists, the model invents from first principles instead of
+// depending on an external idea-bucket file.
 
 import { getCapabilityConstraint } from '@/lib/platform-capabilities';
 import { callSmallLLMJson } from './json-mode';
@@ -11,48 +11,9 @@ import { emitActivity, recordOnboardingIssue } from '../stage-runner';
 import { appendMemorySection } from './memory-sections';
 import { stripInlineMarkdown } from './founder-doc-style';
 import type { PipelineContext, InventedIdea } from '../types';
-import bucketRaw from '../../../../../data/business-ideas-bucket.json';
-
-interface BucketEntry {
-  idea_id: string;
-  category: string;
-  target_user: string;
-  business_idea: string;
-  source_text: string;
-  business_model_guess: string;
-  opportunity_score: number;
-  evidence_strength: 'high' | 'medium' | 'low';
-}
-
-// Filter once at module load: high-signal, high-opportunity entries only.
-const BUCKET: BucketEntry[] = (bucketRaw as BucketEntry[]).filter(
-  (e) =>
-    typeof e.opportunity_score === 'number' &&
-    e.opportunity_score >= 40 &&
-    (e.evidence_strength === 'high' || e.evidence_strength === 'medium') &&
-    e.source_text &&
-    e.target_user &&
-    e.category,
-);
-
-function sampleBucket(n: number): BucketEntry[] {
-  // Partial Fisher-Yates: shuffle just enough to pick n distinct items.
-  const arr = [...BUCKET];
-  const take = Math.min(n, arr.length);
-  for (let i = 0; i < take; i++) {
-    const j = i + Math.floor(Math.random() * (arr.length - i));
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-  }
-  return arr.slice(0, take);
-}
-
-function formatBucketEntry(e: BucketEntry, i: number): string {
-  const text = e.source_text.replace(/\s+/g, ' ').trim().slice(0, 220);
-  return `${i + 1}. [${e.category}] target: ${e.target_user} — ${text}`;
-}
 
 function buildPersonalizedPrompt(backgroundContext: string, locationLine: string): string {
-  return `You are Baljia, an AI cofounder. The founder hasn't specified an idea — your job is to INVENT a specific, buildable startup idea grounded in their background.
+  return `You are Baljia, an AI cofounder. The founder hasn't specified an idea - your job is to INVENT a specific, buildable startup idea grounded in their background.
 
 ${getCapabilityConstraint()}
 
@@ -73,50 +34,46 @@ Return a JSON object with exactly these keys:
 - rationale: string. One sentence explaining why this founder, idea, and platform fit together credibly.`;
 }
 
-function buildBucketPrompt(locationLine: string): string {
-  const sample = sampleBucket(25);
-  const bucketList = sample.map(formatBucketEntry).join('\n');
-  return `You are Baljia, an AI cofounder. The founder has not shared a background or idea. Use the reference bucket below to derive one fitting, specific startup idea, but do not copy the bucket text verbatim.
+function buildOpenDiscoveryPrompt(locationLine: string): string {
+  return `You are Baljia, an AI cofounder. The founder has not shared a background or idea. Invent one specific, buildable startup idea from first principles.
 
 ${getCapabilityConstraint()}
 
 ${locationLine}
 
-Reference bucket of platform-buildable startup patterns (categories shown in brackets):
-${bucketList}
+Discovery lanes you may consider, but must not name as a list:
+- B2B workflows that still run through spreadsheets, inboxes, calls, or manual research.
+- Local service businesses that lose leads, bookings, quotes, follow-ups, or reviews.
+- Creator, coaching, education, or content businesses that need packaging and delivery workflows.
+- Marketplaces or directories where matching, trust, intake, or scheduling is the bottleneck.
+- Ecommerce or retail operators that need better drops, bundles, inventory, or customer reactivation.
 
 Rules:
-- Pick ONE entry that best fits the founder's location market dynamics (if any). Without location, pick the entry with the clearest customer.
-- Rewrite it as a SPECIFIC product — concrete customer (role + industry + situation) and concrete product behavior. Do NOT return the generic bucket text.
+- Pick ONE narrow customer and ONE urgent recurring workflow.
+- Make the product behavior concrete enough that Engineering could build an MVP.
+- Use the founder's location market dynamics when available, but do not invent local facts.
+- Avoid generic AI/startup wording. Do not return a category label as the idea.
 - Buildable only (no mobile, no hardware, no social posting).
 
 Return a JSON object with exactly these keys:
 - invented_idea: string. One sentence with a specific customer and what the product does.
-- changes_made: string. One sentence naming the source category and explaining how you adapted it.
+- changes_made: string. One sentence explaining how you invented a narrow customer/workflow direction from limited context.
 - rationale: string. One sentence explaining why this fits the founder's location or available context.`;
 }
 
-function fallbackInventedIdea(ctx: PipelineContext, usedBucket: boolean): InventedIdea {
-  const entry = sampleBucket(1)[0];
+function fallbackInventedIdea(ctx: PipelineContext, usedOpenDiscovery: boolean): InventedIdea {
   const geo = ctx.founderEnrichment?.geo;
   const location = [geo?.city, geo?.country].filter(Boolean).join(', ');
-
-  if (entry) {
-    return InventedIdeaSchema.parse({
-      invented_idea: `A focused ${entry.category.toLowerCase()} product for ${entry.target_user} that solves one urgent workflow from the founder's starting context.`,
-      changes_made: `Baljia used a vetted ${entry.category} startup pattern because the founder did not provide a specific idea.`,
-      rationale: location
-        ? `This is a practical hypothesis to validate in ${location} before expanding the product scope.`
-        : 'This is a practical hypothesis to validate with real customers before expanding the product scope.',
-    }) as InventedIdea;
-  }
+  const market = location ? ` in ${location}` : '';
 
   return InventedIdeaSchema.parse({
-    invented_idea: 'A focused workflow product for a narrow customer segment that solves one recurring operational pain.',
-    changes_made: usedBucket
-      ? 'Baljia used a generic fallback because no founder idea or usable idea bucket entry was available.'
+    invented_idea: `A lead qualification workspace for local service businesses${market} that turns inbound requests into prioritized follow-ups and quote-ready next steps.`,
+    changes_made: usedOpenDiscovery
+      ? 'Baljia invented a narrow workflow business from limited context because the founder did not provide a specific idea or background.'
       : 'Baljia used a generic fallback because idea invention did not produce a reliable result.',
-    rationale: 'This gives onboarding a concrete hypothesis that can be validated and refined instead of failing.',
+    rationale: location
+      ? `This gives onboarding a concrete hypothesis to validate in ${location} before expanding the product scope.`
+      : 'This gives onboarding a concrete hypothesis that can be validated and refined instead of failing.',
   }) as InventedIdea;
 }
 
@@ -128,12 +85,12 @@ export async function inventIdea(ctx: PipelineContext): Promise<void> {
 
   const geo = ctx.founderEnrichment?.geo;
   const locationLine = geo?.country
-    ? `Founder location: ${[geo.city, geo.country].filter(Boolean).join(', ')} — leverage local market dynamics where it makes sense.`
+    ? `Founder location: ${[geo.city, geo.country].filter(Boolean).join(', ')} - leverage local market dynamics where it makes sense.`
     : '';
 
-  const usedBucket = !backgroundContext;
-  const prompt = usedBucket
-    ? buildBucketPrompt(locationLine)
+  const usedOpenDiscovery = !backgroundContext;
+  const prompt = usedOpenDiscovery
+    ? buildOpenDiscoveryPrompt(locationLine)
     : buildPersonalizedPrompt(backgroundContext, locationLine);
 
   let result: InventedIdea;
@@ -154,7 +111,7 @@ export async function inventIdea(ctx: PipelineContext): Promise<void> {
       message: 'Surprise idea invention failed, so onboarding used a deterministic fallback idea.',
       fallbackUsed: true,
     });
-    result = fallbackInventedIdea(ctx, usedBucket);
+    result = fallbackInventedIdea(ctx, usedOpenDiscovery);
   }
 
   if (!result.invented_idea?.trim()) {
@@ -165,10 +122,10 @@ export async function inventIdea(ctx: PipelineContext): Promise<void> {
       message: 'Surprise idea invention returned an empty idea, so onboarding used a deterministic fallback idea.',
       fallbackUsed: true,
     });
-    result = fallbackInventedIdea(ctx, usedBucket);
+    result = fallbackInventedIdea(ctx, usedOpenDiscovery);
   }
 
-  // Trust the LLM's length — the prompt + JSON schema constrain this to one
+  // Trust the LLM's length - the prompt and JSON schema constrain this to one
   // sentence per field. Don't char-slice here; that produces mid-word
   // fragments. Strip LLM-inline-markdown artifacts (**bold**, *italic*)
   // since these fields render in plain-text contexts.
@@ -180,7 +137,7 @@ export async function inventIdea(ctx: PipelineContext): Promise<void> {
       stage: 'invent_idea',
       kind: 'invent_idea_overlong_field',
       severity: 'low',
-      message: `invented_idea is ${invented_idea_clean.length} chars (expected ≤ ~300). Tighten the prompt instead of truncating.`,
+      message: `invented_idea is ${invented_idea_clean.length} chars (expected <= ~300). Tighten the prompt instead of truncating.`,
     });
   }
   ctx.inventedIdea = {
@@ -189,7 +146,7 @@ export async function inventIdea(ctx: PipelineContext): Promise<void> {
     rationale: rationale_clean,
   };
 
-  // Strategy label for downstream stages
+  // Strategy label for downstream stages.
   ctx.strategy = ctx.inventedIdea.invented_idea;
 
   await emitActivity(ctx, `Invented: "${ctx.inventedIdea.invented_idea.slice(0, 120)}"`, 'llm');

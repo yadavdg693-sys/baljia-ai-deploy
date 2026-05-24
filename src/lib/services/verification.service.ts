@@ -19,6 +19,10 @@ import {
 import { requiresProductBuildContract } from '@/lib/agents/product-build-contract';
 import { engineeringLaneCompletionIssues } from '@/lib/agents/runtime/engineering-subagents';
 import { hasCompleteExecutionContract } from '@/lib/agents/execution-contract';
+import { releaseNextRollingPlanBatch } from '@/lib/agents/ceo/ceo.rolling-plan';
+import { createLogger } from '@/lib/logger';
+
+const log = createLogger('VerificationService');
 
 // Tools that constitute shipping code to the founder app runtime.
 // Engineering apps now deploy to Render. GitHub writes are necessary, but are
@@ -1575,6 +1579,18 @@ export async function verifyAndUpdate(taskId: string): Promise<VerificationResul
     checks_total: result.checks.length,
     checks_passed: result.checks.filter((c) => c.passed).length,
   });
+
+  if (result.passed) {
+    try {
+      await releaseNextRollingPlanBatch(task.company_id);
+    } catch (err) {
+      log.warn('Rolling plan top-up failed after task completion', {
+        taskId,
+        companyId: task.company_id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
 
   return result;
 }

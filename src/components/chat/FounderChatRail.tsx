@@ -5,9 +5,11 @@
 
 'use client';
 
-import { useState, useRef, useEffect, useCallback, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react';
+import { useState, useRef, useEffect, useCallback, type ChangeEvent, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react';
+import { ArrowDown, ListChecks, Paperclip, SendHorizontal, X } from 'lucide-react';
 import type { ChatMessage as ChatMessageType, ChatAction, CEOStreamEvent } from '@/types';
 import { MarkdownBody } from '@/components/ui/MarkdownBody';
+import { isChatScrolledAwayFromBottom } from './chat-scroll';
 
 interface FounderChatRailProps {
   companyId: string;
@@ -29,6 +31,33 @@ const HOW_IT_WORKS_STEPS = [
 const MIN_WIDTH = 260;
 const MAX_WIDTH = 760;
 const DEFAULT_WIDTH = 380;
+const MAX_CHAT_ATTACHMENTS = 5;
+const MAX_CHAT_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+
+interface UploadedChatAttachment {
+  name: string;
+  type: string;
+  size: number;
+  url: string;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${kb.toFixed(kb >= 100 ? 0 : 1)} KB`;
+  const mb = kb / 1024;
+  return `${mb.toFixed(mb >= 100 ? 0 : 1)} MB`;
+}
+
+function formatAttachmentBlock(attachments: UploadedChatAttachment[]): string {
+  if (attachments.length === 0) return '';
+  return [
+    'Attached files:',
+    ...attachments.map((attachment) =>
+      `- ${attachment.name} (${attachment.type || 'file'}, ${formatBytes(attachment.size)}): ${attachment.url}`
+    ),
+  ].join('\n');
+}
 
 export function FounderChatRail({ companyId, warnings = [], onAction }: FounderChatRailProps) {
   const [messages, setMessages] = useState<ChatMessageType[]>([]);
@@ -39,8 +68,16 @@ export function FounderChatRail({ companyId, warnings = [], onAction }: FounderC
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [isUploadingAttachments, setIsUploadingAttachments] = useState(false);
+  const [queueingPlanId, setQueueingPlanId] = useState<string | null>(null);
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const shouldStickToBottomRef = useRef(true);
   const startXRef = useRef(0);
   const startWidthRef = useRef(DEFAULT_WIDTH);
 
@@ -62,11 +99,34 @@ export function FounderChatRail({ companyId, warnings = [], onAction }: FounderC
     return () => { cancelled = true; };
   }, [companyId]);
 
-  // Auto-scroll on new messages
-  useEffect(() => {
+  const updateScrollAffordance = useCallback(() => {
     const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [messages, streamingText]);
+    if (!el) return;
+    const isAway = isChatScrolledAwayFromBottom(el);
+    shouldStickToBottomRef.current = !isAway;
+    setShowJumpToLatest(isAway);
+  }, []);
+
+  const scrollToLatest = useCallback((options: { behavior?: ScrollBehavior; focusInput?: boolean } = {}) => {
+    const el = scrollRef.current;
+    if (el) {
+      el.scrollTo({ top: el.scrollHeight, behavior: options.behavior ?? 'smooth' });
+    }
+    shouldStickToBottomRef.current = true;
+    setShowJumpToLatest(false);
+    if (options.focusInput) {
+      window.setTimeout(() => inputRef.current?.focus(), 140);
+    }
+  }, []);
+
+  // Auto-scroll new messages only while the founder is already near the latest reply.
+  useEffect(() => {
+    if (shouldStickToBottomRef.current) {
+      scrollToLatest({ behavior: 'auto' });
+    } else {
+      updateScrollAffordance();
+    }
+  }, [messages, streamingText, scrollToLatest, updateScrollAffordance]);
 
   // Drag-to-resize handler
   const handleDragStart = useCallback((e: ReactPointerEvent<HTMLButtonElement>) => {
@@ -96,11 +156,128 @@ export function FounderChatRail({ companyId, warnings = [], onAction }: FounderC
     document.addEventListener('pointerup', handleUp);
   }, [panelWidth]);
 
+  const handleSelectFiles = useCallback((event: ChangeEvent<HTMLInputElement>) => {
+    const incoming = Array.from(event.target.files ?? []);
+    event.target.value = '';
+    if (incoming.length === 0) return;
+
+    const room = MAX_CHAT_ATTACHMENTS - selectedFiles.length;
+    if (room <= 0) {
+      setAttachmentError(`Attach up to ${MAX_CHAT_ATTACHMENTS} files at once.`);
+      return;
+    }
+
+    let nextError: string | null = null;
+    const accepted: File[] = [];
+    for (const file of incoming.slice(0, room)) {
+      if (file.size > MAX_CHAT_ATTACHMENT_BYTES) {
+        nextError = `${file.name} is larger than 10 MB.`;
+        continue;
+      }
+      accepted.push(file);
+    }
+
+    if (incoming.length > room) {
+      nextError = `Only the first ${room} file${room === 1 ? '' : 's'} were attached.`;
+    }
+
+    setAttachmentError(nextError);
+    if (accepted.length > 0) {
+      setSelectedFiles((current) => [...current, ...accepted]);
+    }
+  }, [selectedFiles.length]);
+
+  const removeAttachment = useCallback((index: number) => {
+    setAttachmentError(null);
+    setSelectedFiles((current) => current.filter((_, i) => i !== index));
+  }, []);
+
+  const uploadSelectedFiles = useCallback(async (): Promise<UploadedChatAttachment[]> => {
+    if (selectedFiles.length === 0) return [];
+
+    const form = new FormData();
+    form.append('company_id', companyId);
+    selectedFiles.forEach((file) => form.append('files', file));
+
+    const res = await fetch('/api/chat/attachments', {
+      method: 'POST',
+      body: form,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(typeof data.error === 'string' ? data.error : 'Attachment upload failed.');
+    }
+
+    return Array.isArray(data.attachments) ? data.attachments : [];
+  }, [companyId, selectedFiles]);
+
+  const handleQueuePlan = useCallback(async (action: Extract<ChatAction, { type: 'pending_plan_confirmation' }>) => {
+    if (queueingPlanId) return;
+    setQueueingPlanId(action.data.plan_id);
+
+    try {
+      const res = await fetch('/api/chat/actions/queue-plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ company_id: companyId, plan_id: action.data.plan_id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(typeof data.error === 'string' ? data.error : 'Could not queue this plan.');
+      }
+
+      const returnedActions = Array.isArray(data.actions) ? data.actions as ChatAction[] : [];
+      returnedActions.forEach((returnedAction) => onAction?.(returnedAction));
+
+      const nextMessages: ChatMessageType[] = [];
+      if (data.user_message) nextMessages.push(data.user_message as ChatMessageType);
+      if (data.message) {
+        nextMessages.push(data.message as ChatMessageType);
+      } else if (typeof data.text === 'string') {
+        nextMessages.push({
+          id: `assistant-plan-${Date.now()}`,
+          session_id: '',
+          role: 'assistant',
+          content: data.text,
+          actions: returnedActions.length > 0 ? returnedActions : undefined,
+          created_at: new Date().toISOString(),
+        });
+      }
+      if (nextMessages.length > 0) {
+        setMessages((prev) => [...prev, ...nextMessages]);
+      }
+    } catch (error) {
+      setMessages((prev) => [...prev, {
+        id: `plan-error-${Date.now()}`,
+        session_id: '',
+        role: 'assistant',
+        content: error instanceof Error ? error.message : 'Could not queue this plan.',
+        created_at: new Date().toISOString(),
+      }]);
+    } finally {
+      setQueueingPlanId(null);
+    }
+  }, [companyId, onAction, queueingPlanId]);
+
   // Send message
   const handleSend = useCallback(async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    const message = draft.trim();
-    if (!message || isStreaming) return;
+    const writtenMessage = draft.trim();
+    if ((!writtenMessage && selectedFiles.length === 0) || isStreaming || isUploadingAttachments) return;
+
+    setAttachmentError(null);
+    setIsUploadingAttachments(true);
+
+    let message = writtenMessage;
+    try {
+      const uploadedAttachments = await uploadSelectedFiles();
+      const attachmentBlock = formatAttachmentBlock(uploadedAttachments);
+      message = [writtenMessage, attachmentBlock].filter(Boolean).join('\n\n');
+    } catch (error) {
+      setAttachmentError(error instanceof Error ? error.message : 'Attachment upload failed.');
+      setIsUploadingAttachments(false);
+      return;
+    }
 
     const userMsg: ChatMessageType = {
       id: `user-${Date.now()}`, session_id: '', role: 'user',
@@ -108,6 +285,8 @@ export function FounderChatRail({ companyId, warnings = [], onAction }: FounderC
     };
     setMessages((prev) => [...prev, userMsg]);
     setDraft('');
+    setSelectedFiles([]);
+    setIsUploadingAttachments(false);
     setIsStreaming(true);
     setStreamingText('');
 
@@ -160,8 +339,9 @@ export function FounderChatRail({ companyId, warnings = [], onAction }: FounderC
     } finally {
       setIsStreaming(false);
       setStreamingText('');
+      setIsUploadingAttachments(false);
     }
-  }, [companyId, draft, isStreaming, onAction]);
+  }, [companyId, draft, isStreaming, isUploadingAttachments, onAction, selectedFiles.length, uploadSelectedFiles]);
 
   const isEmpty = messages.length === 0 && !isStreaming;
 
@@ -176,10 +356,14 @@ export function FounderChatRail({ companyId, warnings = [], onAction }: FounderC
           className="chat-sidebar__expand-btn"
           onClick={() => { setIsCollapsed(false); setIsFullscreen(false); }}
           type="button"
-          aria-label="Expand chat"
+          aria-label="Open Baljia chat"
+          title="Open Baljia chat"
         >
-          <span className="chat-sidebar__expand-icon">💬</span>
-          <span className="chat-sidebar__expand-label">Chat</span>
+          <img
+            src="/mascot.png"
+            alt=""
+            className="chat-sidebar__expand-logo"
+          />
         </button>
       </section>
     );
@@ -242,7 +426,7 @@ export function FounderChatRail({ companyId, warnings = [], onAction }: FounderC
         </div>
 
         {/* Scrollable message area */}
-        <div className="chat-sidebar__messages" ref={scrollRef}>
+        <div className="chat-sidebar__messages" ref={scrollRef} onScroll={updateScrollAffordance}>
           {warnings.length > 0 && (
             <div className="warning-list">
               {warnings.map((w) => (
@@ -289,6 +473,13 @@ export function FounderChatRail({ companyId, warnings = [], onAction }: FounderC
                     </small>
                     {/* Markdown render — was raw <p>{content}</p> which left ** literal */}
                     <MarkdownBody size="sm">{msg.content}</MarkdownBody>
+                    {msg.actions && msg.actions.length > 0 && (
+                      <ChatActionList
+                        actions={msg.actions}
+                        queueingPlanId={queueingPlanId}
+                        onQueuePlan={handleQueuePlan}
+                      />
+                    )}
                   </div>
                 )
               ))}
@@ -308,21 +499,126 @@ export function FounderChatRail({ companyId, warnings = [], onAction }: FounderC
           )}
         </div>
 
+        {showJumpToLatest && (
+          <button
+            className="chat-sidebar__jump-latest"
+            type="button"
+            aria-label="Jump to latest message"
+            title="Jump to latest"
+            onClick={() => scrollToLatest({ behavior: 'smooth', focusInput: true })}
+            data-testid="chat-jump-to-latest"
+          >
+            <ArrowDown size={18} strokeWidth={2.4} />
+          </button>
+        )}
+
         {/* Composer */}
         <form className="chat-sidebar__composer" onSubmit={handleSend}>
-          <span className="chat-sidebar__composer-icon">💬</span>
+          {(selectedFiles.length > 0 || attachmentError) && (
+            <div className="chat-sidebar__attachment-tray" data-testid="chat-attachment-tray">
+              {selectedFiles.map((file, index) => (
+                <span className="chat-sidebar__attachment-chip" key={`${file.name}-${file.size}-${index}`}>
+                  <span className="chat-sidebar__attachment-name">{file.name}</span>
+                  <span className="chat-sidebar__attachment-size">{formatBytes(file.size)}</span>
+                  <button
+                    type="button"
+                    className="chat-sidebar__attachment-remove"
+                    aria-label={`Remove ${file.name}`}
+                    onClick={() => removeAttachment(index)}
+                    disabled={isStreaming || isUploadingAttachments}
+                  >
+                    <X size={13} strokeWidth={2.2} />
+                  </button>
+                </span>
+              ))}
+              {attachmentError && (
+                <span className="chat-sidebar__attachment-error">{attachmentError}</span>
+              )}
+            </div>
+          )}
           <input
+            ref={fileInputRef}
+            className="chat-sidebar__file-input"
+            type="file"
+            multiple
+            accept="image/*,.pdf,.doc,.docx,.txt,.md,.csv,.json"
+            onChange={handleSelectFiles}
+            disabled={isStreaming || isUploadingAttachments}
+            data-testid="chat-file-input"
+          />
+          <button
+            className="chat-sidebar__attach"
+            type="button"
+            aria-label="Attach file or image"
+            title="Attach file or image"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isStreaming || isUploadingAttachments || selectedFiles.length >= MAX_CHAT_ATTACHMENTS}
+            data-testid="chat-attach-button"
+          >
+            <Paperclip size={17} strokeWidth={2.1} />
+          </button>
+          <input
+            ref={inputRef}
             className="chat-sidebar__input"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            placeholder="Ask Baljia anything..."
-            disabled={isStreaming}
+            placeholder={selectedFiles.length > 0 ? 'Add a note for Baljia...' : 'Ask Baljia anything...'}
+            disabled={isStreaming || isUploadingAttachments}
+            data-testid="chat-message-input"
           />
-          <button className="chat-sidebar__send" type="submit" aria-label="Send">
-            →
+          <button
+            className="chat-sidebar__send"
+            type="submit"
+            aria-label="Send"
+            disabled={isStreaming || isUploadingAttachments || (!draft.trim() && selectedFiles.length === 0)}
+            title={isUploadingAttachments ? 'Uploading attachments' : 'Send'}
+            data-testid="chat-send-button"
+          >
+            <SendHorizontal size={18} strokeWidth={2.4} />
           </button>
         </form>
       </div>
     </section>
+  );
+}
+
+function ChatActionList({
+  actions,
+  queueingPlanId,
+  onQueuePlan,
+}: {
+  actions: ChatAction[];
+  queueingPlanId: string | null;
+  onQueuePlan: (action: Extract<ChatAction, { type: 'pending_plan_confirmation' }>) => void;
+}) {
+  const planActions = actions.filter((action): action is Extract<ChatAction, { type: 'pending_plan_confirmation' }> =>
+    action.type === 'pending_plan_confirmation'
+  );
+  if (planActions.length === 0) return null;
+
+  return (
+    <div className="chat-sidebar__actions">
+      {planActions.map((action) => {
+        const isQueueing = queueingPlanId === action.data.plan_id;
+        return (
+          <div className="chat-sidebar__plan-action" key={action.data.plan_id}>
+            <div className="chat-sidebar__plan-copy">
+              <strong>{action.data.product_name} plan</strong>
+              <span>{action.data.task_count} tasks, rolling cap {action.data.queue_limit}</span>
+            </div>
+            <button
+              type="button"
+              className="chat-sidebar__plan-button"
+              onClick={() => onQueuePlan(action)}
+              disabled={Boolean(queueingPlanId)}
+              data-testid="queue-plan-button"
+            >
+              <ListChecks size={15} strokeWidth={2.2} />
+              <span>{isQueueing ? 'Queueing...' : action.data.button_label}</span>
+            </button>
+          </div>
+        );
+      })}
+    </div>
   );
 }

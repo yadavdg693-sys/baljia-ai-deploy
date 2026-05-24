@@ -39,8 +39,16 @@ const visualModeLabels: Record<PromoVideoVisualMode, string> = {
 
 const voiceLabels: Record<PromoVideoVoiceMode, string> = {
   deepgram: 'Deepgram voice',
+  supertonic: 'Supertonic voice',
   founder_avatar: 'Founder avatar voice',
 };
+
+function resolveVoiceMode(jobVoiceMode: string): PromoVideoVoiceMode {
+  const override = process.env.PROMO_VOICE_MODE?.trim().toLowerCase();
+  if (override === 'supertonic' || override === 'founder_avatar' || override === 'deepgram') return override;
+  if (jobVoiceMode === 'supertonic' || jobVoiceMode === 'founder_avatar' || jobVoiceMode === 'deepgram') return jobVoiceMode;
+  return 'deepgram';
+}
 
 function complexityForDuration(value: number): number {
   if (value === 90) return 9;
@@ -60,9 +68,7 @@ async function main() {
   const aspectRatio = job.aspect_ratio as PromoVideoAspectRatio;
   const style = job.style as PromoVideoStyle;
   const visualMode = job.visual_mode as PromoVideoVisualMode;
-  const voiceMode = (process.env.PROMO_VOICE_MODE === 'founder_avatar' || job.voice_mode === 'founder_avatar'
-    ? 'founder_avatar'
-    : 'deepgram') as PromoVideoVoiceMode;
+  const voiceMode = resolveVoiceMode(job.voice_mode);
   const cta = job.cta ?? `Try ${company.name}`;
 
   const task = await taskService.createTask({

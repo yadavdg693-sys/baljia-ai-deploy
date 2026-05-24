@@ -72,6 +72,7 @@ export const companies = pgTable('companies', {
   slug: varchar('slug', { length: 100 }).notNull().unique(),
   one_liner: text('one_liner'),
   original_idea: text('original_idea'),
+  design_system: varchar('design_system', { length: 100 }),
   claim_status: varchar('claim_status', { length: 50 }).default('owned'),
   onboarding_status: varchar('onboarding_status', { length: 50 }).default('initializing'),
   onboarding_journey: varchar('onboarding_journey', { length: 50 }),  // surprise_me, build_my_idea, grow_my_company — persisted for pending_auth resume
@@ -235,6 +236,24 @@ export const reports = pgTable('reports', {
 // ══════════════════════════════════════════════
 // DOCUMENTS
 // ══════════════════════════════════════════════
+export const usageEvents = pgTable('usage_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  company_id: uuid('company_id').notNull().references(() => companies.id),
+  user_id: varchar('user_id', { length: 255 }),
+  app_slug: varchar('app_slug', { length: 255 }).notNull(),
+  package_name: varchar('package_name', { length: 255 }).notNull(),
+  feature: varchar('feature', { length: 255 }).notNull(),
+  units: integer('units').default(1),
+  cost_usd: decimal('cost_usd', { precision: 12, scale: 6 }).default('0'),
+  status: varchar('status', { length: 50 }).notNull(),
+  metadata: jsonb('metadata').$type<Record<string, unknown>>(),
+  created_at: timestamp('created_at', { withTimezone: true }).defaultNow(),
+}, (t) => [
+  index('idx_usage_events_company').on(t.company_id),
+  index('idx_usage_events_company_created').on(t.company_id, t.created_at),
+  index('idx_usage_events_package').on(t.package_name),
+]);
+
 export const documents = pgTable('documents', {
   id: uuid('id').primaryKey().defaultRandom(),
   company_id: uuid('company_id').notNull().references(() => companies.id),

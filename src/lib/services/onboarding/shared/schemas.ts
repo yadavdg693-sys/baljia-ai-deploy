@@ -288,6 +288,44 @@ export const StarterTasksSchema = z.preprocess(objectOrEmpty, z.object({
   outreach: starterTaskSchema,
 }));
 
+const LandingTemplateKindSchema = z.enum([
+  'saas',
+  'local_service',
+  'ecommerce',
+  'content_coaching',
+  'marketplace',
+  'existing_business',
+  'general_business',
+]);
+
+const LandingArtifactKindSchema = z.enum([
+  'pipeline_board',
+  'app_dashboard',
+  'booking_flow',
+  'storefront_drop',
+  'coaching_map',
+  'marketplace_match',
+  'growth_snapshot',
+  'service_scope',
+  'general_snapshot',
+]);
+
+const LandingPreviewSummarySchema = z.object({
+  audience: nonEmpty,
+  problem: nonEmpty,
+  positioning: nonEmpty,
+});
+
+const LandingArtifactSchema = z.object({
+  kind: LandingArtifactKindSchema,
+  title: nonEmpty,
+  items: z.array(z.object({
+    label: nonEmpty,
+    value: nonEmpty,
+    detail: nonEmpty,
+  })).min(3).max(5),
+});
+
 export const LandingContentSchema = z.object({
   brand: z.object({
     name: nonEmpty,
@@ -297,6 +335,11 @@ export const LandingContentSchema = z.object({
     headline: nonEmpty,
     subhead: nonEmpty,
   }),
+  template_kind: LandingTemplateKindSchema.optional(),
+  preview_summary: LandingPreviewSummarySchema.optional(),
+  artifact: LandingArtifactSchema.optional(),
+  generator_version: z.enum(['v1', 'v2']).optional(),
+  source_idea_hash: z.string().min(8).optional(),
   what_it_does: z.object({
     heading: nonEmpty,
     capabilities: z.array(z.object({

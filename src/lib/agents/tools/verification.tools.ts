@@ -6,6 +6,7 @@ export const verificationToolDomain: EngineeringToolDomain = {
     'verify_user_journey',
     'verify_db_state',
     'verify_browser_ui',
+    'verify_release',
     'verify_interaction_contract',
     'record_engineering_lane_output',
     'list_journey_templates',

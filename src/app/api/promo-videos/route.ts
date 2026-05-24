@@ -28,10 +28,6 @@ function complexityForDuration(durationSeconds: number): number {
   return 5;
 }
 
-function previewCreditCost(): number {
-  return 1;
-}
-
 function productHuntCreativeRules(input: PromoVideoInput): string[] {
   if (input.goal !== 'product_hunt') return [];
   return [
@@ -54,7 +50,7 @@ function buildTaskDescription(input: PromoVideoInput, company: {
   const cta = getDefaultPromoVideoCta(input.goal, company.name, input.cta);
 
   return [
-    `Create a customer-facing product demo promo for ${company.name}.`,
+    `Create the final customer-facing product demo promo for ${company.name}.`,
     '',
     'Company/product context:',
     `- Company: ${company.name}`,
@@ -72,7 +68,6 @@ function buildTaskDescription(input: PromoVideoInput, company: {
     `- CTA: ${cta}`,
     '',
     'Creative rules:',
-    '- First create a preview for founder approval.',
     '- Explain only the founder product, the customer problem, the visible product flow, the outcome, and the CTA.',
     '- Never mention how the video is made or any internal Baljia tooling.',
     '- Keep narration, captions, and headlines customer-facing.',
@@ -134,7 +129,7 @@ export async function POST(request: NextRequest) {
   const cta = getDefaultPromoVideoCta(input.goal, company.name, input.cta);
   const [job] = await db.insert(promoVideoJobs).values({
     company_id: companyId,
-    status: 'queued',
+    status: 'finalizing',
     goal: input.goal,
     duration_seconds: input.duration_seconds,
     aspect_ratio: input.aspect_ratio,
@@ -146,20 +141,20 @@ export async function POST(request: NextRequest) {
 
   const task = await taskService.createTask({
     company_id: companyId,
-    title: `Create ${input.duration_seconds}s promo video preview for ${company.name}`,
+    title: `Create final ${input.duration_seconds}s promo video for ${company.name}`,
     description: buildTaskDescription(input, company),
     tag: 'promo-video',
-    priority: 85,
+    priority: 90,
     source: 'founder_requested',
     assigned_to_agent_id: 30,
     max_turns: 20,
-    estimated_credits: previewCreditCost(),
+    estimated_credits: credits,
     complexity: complexityForDuration(input.duration_seconds),
     estimated_hours: input.duration_seconds >= 60 ? 2 : 1,
     execution_mode: 'deterministic',
     verification_level: 'quality_review',
     authorized_by: 'founder',
-    authorization_reason: `Founder requested a ${input.duration_seconds}s promo video preview (user: ${auth.user.id}); final render uses remaining credits after approval.`,
+    authorization_reason: `Founder requested a direct final ${input.duration_seconds}s promo video render (user: ${auth.user.id}); preview step skipped.`,
   });
 
   const [updatedJob] = await db.update(promoVideoJobs)

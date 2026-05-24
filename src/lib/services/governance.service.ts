@@ -40,6 +40,7 @@ const TEMPLATE_TAGS = new Set([
 ]);
 
 const FULL_AGENT_TAGS = new Set([
+  'engineering',
   'bug', 'bug-fix', 'fix', 'onboarding', 'dashboard', 'reporting', 'admin',
   'automation', 'lead-scoring', 'multi-user', 'activity-log',
   'enrichment', 'email-tracking', 'duplicate-detection', 'custom-fields',

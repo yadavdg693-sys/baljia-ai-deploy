@@ -78,7 +78,7 @@ export const PROMO_VIDEO_DURATIONS = [15, 30, 60, 90] as const;
 export const PROMO_VIDEO_ASPECT_RATIOS = ['9:16', '16:9', '1:1'] as const;
 export const PROMO_VIDEO_STYLES = ['product_demo', 'clean_saas', 'cinematic_ui'] as const;
 export const PROMO_VIDEO_VISUAL_MODES = ['actual_site', 'cinematic'] as const;
-export const PROMO_VIDEO_VOICE_MODES = ['deepgram', 'founder_avatar'] as const;
+export const PROMO_VIDEO_VOICE_MODES = ['deepgram', 'supertonic', 'founder_avatar'] as const;
 
 export const promoVideoRequestSchema = z.object({
   company_id: z.string().min(1),

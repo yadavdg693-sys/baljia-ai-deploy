@@ -5,7 +5,15 @@
 // Same drop-in pattern: each {familyName}V2Styles + {familyName}V2Body pair
 // can replace the corresponding render*() body in landing.ts with a 1-liner.
 
-type LandingContent = {
+import {
+  hasLandingPreview,
+  renderPreviewArtifact,
+  renderPreviewArtifactStyles,
+  renderPreviewProofRail,
+  type LandingPreviewContent,
+} from './landing-preview-artifacts';
+
+type LandingContent = LandingPreviewContent & {
   brand: { name: string; tagline: string };
   hero: { headline: string; subhead: string };
   what_it_does: { heading: string; capabilities: Array<{ title: string; description: string }> };
@@ -20,7 +28,7 @@ type LandingContent = {
 // with an accent leading dash, not bg+border-left rectangles.
 // ═══════════════════════════════════════════════════════
 
-export function narrativeStackedV2Styles(): string {
+export function narrativeStackedV2Styles(preview = false): string {
   return `.wrap { max-width: 100%; margin: 0; padding: 0; }
 .narr-header { padding: 56px var(--container-px) 24px; max-width: 880px; margin: 0 auto; }
 .narr-hero { padding: 96px var(--container-px) 80px; max-width: 880px; margin: 0 auto; }
@@ -87,7 +95,8 @@ ol.narr-steps { list-style: none; padding: 0; margin: 0; }
 
 .narr-footer { padding: 32px var(--container-px) 48px; max-width: 880px; margin: 0 auto; font-size: 13px; color: var(--ink-soft); display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
 .narr-footer a { color: var(--ink-soft); text-decoration: none; }
-.narr-footer a:hover { color: var(--accent); }`;
+.narr-footer a:hover { color: var(--accent); }
+${preview ? renderPreviewArtifactStyles() : ''}`;
 }
 
 export function narrativeStackedV2Body(content: LandingContent, year: number, esc: (s: string) => string): string {
@@ -111,15 +120,21 @@ export function narrativeStackedV2Body(content: LandingContent, year: number, es
       </li>`).join('');
   const pullQuotes = content.what_makes_different.points
     .map((p) => `<blockquote class="narr-quote"><p>${esc(p)}</p></blockquote>`).join('');
+  const preview = hasLandingPreview(content);
 
   return `<div class="wrap">
   <header class="narr-header">
     <div class="brand">${esc(content.brand.name)}</div>
     <div class="brand-tag">${esc(content.brand.tagline)}</div>
   </header>
-  <div class="narr-hero" id="hero">
-    <h1>${esc(content.hero.headline)}</h1>
-    <p>${esc(content.hero.subhead)}</p>
+  <div class="narr-hero${preview ? ' preview-hero' : ''}" id="hero">
+    ${preview ? `<div class="preview-copy">
+      <h1>${esc(content.hero.headline)}</h1>
+      <p>${esc(content.hero.subhead)}</p>
+      ${renderPreviewProofRail(content, esc)}
+    </div>
+    ${renderPreviewArtifact(content, esc)}` : `<h1>${esc(content.hero.headline)}</h1>
+    <p>${esc(content.hero.subhead)}</p>`}
   </div>
   ${capSections}
   <section class="narr-how" id="how">
@@ -155,7 +170,7 @@ export function narrativeStackedV2Body(content: LandingContent, year: number, es
 // shift, NOT from outline-bordered boxes.
 // ═══════════════════════════════════════════════════════
 
-export function magazineGridV2Styles(): string {
+export function magazineGridV2Styles(preview = false): string {
   return `.wrap { max-width: 1200px; margin: 0 auto; padding: 0 var(--container-px); }
 
 /* Header — minimal rule, no box */
@@ -257,7 +272,8 @@ header.mag-header {
   .mag-cell--lead { grid-row: auto; }
   .mag-flow, .mag-statements { grid-template-columns: 1fr; gap: 40px; }
   .mag-closing { grid-template-columns: 1fr; gap: 24px; }
-}`;
+}
+${preview ? renderPreviewArtifactStyles() : ''}`;
 }
 
 export function magazineGridV2Body(content: LandingContent, year: number, esc: (s: string) => string): string {
@@ -284,6 +300,7 @@ export function magazineGridV2Body(content: LandingContent, year: number, esc: (
           <span class="mag-stmt-num">${(i + 1).toString().padStart(2, '0')}</span>
           <p>${esc(p)}</p>
         </div>`).join('');
+  const preview = hasLandingPreview(content);
 
   return `<div class="wrap">
   <header class="mag-header">
@@ -293,16 +310,17 @@ export function magazineGridV2Body(content: LandingContent, year: number, esc: (
     </div>
     <div class="mag-meta-strip">Issue 01 / ${year}</div>
   </header>
-  <div class="mag-hero" id="hero">
-    <div>
+  <div class="mag-hero${preview ? ' preview-hero' : ''}" id="hero">
+    <div class="preview-copy">
       <h1>${esc(content.hero.headline)}</h1>
       <p>${esc(content.hero.subhead)}</p>
+      ${preview ? renderPreviewProofRail(content, esc) : ''}
     </div>
-    <dl class="mag-sidebar">
+    ${preview ? renderPreviewArtifact(content, esc) : `<dl class="mag-sidebar">
       <dt>Issue</dt><dd>01 / ${year}</dd>
       <dt>Built for</dt><dd>${esc(content.brand.tagline)}</dd>
       <dt>Section</dt><dd>Day-Zero Edition</dd>
-    </dl>
+    </dl>`}
   </div>
   <section class="mag-section" id="what">
     <h2>${esc(content.what_it_does.heading)}</h2>
@@ -346,7 +364,7 @@ export function magazineGridV2Body(content: LandingContent, year: number, esc: (
 // no bordered hero-aside. Reads like a spec sheet, not a UI template.
 // ═══════════════════════════════════════════════════════
 
-export function comparisonLedV2Styles(): string {
+export function comparisonLedV2Styles(preview = false): string {
   return `.wrap { max-width: 1080px; margin: 0 auto; padding: 0 var(--container-px); }
 
 /* Header — minimal rule */
@@ -510,7 +528,8 @@ table.cmp-table tbody td:not(:first-child) { padding-left: 16px; text-align: cen
   ol.cmp-steps { grid-template-columns: 1fr; gap: 32px; }
   .cmp-closing { grid-template-columns: 1fr; gap: 24px; }
   .cmp-feature-name { width: auto; }
-}`;
+}
+${preview ? renderPreviewArtifactStyles() : ''}`;
 }
 
 export function comparisonLedV2Body(content: LandingContent, year: number, esc: (s: string) => string): string {
@@ -536,6 +555,8 @@ export function comparisonLedV2Body(content: LandingContent, year: number, esc: 
           <td class="cmp-diff-mark cmp-diff-mark--them"><span aria-hidden="true">✗</span><span class="visually-hidden">No</span></td>
         </tr>`).join('');
 
+  const preview = hasLandingPreview(content);
+
   return `<div class="wrap">
   <header class="cmp-header">
     <div>
@@ -544,18 +565,19 @@ export function comparisonLedV2Body(content: LandingContent, year: number, esc: 
     </div>
     <span class="cmp-eyebrow">Reference · ${year}</span>
   </header>
-  <div class="cmp-hero" id="hero">
-    <div>
+  <div class="cmp-hero${preview ? ' preview-hero' : ''}" id="hero">
+    <div class="preview-copy">
       <h1>${esc(content.hero.headline)}</h1>
       <p>${esc(content.hero.subhead)}</p>
+      ${preview ? renderPreviewProofRail(content, esc) : ''}
     </div>
-    <aside class="cmp-hero-aside">
+    ${preview ? renderPreviewArtifact(content, esc) : `<aside class="cmp-hero-aside">
       <dl>
         <div><dt>Status</dt><dd>Pre-launch</dd></div>
         <div><dt>Reference</dt><dd>${esc(content.brand.name)}/01</dd></div>
         <div><dt>Updated</dt><dd>${year}</dd></div>
       </dl>
-    </aside>
+    </aside>`}
   </div>
   <section class="cmp-section" id="what">
     <div class="cmp-section-h">

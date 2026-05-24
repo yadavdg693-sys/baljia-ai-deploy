@@ -68,6 +68,14 @@ import {
   magazineGridV2Styles, magazineGridV2Body,
   comparisonLedV2Styles, comparisonLedV2Body,
 } from './landing-renderer-v2-extras';
+import {
+  artifactKindForTemplate,
+  resolveLandingTemplateKind,
+  type LandingArtifactKind,
+  type LandingTemplateKind,
+} from './landing-template-kind';
+import { hasLandingPreview } from './landing-preview-artifacts';
+import { createLandingSourceIdeaHash } from './landing-preview-metadata';
 import type { PipelineContext, MarketResearchResult } from '../types';
 
 const log = createLogger('OnboardingLanding');
@@ -80,6 +88,19 @@ const log = createLogger('OnboardingLanding');
 interface LandingContent {
   brand: { name: string; tagline: string };
   hero: { headline: string; subhead: string };
+  template_kind?: LandingTemplateKind;
+  preview_summary?: {
+    audience: string;
+    problem: string;
+    positioning: string;
+  };
+  artifact?: {
+    kind: LandingArtifactKind;
+    title: string;
+    items: Array<{ label: string; value: string; detail: string }>;
+  };
+  generator_version?: 'v1' | 'v2';
+  source_idea_hash?: string;
   what_it_does: {
     heading: string;
     capabilities: Array<{ title: string; description: string }>;
@@ -101,6 +122,12 @@ interface MarketFacts {
   demandSignals: string[];
   marketStats: string[];
   topCompetitor: string | null;
+}
+
+interface PreviewPromptConfig {
+  templateKind: LandingTemplateKind;
+  artifactKind: LandingArtifactKind;
+  sourceIdeaHash: string;
 }
 
 function extractMarkdownBullets(value: unknown): string[] {
@@ -235,6 +262,24 @@ async function inferIndustry(ctx: PipelineContext): Promise<string> {
   // Fall through: pass the raw signals to resolveDesignTokens which scores
   // tokens and ultimately defaults to saas_general if nothing matches.
   return signals.slice(0, 200);
+}
+
+export function isOnboardingPreviewBuilderV2Enabled(): boolean {
+  const raw = process.env.ONBOARDING_PREVIEW_BUILDER_V2;
+  return raw === '1' || raw?.toLowerCase() === 'true' || raw?.toLowerCase() === 'yes';
+}
+
+function buildPreviewPromptConfig(ctx: PipelineContext, industryId: string, sourceIdeaHash: string): PreviewPromptConfig {
+  const templateKind = resolveLandingTemplateKind({
+    journey: ctx.journey,
+    industryId,
+    text: gatherIndustrySignals(ctx),
+  });
+  return {
+    templateKind,
+    artifactKind: artifactKindForTemplate(templateKind),
+    sourceIdeaHash,
+  };
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -464,7 +509,7 @@ function antiPatternsForIndustry(industryId: string): string[] {
 // corpus (NOT the LLM) so the prompt stays focused on copy.
 // ──────────────────────────────────────────────────────────────────────────
 
-function buildLandingPrompt(ctx: PipelineContext, facts: MarketFacts, industryRow: { name: string; considerations: string }, antiPatterns: string[]): string {
+function buildLandingPrompt(ctx: PipelineContext, facts: MarketFacts, industryRow: { name: string; considerations: string }, antiPatterns: string[], preview?: PreviewPromptConfig): string {
   const md = ctx.missionDoc;
   const mission = md?.mission ?? ctx.mission ?? '';
   const whatWereBuilding = md?.what_were_building ?? '';
@@ -500,6 +545,37 @@ ${antiPatterns.map((a) => `  - ${a}`).join('\n')}`
   const onboardingBriefBlock = ctx.onboardingBrief
     ? `CANONICAL ONBOARDING BRIEF:
 ${JSON.stringify(ctx.onboardingBrief, null, 2)}`
+    : '';
+
+  const previewBlock = preview
+    ? `ONBOARDING PREVIEW BUILDER V2
+- This is a Day-0 founder preview generated during onboarding, not the engineering source of truth.
+- It must impress the founder by making the idea feel understood, specific, and buildable.
+- TEMPLATE KIND: ${preview.templateKind}
+- ARTIFACT KIND: ${preview.artifactKind}
+- preview_summary must explain the audience, problem, and positioning in founder-friendly language.
+- artifact must make the business tangible with 3-5 concrete rows. Use ARTIFACT KIND exactly.
+- Do not write public customer CTAs. This standalone page is a preview artifact only.`
+    : 'This page is INFORMATIONAL only - NO call-to-action button, NO email capture, NO waitlist.';
+
+  const previewKeys = preview
+    ? `- template_kind
+- preview_summary
+- artifact
+- generator_version
+- source_idea_hash`
+    : '';
+
+  const previewRules = preview
+    ? `- template_kind: string. Must exactly equal "${preview.templateKind}".
+- preview_summary.audience: string. Who this is for, 5-12 words.
+- preview_summary.problem: string. The painful problem, 5-14 words.
+- preview_summary.positioning: string. Why this angle is distinct, 7-16 words.
+- artifact.kind: string. Must exactly equal "${preview.artifactKind}".
+- artifact.title: string. Short artifact title, 3-7 words.
+- artifact.items: array with 3-5 objects. Each object needs label, value, and detail strings. Items must look like useful generated output, not decorative filler.
+- generator_version: string. Must exactly equal "v2".
+- source_idea_hash: string. Must exactly equal "${preview.sourceIdeaHash}".`
     : '';
 
   return `You are generating the Day-0 landing page CONTENT for ${ctx.companyName}, a business in PRE-LAUNCH / early-access state.
@@ -542,11 +618,12 @@ WHAT YOU DO NOT HAVE (DO NOT FABRICATE — each violation is a hard failure)
 
 The page is CREDIBLY PRE-LAUNCH. Omit unavailable proof instead of filling gaps.
 
-This page is INFORMATIONAL only — NO call-to-action button, NO email capture, NO waitlist.
+${previewBlock}
 
 OUTPUT - return one JSON object with exactly these top-level keys:
 - brand
 - hero
+${previewKeys}
 - what_it_does
 - how_it_works
 - what_makes_different
@@ -557,6 +634,7 @@ Field rules:
 - brand.tagline: string, 6-10 words. A single punchy descriptor of what the company is; not a feature list.
 - hero.headline: string, 8 words or fewer. Derive from mission.mission. Specific and concrete. Do not use sleep/runs-itself phrasing or generic AI/startup phrasing.
 - hero.subhead: string, 2 sentences, 20-35 words total. Sentence 1 says what this is and who it is for. Sentence 2 says why it matters. Do not use a three-verb AI-agent formula.
+${previewRules}
 - what_it_does.heading: string. Must be "What it does" or a short variant with 4 words or fewer.
 - what_it_does.capabilities: array with exactly 3 objects. Each object needs title and description strings. Title is 3-4 words. Description is 1-2 sentences and must describe a concrete capability.
 - how_it_works.heading: string. Must be "How it works" or a short variant.
@@ -582,7 +660,7 @@ HARD RULES (violations fail the generation)
 // AI-feel hero validator — cheap one-shot screen for hollow phrasing
 // ──────────────────────────────────────────────────────────────────────────
 
-function buildGrowLandingPrompt(ctx: PipelineContext, facts: MarketFacts, industryRow: { name: string; considerations: string }, antiPatterns: string[]): string {
+function buildGrowLandingPrompt(ctx: PipelineContext, facts: MarketFacts, industryRow: { name: string; considerations: string }, antiPatterns: string[], preview?: PreviewPromptConfig): string {
   const profile = ctx.businessProfile;
   const md = ctx.missionDoc;
   const mission = md?.mission ?? ctx.mission ?? '';
@@ -624,9 +702,46 @@ ${aiLevers.slice(0, 4).map((p) => `  - ${p}`).join('\n')}`
 ${antiPatterns.map((a) => `  - ${a}`).join('\n')}`
     : '';
 
-  return `You are generating a public growth landing page for ${ctx.companyName}, an EXISTING business.
+  const previewBlock = preview
+    ? `ONBOARDING PREVIEW BUILDER V2
+- This is a Day-0 founder preview generated during onboarding, not the engineering source of truth.
+- It must impress the founder by turning the current business into a clear growth artifact.
+- TEMPLATE KIND: ${preview.templateKind}
+- ARTIFACT KIND: ${preview.artifactKind}
+- preview_summary must explain the audience, growth problem, and positioning in founder-friendly language.
+- artifact must make the growth opportunity tangible with 3-5 concrete rows. Use ARTIFACT KIND exactly.
+- Do not write public customer CTAs. This standalone page is a preview artifact only.`
+    : '';
 
-This is not a new startup launch page. It should feel like a sharper public website or focused offer page for the current business.
+  const previewKeys = preview
+    ? `- template_kind
+- preview_summary
+- artifact
+- generator_version
+- source_idea_hash`
+    : '';
+
+  const previewRules = preview
+    ? `- template_kind: string. Must exactly equal "${preview.templateKind}".
+- preview_summary.audience: string. Who the business is trying to win, 5-12 words.
+- preview_summary.problem: string. The growth bottleneck or buyer friction, 5-14 words.
+- preview_summary.positioning: string. The sharper angle Baljia identified, 7-16 words.
+- artifact.kind: string. Must exactly equal "${preview.artifactKind}".
+- artifact.title: string. Short artifact title, 3-7 words.
+- artifact.items: array with 3-5 objects. Each object needs label, value, and detail strings. Items must look like useful generated output, not decorative filler.
+- generator_version: string. Must exactly equal "v2".
+- source_idea_hash: string. Must exactly equal "${preview.sourceIdeaHash}".`
+    : '';
+
+  const growIntro = preview
+    ? `You are generating the Day-0 onboarding preview CONTENT for ${ctx.companyName}, an EXISTING business.
+
+This is a founder-facing preview artifact, not a public website, product contract, offer page, or engineering source of truth. It should make the current business opportunity feel understood and buildable in one minute.`
+    : `You are generating a public growth landing page for ${ctx.companyName}, an EXISTING business.
+
+This is not a new startup launch page. It should feel like a sharper public website or focused offer page for the current business.`;
+
+  return `${growIntro}
 
 INDUSTRY CLASSIFICATION (assigned by the system, not for you to override): ${industryRow.name}
 Industry-specific considerations: ${industryRow.considerations}
@@ -667,6 +782,7 @@ ${aiBlock}
 ${antiBlock}
 
 HOW THIS PAGE SHOULD THINK
+${previewBlock}
 - Preserve the existing company identity. Do not rename it or turn it into an "OS", "AI platform", or new SaaS unless the website clearly says that.
 - Write for a real prospect who could buy from this business now.
 - Use the actual services/products and audience from the website.
@@ -680,6 +796,7 @@ HOW THIS PAGE SHOULD THINK
 OUTPUT - return one JSON object with exactly these top-level keys:
 - brand
 - hero
+${previewKeys}
 - what_it_does
 - how_it_works
 - what_makes_different
@@ -690,6 +807,7 @@ Field rules:
 - brand.tagline: string, 6-10 words. Service or product positioning for the existing business.
 - hero.headline: string, 8-10 words. A concrete buyer outcome or promise grounded in mission and business profile; no generic AI/startup phrasing.
 - hero.subhead: string, 2 sentences, 24-40 words total. Sentence 1 says what this business does and for whom. Sentence 2 says why buyers should trust or pay attention.
+${previewRules}
 - what_it_does.heading: string. Short heading appropriate to the business services or product.
 - what_it_does.capabilities: array with exactly 3 objects. Each object needs title and description strings. Title is 3-5 words. Description is 1-2 concrete sentences about a real service or product capability.
 - how_it_works.heading: string. Short heading describing how clients or users work with the business.
@@ -738,6 +856,52 @@ const esc = (s: string): string => s
   .replace(/</g, '&lt;')
   .replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;');
+
+const PREVIEW_FORBIDDEN_PURPLE_HEX = new Set([
+  '#6366f1',
+  '#4f46e5',
+  '#4338ca',
+  '#3730a3',
+  '#8b5cf6',
+  '#7c3aed',
+  '#a855f7',
+  '#818cf8',
+  '#f5f3ff',
+  '#1e1b4b',
+  '#e0e7ff',
+]);
+
+function hasForbiddenPreviewPalette(tokens: ResolvedDesignTokens): boolean {
+  return [
+    tokens.accent,
+    tokens.accentSoft,
+    tokens.accentStrong,
+    tokens.ink,
+    tokens.bg,
+    tokens.bgElev,
+    tokens.line,
+    tokens.darkAccent,
+    tokens.darkAccentSoft,
+  ].some((value) => PREVIEW_FORBIDDEN_PURPLE_HEX.has(value.toLowerCase()));
+}
+
+function normalizePreviewDesignTokens(tokens: ResolvedDesignTokens): ResolvedDesignTokens {
+  if (!hasForbiddenPreviewPalette(tokens)) return tokens;
+
+  return {
+    ...tokens,
+    accent: '#0F766E',
+    accentSoft: '#ECFDF5',
+    accentStrong: '#B45309',
+    ink: '#111827',
+    inkSoft: '#4B5563',
+    bg: '#FAFAF9',
+    bgElev: '#F0FDFA',
+    line: '#CCFBF1',
+    darkAccent: 'hsl(174, 64%, 58%)',
+    darkAccentSoft: 'hsl(172, 28%, 14%)',
+  };
+}
 
 function renderRootStyles(tokens: ResolvedDesignTokens, vars: StyleVars): string {
   const d = tokens.density;
@@ -820,7 +984,8 @@ function renderUtilityCards(content: LandingContent, year: number): { styles: st
   // step numerals, dash-prefixed differentiators, accent-band closing.
   // Original boxy implementation preserved in git history (commit before
   // the v2 wiring) if rollback ever needed.
-  return { styles: utilityCardsV2Styles(), body: utilityCardsV2Body(content, year, esc) };
+  const preview = hasLandingPreview(content);
+  return { styles: utilityCardsV2Styles(preview), body: utilityCardsV2Body(content, year, esc) };
 }
 
 // Editorial: minimal, single-column, large typography. v2: removes
@@ -828,7 +993,8 @@ function renderUtilityCards(content: LandingContent, year: number): { styles: st
 // capabilities as full-width blocks (not cards), pull-quote differentiators.
 function renderEditorial(content: LandingContent, year: number): { styles: string; body: string } {
   // Delegated to v2 renderer (2026-04-29).
-  return { styles: editorialV2Styles(), body: editorialV2Body(content, year, esc) };
+  const preview = hasLandingPreview(content);
+  return { styles: editorialV2Styles(preview), body: editorialV2Body(content, year, esc) };
 }
 
 // Narrative: how_it_works comes BEFORE what_it_does (problem-journey-solution
@@ -839,7 +1005,8 @@ function renderNarrative(content: LandingContent, year: number): { styles: strin
   // chapter bands (regular/accent-soft), dark "how it works" band with
   // 3-up grid, italic pull-quote differentiators on accent-soft band,
   // accent-color closing band. Story-driven, no boxed cards.
-  return { styles: narrativeV2Styles(), body: narrativeV2Body(content, year, esc) };
+  const preview = hasLandingPreview(content);
+  return { styles: narrativeV2Styles(preview), body: narrativeV2Body(content, year, esc) };
 }
 
 // ─── Family 3: narrative-stacked ──────────────────────────────────────────
@@ -849,7 +1016,8 @@ function renderNarrative(content: LandingContent, year: number): { styles: strin
 // rectangle). Differentiators now use hanging-indent typography with an
 // accent dash prefix — same visual hierarchy without the box.
 function renderNarrativeStacked(content: LandingContent, year: number): { styles: string; body: string } {
-  return { styles: narrativeStackedV2Styles(), body: narrativeStackedV2Body(content, year, esc) };
+  const preview = hasLandingPreview(content);
+  return { styles: narrativeStackedV2Styles(preview), body: narrativeStackedV2Body(content, year, esc) };
 }
 
 // ─── Family 4: magazine-grid ──────────────────────────────────────────────
@@ -862,7 +1030,8 @@ function renderNarrativeStacked(content: LandingContent, year: number): { styles
 // uses thin accent top-bar instead of left-border. Statements lose the
 // border-left columns — pure typographic hierarchy now.
 function renderMagazineGrid(content: LandingContent, year: number): { styles: string; body: string } {
-  return { styles: magazineGridV2Styles(), body: magazineGridV2Body(content, year, esc) };
+  const preview = hasLandingPreview(content);
+  return { styles: magazineGridV2Styles(preview), body: magazineGridV2Body(content, year, esc) };
 }
 
 // ─── Family 5: comparison-led ─────────────────────────────────────────────
@@ -875,7 +1044,8 @@ function renderMagazineGrid(content: LandingContent, year: number): { styles: st
 // accent top-rule instead of a full bordered card. Inner row dividers stay
 // (functional, not decorative). ✓/✗ uses color, not background blocks.
 function renderComparisonLed(content: LandingContent, year: number): { styles: string; body: string } {
-  return { styles: comparisonLedV2Styles(), body: comparisonLedV2Body(content, year, esc) };
+  const preview = hasLandingPreview(content);
+  return { styles: comparisonLedV2Styles(preview), body: comparisonLedV2Body(content, year, esc) };
 }
 
 // Exported for offline smoke tests. Production code path stays inside
@@ -889,10 +1059,11 @@ export function renderLandingHtml(
 ): string {
   const year = new Date().getFullYear();
   const title = `${content.brand.name} | ${content.brand.tagline}`;
-  const fontLink = tokens.googleFontsHref
+  const visualTokens = hasLandingPreview(content) ? normalizePreviewDesignTokens(tokens) : tokens;
+  const fontLink = visualTokens.googleFontsHref
     ? `<link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="${tokens.googleFontsHref}">`
+<link rel="stylesheet" href="${visualTokens.googleFontsHref}">`
     : '';
 
   const built =
@@ -913,11 +1084,14 @@ export function renderLandingHtml(
 <meta name="x-baljia-style" content="${esc(tokens.matchedStyle ?? 'default')}">
 <meta name="x-baljia-pattern" content="${esc(tokens.matchedPattern)}">
 <meta name="x-baljia-family" content="${esc(family)}">
+<meta name="x-baljia-generator-version" content="${esc(content.generator_version ?? 'v1')}">
+${content.source_idea_hash ? `<meta name="x-baljia-source-idea-hash" content="${esc(content.source_idea_hash)}">` : ''}
+${content.template_kind ? `<meta name="x-baljia-template-kind" content="${esc(content.template_kind)}">` : ''}
 <title>${esc(title)}</title>
 <meta name="description" content="${esc(content.hero.subhead)}">
 ${fontLink}
 <style>
-${renderRootStyles(tokens, vars)}
+${renderRootStyles(visualTokens, vars)}
 ${renderBaseStyles()}
 ${built.styles}
 </style>
@@ -949,6 +1123,23 @@ function sanitizeLandingContent(c: LandingContent): LandingContent {
       headline: s(c.hero.headline),
       subhead: s(c.hero.subhead),
     },
+    template_kind: c.template_kind,
+    preview_summary: c.preview_summary ? {
+      audience: s(c.preview_summary.audience),
+      problem: s(c.preview_summary.problem),
+      positioning: s(c.preview_summary.positioning),
+    } : undefined,
+    artifact: c.artifact ? {
+      kind: c.artifact.kind,
+      title: s(c.artifact.title),
+      items: c.artifact.items.slice(0, 5).map((item) => ({
+        label: s(item.label),
+        value: s(item.value),
+        detail: s(item.detail),
+      })),
+    } : undefined,
+    generator_version: c.generator_version,
+    source_idea_hash: c.source_idea_hash ? s(c.source_idea_hash) : undefined,
     what_it_does: {
       heading: s(c.what_it_does.heading),
       capabilities: c.what_it_does.capabilities.map((cap) => ({
@@ -975,12 +1166,21 @@ function sanitizeLandingContent(c: LandingContent): LandingContent {
   };
 }
 
-function validateLandingContent(c: unknown): asserts c is LandingContent {
+function validateLandingContent(c: unknown, requirePreview = false): asserts c is LandingContent {
   const x = c as LandingContent;
   const missing: string[] = [];
   if (!x?.brand?.name?.trim()) missing.push('brand.name');
   if (!x?.hero?.headline?.trim()) missing.push('hero.headline');
   if (!x?.hero?.subhead?.trim()) missing.push('hero.subhead');
+  if (requirePreview) {
+    if (!x?.template_kind) missing.push('template_kind');
+    if (!x?.preview_summary?.audience?.trim()) missing.push('preview_summary.audience');
+    if (!x?.preview_summary?.problem?.trim()) missing.push('preview_summary.problem');
+    if (!x?.preview_summary?.positioning?.trim()) missing.push('preview_summary.positioning');
+    if (!x?.artifact?.kind) missing.push('artifact.kind');
+    if (!x?.artifact?.title?.trim()) missing.push('artifact.title');
+    if (!Array.isArray(x?.artifact?.items) || x.artifact.items.length < 3) missing.push('artifact.items (need 3+)');
+  }
   if (!Array.isArray(x?.what_it_does?.capabilities) || x.what_it_does.capabilities.length < 3) missing.push('what_it_does.capabilities (need 3+)');
   if (!Array.isArray(x?.how_it_works?.steps) || x.how_it_works.steps.length !== 3) missing.push('how_it_works.steps (need exactly 3)');
   if (!Array.isArray(x?.what_makes_different?.points) || x.what_makes_different.points.length < 3) missing.push('what_makes_different.points (need 3+)');
@@ -994,6 +1194,34 @@ function validateLandingContent(c: unknown): asserts c is LandingContent {
 // Orchestrator
 // ──────────────────────────────────────────────────────────────────────────
 
+function withLandingMetadata(content: LandingContent, sourceHash: string, preview?: PreviewPromptConfig): LandingContent {
+  if (!preview) {
+    const {
+      template_kind: _templateKind,
+      preview_summary: _previewSummary,
+      artifact: _artifact,
+      ...v1Content
+    } = content;
+
+    return {
+      ...v1Content,
+      generator_version: 'v1',
+      source_idea_hash: sourceHash,
+    };
+  }
+
+  return {
+    ...content,
+    template_kind: preview.templateKind,
+    artifact: content.artifact ? {
+      ...content.artifact,
+      kind: preview.artifactKind,
+    } : content.artifact,
+    generator_version: 'v2',
+    source_idea_hash: preview.sourceIdeaHash,
+  };
+}
+
 export async function generateLandingPage(ctx: PipelineContext): Promise<void> {
   try {
     const facts = extractMarketFacts(ctx.marketResearchJson);
@@ -1004,6 +1232,10 @@ export async function generateLandingPage(ctx: PipelineContext): Promise<void> {
     const industryRow = INDUSTRY_RULES.find((r) => r.id === tokens.matchedIndustryId)
       ?? { name: tokens.matchedIndustry, considerations: tokens.considerations };
     const antiPatterns = antiPatternsForIndustry(tokens.matchedIndustryId);
+    const sourceHash = createLandingSourceIdeaHash(ctx);
+    const previewConfig = isOnboardingPreviewBuilderV2Enabled()
+      ? buildPreviewPromptConfig(ctx, tokens.matchedIndustryId, sourceHash)
+      : undefined;
 
     // 2. Resolve style → designVars → CSS custom properties
     const styleRow = UI_STYLES.find((s) =>
@@ -1020,22 +1252,24 @@ export async function generateLandingPage(ctx: PipelineContext): Promise<void> {
       style: tokens.matchedStyle,
       pattern: tokens.matchedPattern,
       family,
+      previewBuilder: previewConfig ? 'v2' : 'v1',
+      templateKind: previewConfig?.templateKind,
       paletteSource: tokens.paletteSource,
     });
 
-    await emitActivity(ctx, `Generating landing page (${family} family, ${industryRow.name})`, 'llm');
+    await emitActivity(ctx, `Generating landing page (${previewConfig ? 'preview v2' : family} family, ${industryRow.name})`, 'llm');
 
     // 4. Generate content using prompt with anti-patterns injected
     const prompt = ctx.journey === 'grow_my_company'
-      ? buildGrowLandingPrompt(ctx, facts, industryRow, antiPatterns)
-      : buildLandingPrompt(ctx, facts, industryRow, antiPatterns);
+      ? buildGrowLandingPrompt(ctx, facts, industryRow, antiPatterns, previewConfig)
+      : buildLandingPrompt(ctx, facts, industryRow, antiPatterns, previewConfig);
     let content = await callSmallLLMJson<LandingContent>(prompt, {
-      maxTokens: 2400,
+      maxTokens: previewConfig ? 3200 : 2400,
       retryOnce: true,
       schema: LandingContentSchema,
     });
-    validateLandingContent(content);
-    content = sanitizeLandingContent(content);
+    validateLandingContent(content, Boolean(previewConfig));
+    content = sanitizeLandingContent(withLandingMetadata(content, sourceHash, previewConfig));
 
     // 5. AI-feel hero validator — one cheap retry if the headline drips with
     //    hollow phrases ("modern", "intelligent", etc.). Catches Plinor-style
@@ -1051,12 +1285,12 @@ export async function generateLandingPage(ctx: PipelineContext): Promise<void> {
 CRITICAL — your previous hero.headline contained the phrase "${check.phrase}". This is a hollow / generic-AI marker. Rewrite the entire JSON, but specifically craft a hero.headline that is concrete and specific to ${ctx.companyName} without using "${check.phrase}" or any other word in this list: ${HOLLOW_PHRASES.join(', ')}.`;
       try {
         const retry = await callSmallLLMJson<LandingContent>(fixPrompt, {
-          maxTokens: 2400,
+          maxTokens: previewConfig ? 3200 : 2400,
           retryOnce: false,
           schema: LandingContentSchema,
         });
-        validateLandingContent(retry);
-        content = sanitizeLandingContent(retry);
+        validateLandingContent(retry, Boolean(previewConfig));
+        content = sanitizeLandingContent(withLandingMetadata(retry, sourceHash, previewConfig));
       } catch (retryErr) {
         log.warn('AI-feel retry failed — keeping original content', { error: retryErr instanceof Error ? retryErr.message : String(retryErr) });
       }
@@ -1075,6 +1309,8 @@ CRITICAL — your previous hero.headline contained the phrase "${check.phrase}".
       style: tokens.matchedStyle,
       pattern: tokens.matchedPattern,
       family,
+      previewBuilder: content.generator_version,
+      templateKind: content.template_kind,
       competitors: facts.competitors.length,
       bytes: html.length,
     });
@@ -1088,6 +1324,9 @@ CRITICAL — your previous hero.headline contained the phrase "${check.phrase}".
       capabilities: content.what_it_does.capabilities.map((item) => `${item.title}: ${item.description}`),
       steps: content.how_it_works.steps.map((step) => `${step.number}. ${step.title}: ${step.description}`),
       differentiators: content.what_makes_different.points,
+      generator_version: content.generator_version,
+      source_idea_hash: content.source_idea_hash,
+      template_kind: content.template_kind,
     };
   } catch (err) {
     log.warn('Landing page generation failed — non-blocking', {

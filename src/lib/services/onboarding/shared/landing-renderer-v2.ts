@@ -11,7 +11,24 @@
 // UTILITY-CARDS v2 — the default template, completely redesigned
 // ═══════════════════════════════════════════════════════
 
-export function utilityCardsV2Styles(): string {
+import {
+  hasLandingPreview,
+  renderPreviewArtifact,
+  renderPreviewArtifactStyles,
+  renderPreviewProofRail,
+  type LandingPreviewContent,
+} from './landing-preview-artifacts';
+
+type LandingContent = LandingPreviewContent & {
+  brand: { name: string; tagline: string };
+  hero: { headline: string; subhead: string };
+  what_it_does: { heading: string; capabilities: Array<{ title: string; description: string }> };
+  how_it_works: { heading: string; steps: Array<{ number: number; title: string; description: string }> };
+  what_makes_different: { heading: string; points: string[] };
+  closing: { headline: string; body: string };
+};
+
+export function utilityCardsV2Styles(preview = false): string {
   return `.wrap { max-width: 900px; margin: 0 auto; padding: 0 var(--container-px); }
 
 /* Header — minimal, no borders */
@@ -54,9 +71,11 @@ section h2 {
 .card {
   padding: 28px 24px 28px 28px;
   background: var(--bg-elev);
-  border: none;
+  ${preview ? `border: var(--border-w) solid color-mix(in srgb, var(--line) 80%, transparent);
+  border-top: 3px solid var(--accent);
+  border-radius: var(--radius);` : `border: none;
   border-left: 3px solid var(--accent);
-  border-radius: 0 var(--radius) var(--radius) 0;
+  border-radius: 0 var(--radius) var(--radius) 0;`}
   box-shadow: none;
   transition: transform var(--transition), background var(--transition);
   position: relative;
@@ -126,10 +145,11 @@ footer { max-width: 900px; margin: 0 auto; }
   .hero h1 { font-size: clamp(32px, 9vw, 48px); }
   .step { grid-template-columns: 48px 1fr; }
   .closing { padding: 56px var(--container-px); }
-}`;
+}
+${preview ? renderPreviewArtifactStyles() : ''}`;
 }
 
-export function utilityCardsV2Body(content: { brand: { name: string; tagline: string }; hero: { headline: string; subhead: string }; what_it_does: { heading: string; capabilities: Array<{ title: string; description: string }> }; how_it_works: { heading: string; steps: Array<{ number: number; title: string; description: string }> }; what_makes_different: { heading: string; points: string[] }; closing: { headline: string; body: string } }, year: number, esc: (s: string) => string): string {
+export function utilityCardsV2Body(content: LandingContent, year: number, esc: (s: string) => string): string {
   const capabilityCards = content.what_it_does.capabilities
     .map((c) => `
         <div class="card">
@@ -144,14 +164,20 @@ export function utilityCardsV2Body(content: { brand: { name: string; tagline: st
         </li>`).join('');
   const diffPoints = content.what_makes_different.points
     .map((p) => `<li>${esc(p)}</li>`).join('');
+  const preview = hasLandingPreview(content);
 
   return `<div class="wrap">
   <header>
     <div class="brand">${esc(content.brand.name)}</div>
   </header>
-  <div class="hero" id="hero">
-    <h1>${esc(content.hero.headline)}</h1>
-    <p>${esc(content.hero.subhead)}</p>
+  <div class="hero${preview ? ' preview-hero' : ''}" id="hero">
+    ${preview ? `<div class="preview-copy">
+      <h1>${esc(content.hero.headline)}</h1>
+      <p>${esc(content.hero.subhead)}</p>
+      ${renderPreviewProofRail(content, esc)}
+    </div>
+    ${renderPreviewArtifact(content, esc)}` : `<h1>${esc(content.hero.headline)}</h1>
+    <p>${esc(content.hero.subhead)}</p>`}
   </div>
   <section id="what">
     <div class="section-label">${esc(content.what_it_does.heading)}</div>
@@ -190,7 +216,7 @@ export function utilityCardsV2Body(content: { brand: { name: string; tagline: st
 // EDITORIAL v2 — single-column, type-led, no boxes at all
 // ═══════════════════════════════════════════════════════
 
-export function editorialV2Styles(): string {
+export function editorialV2Styles(preview = false): string {
   return `.wrap { max-width: 720px; margin: 0 auto; padding: 0 var(--container-px); }
 
 header { padding: 64px 0 0; }
@@ -256,10 +282,11 @@ ol.ed-caps { list-style: none; padding: 0; margin: 0; display: grid; gap: 48px; 
   .hero h1 { font-size: clamp(36px, 10vw, 56px); }
   .ed-cap { grid-template-columns: 44px 1fr; }
   .ed-cap-num { font-size: 44px; }
-}`;
+}
+${preview ? renderPreviewArtifactStyles() : ''}`;
 }
 
-export function editorialV2Body(content: { brand: { name: string; tagline: string }; hero: { headline: string; subhead: string }; what_it_does: { heading: string; capabilities: Array<{ title: string; description: string }> }; how_it_works: { heading: string; steps: Array<{ number: number; title: string; description: string }> }; what_makes_different: { heading: string; points: string[] }; closing: { headline: string; body: string } }, year: number, esc: (s: string) => string): string {
+export function editorialV2Body(content: LandingContent, year: number, esc: (s: string) => string): string {
   const capList = content.what_it_does.capabilities
     .map((c, i) => `
       <li class="ed-cap">
@@ -270,15 +297,21 @@ export function editorialV2Body(content: { brand: { name: string; tagline: strin
     .map((s) => `<p class="ed-step"><strong>${s.number}. ${esc(s.title)}.</strong> ${esc(s.description)}</p>`).join('');
   const diffList = content.what_makes_different.points
     .map((p) => `<p class="ed-diff">${esc(p)}</p>`).join('');
+  const preview = hasLandingPreview(content);
 
   return `<div class="wrap">
   <header>
     <div class="brand">${esc(content.brand.name)}</div>
     <div class="brand-tag">${esc(content.brand.tagline)}</div>
   </header>
-  <div class="hero" id="hero">
-    <h1>${esc(content.hero.headline)}</h1>
-    <p>${esc(content.hero.subhead)}</p>
+  <div class="hero${preview ? ' preview-hero' : ''}" id="hero">
+    ${preview ? `<div class="preview-copy">
+      <h1>${esc(content.hero.headline)}</h1>
+      <p>${esc(content.hero.subhead)}</p>
+      ${renderPreviewProofRail(content, esc)}
+    </div>
+    ${renderPreviewArtifact(content, esc)}` : `<h1>${esc(content.hero.headline)}</h1>
+    <p>${esc(content.hero.subhead)}</p>`}
   </div>
   <div class="divider"></div>
   <section id="what">
@@ -312,7 +345,7 @@ export function editorialV2Body(content: { brand: { name: string; tagline: strin
 // NARRATIVE v2 — story-driven, full-bleed color sections, no boxes
 // ═══════════════════════════════════════════════════════
 
-export function narrativeV2Styles(): string {
+export function narrativeV2Styles(preview = false): string {
   return `.wrap { max-width: 100%; margin: 0; padding: 0; }
 .inner { max-width: 820px; margin: 0 auto; padding: 0 var(--container-px); }
 
@@ -394,10 +427,11 @@ footer { max-width: 820px; margin: 0 auto; padding: 32px var(--container-px) 48p
 @media (max-width: 600px) {
   .how-grid { grid-template-columns: 1fr; gap: 40px; }
   .hero h1 { font-size: clamp(34px, 10vw, 52px); }
-}`;
+}
+${preview ? renderPreviewArtifactStyles() : ''}`;
 }
 
-export function narrativeV2Body(content: { brand: { name: string; tagline: string }; hero: { headline: string; subhead: string }; what_it_does: { heading: string; capabilities: Array<{ title: string; description: string }> }; how_it_works: { heading: string; steps: Array<{ number: number; title: string; description: string }> }; what_makes_different: { heading: string; points: string[] }; closing: { headline: string; body: string } }, year: number, esc: (s: string) => string): string {
+export function narrativeV2Body(content: LandingContent, year: number, esc: (s: string) => string): string {
   const chapters = content.what_it_does.capabilities
     .map((c, i) => `
     <div class="chapter ${i % 2 === 0 ? '' : 'chapter--accent'}">
@@ -418,15 +452,21 @@ export function narrativeV2Body(content: { brand: { name: string; tagline: strin
 
   const quotes = content.what_makes_different.points
     .map((p) => `<div class="quote">${esc(p)}</div>`).join('');
+  const preview = hasLandingPreview(content);
 
   return `<div class="wrap">
   <div class="inner">
     <header>
       <div class="brand">${esc(content.brand.name)}</div>
     </header>
-    <div class="hero" id="hero">
-      <h1>${esc(content.hero.headline)}</h1>
-      <p>${esc(content.hero.subhead)}</p>
+    <div class="hero${preview ? ' preview-hero' : ''}" id="hero">
+      ${preview ? `<div class="preview-copy">
+        <h1>${esc(content.hero.headline)}</h1>
+        <p>${esc(content.hero.subhead)}</p>
+        ${renderPreviewProofRail(content, esc)}
+      </div>
+      ${renderPreviewArtifact(content, esc)}` : `<h1>${esc(content.hero.headline)}</h1>
+      <p>${esc(content.hero.subhead)}</p>`}
     </div>
   </div>
   ${chapters}

@@ -6,13 +6,15 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import type { CEOStreamEvent, ChatMessage } from '@/types';
+import type { CEOStreamEvent, ChatAction, ChatMessage } from '@/types';
 import { assembleCEOPrompt } from './ceo.prompt';
 import { CEO_TOOLS, handleToolCall } from './ceo.tools';
 import type { ToolResult } from './ceo.tools';
 import { isAnthropicAvailable, isBedrockAvailable, isDirectAnthropicAvailable, isOpenAIAvailable, getOpenAIApiKey, isOpenRouterAvailable, OPENROUTER_MODELS, OPENAI_MODELS, getProviderOrder, isAnthropicOAuthAvailable } from '@/lib/llm-provider';
 import { createAnthropicWithOAuthAsync, withClaudeCodeIdentity } from '@/lib/anthropic-oauth';
 import { createLogger } from '@/lib/logger';
+import { CEO_PROCESSING_LIMIT_TEXT, getCeoMaxResponseTokens, getCeoMaxToolTurns } from './ceo.loop-config';
+import { tryOfferPendingPlanConfirmation, tryQueueConfirmedBuildPlan } from './ceo.confirmed-plan-queue';
 
 const log = createLogger('CEO');
 
@@ -27,6 +29,13 @@ const GEMINI_MODEL = 'gemini-2.5-flash';
 // G-LLM-001: Timeout per streaming turn (longer than worker calls since interactive)
 const CEO_STREAM_TIMEOUT_MS = 90_000; // 90 seconds
 
+function getToolResultActions(result: ToolResult): ChatAction[] {
+  return [
+    ...(result.action ? [result.action] : []),
+    ...(result.actions ?? []),
+  ];
+}
+
 // ══════════════════════════════════════════════
 // MAIN ENTRY — tries Claude, falls back to Gemini
 // ══════════════════════════════════════════════
@@ -36,6 +45,26 @@ export async function* streamCEOResponse(input: {
   message: string;
   sessionHistory: ChatMessage[];
 }): AsyncGenerator<CEOStreamEvent> {
+  const confirmedPlan = await tryQueueConfirmedBuildPlan(input);
+  if (confirmedPlan) {
+    yield { type: 'text', content: confirmedPlan.text };
+    for (const action of confirmedPlan.actions) {
+      yield { type: 'action', action };
+    }
+    yield { type: 'done' };
+    return;
+  }
+
+  const pendingPlan = tryOfferPendingPlanConfirmation(input);
+  if (pendingPlan) {
+    yield { type: 'text', content: pendingPlan.text };
+    for (const action of pendingPlan.actions) {
+      yield { type: 'action', action };
+    }
+    yield { type: 'done' };
+    return;
+  }
+
   // Provider-ordered fallback: respects LLM_PROVIDER_ORDER or PRIMARY_LLM_PROVIDER.
   // Default: OpenAI -> Claude -> OpenRouter -> Gemini.
   type StreamFn = typeof streamWithOpenAI;
@@ -163,7 +192,7 @@ async function* streamWithClaude(input: {
 
   let continueLoop = true;
   let turnCount = 0;
-  const MAX_TURNS = 5; // Prevent infinite tool-use loops
+  const MAX_TURNS = getCeoMaxToolTurns(); // Prevent infinite tool-use loops
 
   while (continueLoop) {
     continueLoop = false;
@@ -171,18 +200,19 @@ async function* streamWithClaude(input: {
 
     if (turnCount > MAX_TURNS) {
       log.warn('CEO Claude hit max turns', { companyId: input.companyId, turnCount });
-      yield { type: 'text', content: '\n\n*(Reached processing limit — please send another message to continue.)*' };
+      yield { type: 'text', content: CEO_PROCESSING_LIMIT_TEXT };
       break;
     }
 
     // G-LLM-001: 90s timeout per streaming turn (prevents frozen chat UI)
     const controller = new AbortController();
+    let modelTurnActive = true;
     const timeout = setTimeout(() => controller.abort(), CEO_STREAM_TIMEOUT_MS);
 
     try {
       const stream = anthropic.messages.stream({
         model: getClaudeModelId(),
-        max_tokens: 2048,
+        max_tokens: getCeoMaxResponseTokens(),
         // SDK accepts string OR array of text blocks. withClaudeCodeIdentity
         // returns whichever shape is correct for the auth path.
         system: systemPrompt as Anthropic.MessageCreateParams['system'],
@@ -218,6 +248,8 @@ async function* streamWithClaude(input: {
       }
 
       const finalMessage = await stream.finalMessage();
+      modelTurnActive = false;
+      clearTimeout(timeout);
 
       const toolResults: Array<{ tool_use_id: string; result: ToolResult }> = [];
 
@@ -230,8 +262,8 @@ async function* streamWithClaude(input: {
           );
           toolResults.push({ tool_use_id: block.id, result });
 
-          if (result.action) {
-            yield { type: 'action', action: result.action };
+          for (const action of getToolResultActions(result)) {
+            yield { type: 'action', action };
           }
         }
       }
@@ -249,7 +281,7 @@ async function* streamWithClaude(input: {
         continueLoop = finalMessage.stop_reason === 'tool_use';
       }
     } catch (error) {
-      if (controller.signal.aborted) {
+      if (modelTurnActive && controller.signal.aborted) {
         log.error('CEO Claude stream timed out', { companyId: input.companyId, turnCount });
         yield { type: 'text', content: '\n\n*(Response timed out — please try again.)*' };
         break;
@@ -313,7 +345,7 @@ async function* streamWithOpenAI(input: {
   ];
 
   let turnCount = 0;
-  const MAX_TURNS = 5;
+  const MAX_TURNS = getCeoMaxToolTurns();
 
   while (turnCount < MAX_TURNS) {
     turnCount++;
@@ -323,7 +355,7 @@ async function* streamWithOpenAI(input: {
         model: OPENAI_MODEL,
         messages: messages as Parameters<typeof client.chat.completions.create>[0]['messages'],
         tools: openaiTools,
-        max_tokens: 4096,
+        max_tokens: getCeoMaxResponseTokens(),
         reasoning_effort: 'xhigh' as any,
         stream: true,
       });
@@ -369,7 +401,9 @@ async function* streamWithOpenAI(input: {
         try { args = JSON.parse(tc.function.arguments || '{}'); } catch { args = {}; }
 
         const toolResult: ToolResult = await handleToolCall(tc.function.name, args, input.companyId);
-        if (toolResult.action) yield { type: 'action', action: toolResult.action };
+        for (const action of getToolResultActions(toolResult)) {
+          yield { type: 'action', action };
+        }
 
         messages.push({ role: 'tool', content: toolResult.content, tool_call_id: tc.id });
       }
@@ -384,7 +418,7 @@ async function* streamWithOpenAI(input: {
   }
 
   if (turnCount >= MAX_TURNS) {
-    yield { type: 'text', content: '\n\n*(Reached processing limit — please send another message to continue.)*' };
+    yield { type: 'text', content: CEO_PROCESSING_LIMIT_TEXT };
   }
 
   yield { type: 'done' };
@@ -417,7 +451,7 @@ async function* streamWithCodex(
   ];
 
   let turnCount = 0;
-  const MAX_TURNS = 5;
+  const MAX_TURNS = getCeoMaxToolTurns();
 
   while (turnCount < MAX_TURNS) {
     turnCount++;
@@ -432,7 +466,7 @@ async function* streamWithCodex(
         systemPrompt,
         messages,
         tools: codexTools,
-        maxTokens: 4096,
+        maxTokens: getCeoMaxResponseTokens(),
         reasoning: 'high',
       });
 
@@ -461,13 +495,15 @@ async function* streamWithCodex(
 
     for (const tc of turnToolCalls) {
       const toolResult: ToolResult = await handleToolCall(tc.name, tc.arguments, input.companyId);
-      if (toolResult.action) yield { type: 'action', action: toolResult.action };
+      for (const action of getToolResultActions(toolResult)) {
+        yield { type: 'action', action };
+      }
       messages.push({ role: 'tool', content: toolResult.content, tool_call_id: tc.id, tool_name: tc.name });
     }
   }
 
   if (turnCount >= MAX_TURNS) {
-    yield { type: 'text', content: '\n\n*(Reached processing limit — please send another message to continue.)*' };
+    yield { type: 'text', content: CEO_PROCESSING_LIMIT_TEXT };
   }
 
   yield { type: 'done' };
@@ -521,7 +557,7 @@ async function* streamWithOpenRouter(input: {
   ];
 
   let turnCount = 0;
-  const MAX_TURNS = 5;
+  const MAX_TURNS = getCeoMaxToolTurns();
 
   while (turnCount < MAX_TURNS) {
     turnCount++;
@@ -532,7 +568,7 @@ async function* streamWithOpenRouter(input: {
           model: OPENROUTER_MODEL,
           messages: messages as Parameters<typeof client.chat.completions.create>[0]['messages'],
           tools: openaiTools,
-          max_tokens: 4096,
+          max_tokens: getCeoMaxResponseTokens(),
           stream: true,
         },
       );
@@ -595,8 +631,8 @@ async function* streamWithOpenRouter(input: {
           input.companyId
         );
 
-        if (toolResult.action) {
-          yield { type: 'action', action: toolResult.action };
+        for (const action of getToolResultActions(toolResult)) {
+          yield { type: 'action', action };
         }
 
         messages.push({
@@ -618,7 +654,7 @@ async function* streamWithOpenRouter(input: {
   }
 
   if (turnCount >= MAX_TURNS) {
-    yield { type: 'text', content: '\n\n*(Reached processing limit — please send another message to continue.)*' };
+    yield { type: 'text', content: CEO_PROCESSING_LIMIT_TEXT };
   }
 
   yield { type: 'done' };
@@ -697,7 +733,7 @@ async function* streamWithGemini(input: {
   let continueLoop = true;
   let currentMessage = input.message;
   let turnCount = 0;
-  const MAX_TURNS = 5;
+  const MAX_TURNS = getCeoMaxToolTurns();
 
   while (continueLoop) {
     continueLoop = false;
@@ -705,7 +741,7 @@ async function* streamWithGemini(input: {
 
     if (turnCount > MAX_TURNS) {
       log.warn('CEO Gemini hit max turns', { companyId: input.companyId, turnCount });
-      yield { type: 'text', content: '\n\n*(Reached processing limit — please send another message to continue.)*' };
+      yield { type: 'text', content: CEO_PROCESSING_LIMIT_TEXT };
       break;
     }
 
@@ -744,8 +780,8 @@ async function* streamWithGemini(input: {
               input.companyId
             );
 
-            if (toolResult.action) {
-              yield { type: 'action', action: toolResult.action };
+            for (const action of getToolResultActions(toolResult)) {
+              yield { type: 'action', action };
             }
 
             functionResponses.push({

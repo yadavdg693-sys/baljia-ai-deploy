@@ -4,6 +4,7 @@ import { db, companies, documents, promoVideoJobs } from '@/lib/db';
 import * as eventService from '@/lib/services/event.service';
 import { isDeepgramConfigured, textToSpeech as deepgramTextToSpeech } from '@/lib/services/deepgram.service';
 import { founderAvatarTextToSpeech, isFounderAvatarVoiceConfigured } from '@/lib/services/heygen-voice.service';
+import { isSupertonicConfigured, textToSpeech as supertonicTextToSpeech } from '@/lib/services/supertonic.service';
 import { takeScreenshot } from '@/lib/services/screenshot.service';
 import { uploadFile } from '@/lib/services/storage.service';
 import { callSmallLLMJson } from '@/lib/services/onboarding/shared/json-mode';
@@ -57,7 +58,7 @@ interface VoiceoverAsset {
   provider: VoiceoverProvider;
 }
 
-type VoiceoverProvider = 'deepgram' | 'founder_avatar';
+type VoiceoverProvider = 'deepgram' | 'supertonic' | 'founder_avatar';
 
 interface ProductBrief {
   companyName: string;
@@ -153,6 +154,8 @@ const INTERNAL_VIDEO_LANGUAGE_PATTERNS = [
   /\bscreenshotone\b/i,
   /\bffmpeg\b/i,
   /\bdeepgram\b/i,
+  /\bsupertonic\b/i,
+  /\bsupertone\b/i,
   /\bheygen\b/i,
   /\bfounder avatar voice\b/i,
   /\bworkers?\b/i,
@@ -1518,13 +1521,14 @@ function storyboardNarration(storyboard: PromoVideoStoryboard): string {
 
 function requestedVoiceoverProvider(): VoiceoverProvider | null {
   const provider = process.env.PROMO_VIDEO_TTS_PROVIDER?.trim().toLowerCase();
-  if (provider === 'deepgram' || provider === 'founder_avatar') return provider;
+  if (provider === 'deepgram' || provider === 'supertonic' || provider === 'founder_avatar') return provider;
   return null;
 }
 
 function voiceoverProviderOrder(voiceMode: PromoVideoVoiceMode): VoiceoverProvider[] {
   const requested = requestedVoiceoverProvider();
   if (requested) return [requested];
+  if (voiceMode === 'supertonic') return ['supertonic'];
   return [voiceMode === 'founder_avatar' ? 'founder_avatar' : 'deepgram'];
 }
 
@@ -1547,7 +1551,11 @@ async function maybeGenerateVoiceover(job: PromoVideoJobRow, brief: ProductBrief
     return {
       url: existingAudioUrl,
       key: job.audio_key,
-      provider: brief.voiceMode === 'founder_avatar' ? 'founder_avatar' : 'deepgram',
+      provider: brief.voiceMode === 'founder_avatar'
+        ? 'founder_avatar'
+        : brief.voiceMode === 'supertonic'
+          ? 'supertonic'
+          : 'deepgram',
     };
   }
   const narration = storyboardNarration(storyboard);
@@ -1578,6 +1586,31 @@ async function maybeGenerateVoiceover(job: PromoVideoJobRow, brief: ProductBrief
       }
     }
 
+    if (provider === 'supertonic') {
+      if (!isSupertonicConfigured() && brief.voiceMode !== 'supertonic') continue;
+      try {
+        const result = await supertonicTextToSpeech(narration);
+        const upload = await uploadFile({
+          companyId: job.company_id,
+          category: 'media',
+          filename: `promo-video-${job.id}-voiceover-supertonic.wav`,
+          content: result.audio,
+          contentType: result.contentType,
+          isPublic: true,
+        });
+        return {
+          url: upload.publicUrl ?? upload.url,
+          key: upload.key,
+          provider,
+        };
+      } catch (error) {
+        log.warn('Supertonic voiceover generation failed', { error: friendlyError(error) });
+        if (requestedProvider || brief.voiceMode === 'supertonic') {
+          throw new Error(`Supertonic voiceover generation failed: ${friendlyError(error)}`);
+        }
+      }
+    }
+
     if (provider === 'founder_avatar') {
       if (!isFounderAvatarVoiceConfigured()) continue;
       try {
@@ -1603,6 +1636,7 @@ async function maybeGenerateVoiceover(job: PromoVideoJobRow, brief: ProductBrief
   }
 
   if (requestedProvider) throw new Error(`${requestedProvider} voiceover provider is not configured`);
+  if (brief.voiceMode === 'supertonic') throw new Error('Supertonic voice is not configured');
   if (brief.voiceMode === 'founder_avatar') throw new Error('Founder avatar voice is not configured');
   throw new Error('Deepgram voiceover provider is not configured');
 
@@ -1808,8 +1842,18 @@ export async function runPromoVideoTask(input: { task: Task; executionId: string
     });
 
     job = await updateJob(job, 'preview_rendering');
-    const mp4 = await renderPromoMp4(job, brief, storyboard, assets, null, 'preview');
-    appendLog('preview_render_completed', { bytes: mp4.byteLength });
+    let previewVoiceover: VoiceoverAsset | null = null;
+    let previewAudioUrl: string | null = null;
+    try {
+      previewVoiceover = await maybeGenerateVoiceover(job, brief, storyboard);
+      previewAudioUrl = previewVoiceover?.url ?? null;
+      if (previewVoiceover) appendLog('preview_voiceover_generated', { provider: previewVoiceover.provider });
+    } catch (error) {
+      appendLog('preview_voiceover_failed', { error: friendlyError(error) });
+    }
+
+    const mp4 = await renderPromoMp4(job, brief, storyboard, assets, previewAudioUrl, 'preview');
+    appendLog('preview_render_completed', { bytes: mp4.byteLength, audio: Boolean(previewAudioUrl) });
 
     job = await updateJob(job, 'uploading');
     const [previewUpload, thumbnailUpload] = await uploadPromoArtifacts({
@@ -1823,6 +1867,8 @@ export async function runPromoVideoTask(input: { task: Task; executionId: string
     job = await updateJob(job, 'preview_ready', {
       preview_key: previewUpload.key,
       preview_url: previewUpload.publicUrl ?? previewUpload.url,
+      audio_key: previewVoiceover?.key ?? null,
+      audio_url: previewAudioUrl,
       output_key: null,
       output_url: null,
       thumbnail_key: thumbnailUpload.key,

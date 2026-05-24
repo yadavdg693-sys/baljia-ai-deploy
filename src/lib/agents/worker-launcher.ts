@@ -22,6 +22,7 @@ import { checkAutoResolve } from '@/lib/services/failure.service';
 import { canExecuteTask } from '@/lib/services/guardrail.service';
 import { engineeringCompletionGate, executeAgent } from './agent-factory';
 import { engineeringContractBlockReason } from './execution-contract';
+import { ensureEngineeringGithubRepoReady } from './engineering-infra-guard';
 import { executeDeterministic } from './deterministic-executor';
 import { executeTemplate } from './template-executor';
 import type { AgentInput, AgentResult } from './agent-factory';
@@ -109,7 +110,7 @@ async function retryWorkerDbWrite<T>(label: string, operation: () => Promise<T>,
 function isOnlyFinalizationGateReason(reason: string | null): boolean {
   if (!reason) return false;
   return /write_codebase_map|create_report|final report|codebase map/i.test(reason) &&
-    !/verify_user_journey|verify_db_state|verify_browser_ui|static_code_scan|review_pushed_code|design_audit|design_critique|render_get_logs|check_url_health|HIGH-severity|BLOCKER|known-bad/i.test(reason);
+    !/verify_release|verify_user_journey|verify_db_state|verify_browser_ui|static_code_scan|review_pushed_code|design_audit|design_critique|render_get_logs|check_url_health|HIGH-severity|BLOCKER|known-bad/i.test(reason);
 }
 
 function extractRoutesFromExecutionLog(logEntries: Record<string, unknown>[]): Array<{ path: string; method: string; auth: 'public' | 'session' | 'admin'; notes?: string }> {
@@ -272,7 +273,12 @@ export async function launchTask(taskId: string, opts: LaunchOptions = {}): Prom
   }
 
   // G-BILL-001: Check company lifecycle before execution
-  const [company] = await db.select({ lifecycle: companies.lifecycle, execution_state: companies.execution_state })
+  const [company] = await db.select({
+    lifecycle: companies.lifecycle,
+    execution_state: companies.execution_state,
+    github_repo: companies.github_repo,
+    slug: companies.slug,
+  })
     .from(companies).where(eq(companies.id, task.company_id)).limit(1);
 
   if (!company) throw new Error(`Company not found for task ${taskId}`);
@@ -333,6 +339,40 @@ export async function launchTask(taskId: string, opts: LaunchOptions = {}): Prom
       reason: contractBlockReason,
     });
     throw new Error(contractBlockReason);
+  }
+
+  // Company-scoped GitHub preflight: the global preflight proves the token can
+  // call GitHub, but Engineering also needs this company's repo to exist and be
+  // writable. If onboarding's best-effort repo creation was deferred or the org
+  // token lacks admin/write access, stop before claiming a slot or charging a
+  // credit. This prevents 100+ turn GitHub/Render retry loops.
+  if (agentId === 30 && !isPromoVideoTask) {
+    const repoReady = await ensureEngineeringGithubRepoReady({
+      companyId: task.company_id,
+      githubRepo: company.github_repo,
+      slug: company.slug,
+      persistRepo: async (fullName) => {
+        await db.update(companies)
+          .set({ github_repo: fullName })
+          .where(eq(companies.id, task.company_id));
+      },
+    });
+
+    if (!repoReady.ok) {
+      const reason = repoReady.reason ?? 'GitHub repo preflight failed before launching Engineering.';
+      await taskService.updateTask(taskId, {
+        status: 'blocked_pre_start',
+        failure_class: 'connector_failure',
+        completed_at: new Date().toISOString(),
+      });
+      await eventService.emit(task.company_id, 'task_failed', {
+        task_id: taskId,
+        title: task.title,
+        reason,
+        failure_class: 'connector_failure',
+      });
+      throw new Error(reason);
+    }
   }
 
   // PREFLIGHT: For engineering tasks, verify all required external creds are

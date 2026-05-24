@@ -27,10 +27,11 @@ describe('promo video request schema', () => {
       duration_seconds: 60,
       aspect_ratio: '16:9',
       visual_mode: 'actual_site',
-      voice_mode: 'deepgram',
+      voice_mode: 'supertonic',
     });
 
     expect(parsed.goal).toBe('product_hunt');
+    expect(parsed.voice_mode).toBe('supertonic');
   });
 
   it('rejects unsupported duration and option values', () => {

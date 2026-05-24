@@ -13,6 +13,7 @@ import { callSmallLLMJson } from './json-mode';
 import { StarterTasksSchema } from './schemas';
 import { emitActivity, recordOnboardingIssue } from '../stage-runner';
 import { stripInlineMarkdown } from './founder-doc-style';
+import { getLandingPreviewFreshness } from './landing-preview-metadata';
 import type { PipelineContext } from '../types';
 
 const log = createLogger('OnboardingStarterTasks');
@@ -112,9 +113,23 @@ ${JSON.stringify({
 ${JSON.stringify(ctx.onboardingBrief, null, 2)}`
     : 'Canonical onboarding brief: unavailable.';
 
+  const landingPreviewFreshness = getLandingPreviewFreshness(ctx);
   const landingBriefBlock = ctx.landingPageBrief
-    ? `Landing page already generated. Use this as public positioning context; do not recreate it:
-${JSON.stringify(ctx.landingPageBrief, null, 2)}`
+    ? landingPreviewFreshness.status === 'stale'
+      ? `Landing page preview exists, but it is stale relative to the current onboarding idea. Do not use it for product scope, MVP requirements, or engineering decisions. Treat it as an archival founder-facing visual artifact and offer regeneration in the founder-facing preview flow instead of consuming it here:
+${JSON.stringify({
+  ...ctx.landingPageBrief,
+  preview_freshness: landingPreviewFreshness.status,
+  current_source_idea_hash: landingPreviewFreshness.currentSourceIdeaHash,
+  regenerate_recommended: true,
+}, null, 2)}`
+      : `Landing page preview already generated. Treat it as a founder-facing visual artifact only, not as product scope or engineering source of truth. Do not recreate it and do not derive MVP requirements from it:
+${JSON.stringify({
+  ...ctx.landingPageBrief,
+  preview_freshness: landingPreviewFreshness.status,
+  current_source_idea_hash: landingPreviewFreshness.currentSourceIdeaHash,
+  regenerate_recommended: false,
+}, null, 2)}`
     : 'Landing page context: unavailable. Still assume onboarding already handled the landing page.';
 
   const missionDocBlock = ctx.missionDoc
@@ -184,7 +199,7 @@ The capability list describes what the platform can do overall. The onboarding f
 ${ONBOARDING_TASK_FRAMEWORK}
 
 How to think:
-- Start from the refined idea, market research, mission, and landing page promise.
+- Start from the refined idea, market research, and mission. The generated landing page is only a visual preview and must not override these canonical inputs.
 - The 3 tasks should support the same core company thesis, but they should not depend on each other.
 - Task 1 should build exactly one sellable MVP feature for Build/Surprise, or one revenue-facing growth asset/workflow for Grow My Company.
 - Task 2 should reduce the biggest market, competitor, pricing, workflow, or positioning uncertainty.

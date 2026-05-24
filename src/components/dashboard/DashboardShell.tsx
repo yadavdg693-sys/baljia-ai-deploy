@@ -541,10 +541,6 @@ export function DashboardShell({ company: initialCompany, tasks: initialTasks, d
                 <PromoVideoPanel
                   videos={promoVideos}
                   onCreate={() => setPromoVideoOpen(true)}
-                  onApproved={(job) => {
-                    setPromoVideos(prev => [job, ...prev.filter(item => item.id !== job.id)]);
-                    void refreshDashboard();
-                  }}
                 />
               </div>
 

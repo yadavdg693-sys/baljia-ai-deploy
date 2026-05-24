@@ -7,12 +7,15 @@ describe('engineering tool domain registry', () => {
     expect(names).toContain('github_create_commit');
     expect(names).toContain('render_deploy');
     expect(names).toContain('verify_browser_ui');
+    expect(names).toContain('verify_release');
     expect(names).toContain('query_code_graph');
     expect(names).toContain('stripe_create_payment_link');
     expect(names).toContain('github_fork_skeleton');
+    expect(names).toContain('ensure_founder_app_instance');
 
     expect(getEngineeringToolDomain('github_create_commit')).toBe('github');
     expect(getEngineeringToolDomain('render_deploy')).toBe('render');
     expect(getEngineeringToolDomain('query_code_graph')).toBe('codegraph');
+    expect(getEngineeringToolDomain('verify_release')).toBe('verification');
   });
 });

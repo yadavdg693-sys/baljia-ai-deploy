@@ -14,7 +14,7 @@ export type BillingState = 'free' | 'trial' | 'active' | 'past_due' | 'cancelled
 export type HostingState = 'live' | 'suspended' | 'archived';
 
 export type TaskStatus = 'todo' | 'in_progress' | 'verifying' | 'completed' | 'failed' | 'failed_permanent' | 'rejected' | 'blocked_pre_start' | 'blocked_in_run' | 'repair';
-export type TaskSource = 'founder_requested' | 'ceo_suggested' | 'night_shift_generated' | 'auto_remediation' | 'recurring' | 'onboarding';
+export type TaskSource = 'founder_requested' | 'ceo_suggested' | 'ceo_rolling_plan' | 'night_shift_generated' | 'auto_remediation' | 'recurring' | 'onboarding';
 export type ExecutabilityType = 'can_run_now' | 'needs_new_connection' | 'manual_task';
 export type ExecutionMode = 'deterministic' | 'template_plus_params' | 'full_agent';
 export type VerificationLevel = 'none' | 'deterministic' | 'browser_flow' | 'quality_review' | 'hybrid';
@@ -228,7 +228,7 @@ export type PromoVideoDuration = 15 | 30 | 60 | 90;
 export type PromoVideoAspectRatio = '9:16' | '16:9' | '1:1';
 export type PromoVideoStyle = 'product_demo' | 'clean_saas' | 'cinematic_ui';
 export type PromoVideoVisualMode = 'actual_site' | 'cinematic';
-export type PromoVideoVoiceMode = 'deepgram' | 'founder_avatar';
+export type PromoVideoVoiceMode = 'deepgram' | 'supertonic' | 'founder_avatar';
 export type PromoVideoStatus =
   | 'queued'
   | 'capturing'
@@ -834,6 +834,17 @@ export type ChatAction =
   | {
       type: 'document_updated';
       data: { doc_type: unknown };
+    }
+  | {
+      type: 'pending_plan_confirmation';
+      data: {
+        plan_id: string;
+        product_name: string;
+        one_liner: string;
+        task_count: number;
+        queue_limit: number;
+        button_label: string;
+      };
     };
 
 /** Founder-facing task proposal (no internal execution details) */

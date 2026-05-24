@@ -58,6 +58,7 @@ const visualModes: Array<{ value: PromoVideoVisualMode; label: string }> = [
 ];
 
 const voiceModes: Array<{ value: PromoVideoVoiceMode; label: string }> = [
+  { value: 'supertonic', label: 'Supertonic voice' },
   { value: 'deepgram', label: 'Deepgram voice' },
   { value: 'founder_avatar', label: 'Founder avatar voice' },
 ];
@@ -80,7 +81,7 @@ export function PromoVideoDialog({
   const [aspectRatio, setAspectRatio] = useState<PromoVideoAspectRatio>('9:16');
   const [style, setStyle] = useState<PromoVideoStyle>('product_demo');
   const [visualMode, setVisualMode] = useState<PromoVideoVisualMode>('cinematic');
-  const [voiceMode, setVoiceMode] = useState<PromoVideoVoiceMode>('deepgram');
+  const [voiceMode, setVoiceMode] = useState<PromoVideoVoiceMode>('supertonic');
   const [cta, setCta] = useState(defaultCta);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -93,7 +94,7 @@ export function PromoVideoDialog({
     setAspectRatio('9:16');
     setStyle('product_demo');
     setVisualMode('cinematic');
-    setVoiceMode('deepgram');
+    setVoiceMode('supertonic');
     setCta(defaultCta);
     setError(null);
   };
@@ -110,7 +111,7 @@ export function PromoVideoDialog({
       setAspectRatio('16:9');
       setStyle('product_demo');
       setVisualMode('actual_site');
-      setVoiceMode('deepgram');
+      setVoiceMode('supertonic');
       setCta(defaultCta || 'Try it on Product Hunt');
     }
   };

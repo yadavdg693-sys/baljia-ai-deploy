@@ -1,13 +1,11 @@
 'use client';
 
-import { CheckCircle2, ExternalLink, Film, Loader2, PlayCircle } from 'lucide-react';
-import { useState } from 'react';
+import { Download, Film, PlayCircle } from 'lucide-react';
 import type { PromoVideoJob, PromoVideoStatus } from '@/types';
 
 interface PromoVideoPanelProps {
   videos: PromoVideoJob[];
   onCreate: () => void;
-  onApproved?: (job: PromoVideoJob) => void;
 }
 
 const statusLabels: Record<PromoVideoStatus, string> = {
@@ -51,31 +49,8 @@ function formatTokens(value: number): string {
   return `${value}`;
 }
 
-export function PromoVideoPanel({ videos, onCreate, onApproved }: PromoVideoPanelProps) {
+export function PromoVideoPanel({ videos, onCreate }: PromoVideoPanelProps) {
   const latest = videos.slice(0, 3);
-  const [approvingId, setApprovingId] = useState<string | null>(null);
-  const [errorById, setErrorById] = useState<Record<string, string>>({});
-
-  const approve = async (video: PromoVideoJob) => {
-    if (approvingId) return;
-    setApprovingId(video.id);
-    setErrorById((prev) => ({ ...prev, [video.id]: '' }));
-    try {
-      const response = await fetch(`/api/promo-videos/${video.id}/approve`, { method: 'POST' });
-      const payload = await response.json().catch(() => null) as { job?: PromoVideoJob; error?: string } | null;
-      if (!response.ok || !payload?.job) {
-        throw new Error(payload?.error ?? 'Could not approve this preview.');
-      }
-      onApproved?.(payload.job);
-    } catch (error) {
-      setErrorById((prev) => ({
-        ...prev,
-        [video.id]: error instanceof Error ? error.message : 'Could not approve this preview.',
-      }));
-    } finally {
-      setApprovingId(null);
-    }
-  };
 
   return (
     <div className="grid gap-3">
@@ -101,9 +76,9 @@ export function PromoVideoPanel({ videos, onCreate, onApproved }: PromoVideoPane
 
       {latest.map((video) => (
         <div key={video.id} className="overflow-hidden rounded-[10px] border border-border-default bg-surface-secondary shadow-sm">
-          {(video.status === 'ready' && video.output_url) || (video.status === 'preview_ready' && video.preview_url) ? (
+          {video.status === 'ready' && video.output_url ? (
             <video
-              src={video.status === 'preview_ready' ? video.preview_url ?? undefined : video.output_url ?? undefined}
+              src={video.output_url ?? undefined}
               poster={video.thumbnail_url ?? undefined}
               controls
               preload="metadata"
@@ -138,32 +113,19 @@ export function PromoVideoPanel({ videos, onCreate, onApproved }: PromoVideoPane
             {video.status === 'failed' && video.error_message && (
               <p className="text-xs leading-relaxed text-red-400">{video.error_message}</p>
             )}
-            {errorById[video.id] && (
-              <p className="text-xs leading-relaxed text-red-400">{errorById[video.id]}</p>
-            )}
-            {video.status === 'preview_ready' && (
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => void approve(video)}
-                  disabled={approvingId === video.id}
-                  className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-baljia-gold px-3 py-1.5 text-xs font-bold text-surface-primary transition-colors hover:bg-baljia-gold-light disabled:cursor-not-allowed disabled:opacity-70"
-                >
-                  {approvingId === video.id ? <Loader2 size={13} className="animate-spin" aria-hidden="true" /> : <CheckCircle2 size={13} aria-hidden="true" />}
-                  Approve final
-                </button>
-              </div>
-            )}
             {video.status === 'ready' && video.output_url && (
               <a
-                href={video.output_url}
-                target="_blank"
-                rel="noopener noreferrer"
+                href={`/api/promo-videos/${video.id}/download`}
                 className="inline-flex w-fit items-center gap-1.5 text-xs font-bold text-baljia-gold hover:text-baljia-gold-light"
               >
-                <ExternalLink size={13} aria-hidden="true" />
-                Open final video
+                <Download size={13} aria-hidden="true" />
+                Download final video
               </a>
+            )}
+            {video.status !== 'ready' && (
+              <p className="text-xs leading-relaxed text-text-muted">
+                Final link will appear here when rendering is complete.
+              </p>
             )}
           </div>
         </div>

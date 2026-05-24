@@ -21,8 +21,15 @@ const originalIdea = process.env.PROMO_ORIGINAL_IDEA ||
   'Customers browse AI experts, choose available time slots, book sessions, subscribe to ongoing mentorship, and vendors track listings, availability, and payouts.';
 const visualMode = process.env.PROMO_VISUAL_MODE === 'actual_site' ? 'actual_site' : 'cinematic';
 const visualModeLabel = visualMode === 'actual_site' ? 'Actual site demo' : 'Cinematic promo';
-const voiceMode = process.env.PROMO_VOICE_MODE === 'founder_avatar' ? 'founder_avatar' : 'deepgram';
-const voiceModeLabel = voiceMode === 'founder_avatar' ? 'Founder avatar voice' : 'Deepgram voice';
+const requestedVoiceMode = process.env.PROMO_VOICE_MODE?.trim().toLowerCase();
+const voiceMode = requestedVoiceMode === 'supertonic' || requestedVoiceMode === 'founder_avatar'
+  ? requestedVoiceMode
+  : 'deepgram';
+const voiceModeLabel = voiceMode === 'supertonic'
+  ? 'Supertonic voice'
+  : voiceMode === 'founder_avatar'
+    ? 'Founder avatar voice'
+    : 'Deepgram voice';
 const goal = process.env.PROMO_GOAL === 'product_hunt' ? 'product_hunt' : 'demo';
 const goalLabel = goal === 'product_hunt' ? 'Product Hunt launch' : 'Show product demo';
 

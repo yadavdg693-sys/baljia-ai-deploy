@@ -30,6 +30,7 @@ const log = createLogger('CEO.Tools');
 export interface ToolResult {
   content: string;
   action?: ChatAction;
+  actions?: ChatAction[];
 }
 
 export async function handleToolCall(
@@ -52,6 +53,7 @@ export async function handleToolCall(
     case 'finalize_task_draft': return handleFinalizeTaskDraft(toolInput, companyId);
     case 'discard_task_draft': return handleDiscardTaskDraft(toolInput, companyId);
     case 'create_task': return handleCreateTask(toolInput, companyId);
+    case 'create_tasks': return handleCreateTasks(toolInput, companyId);
     case 'reject_task': return handleRejectTask(toolInput, companyId);
     case 'get_task_details': return handleGetTaskDetails(toolInput, companyId);
     case 'edit_task': return handleEditTask(toolInput, companyId);
@@ -147,7 +149,7 @@ function handleGetModuleCapabilities(input: Record<string, unknown>): ToolResult
   if (!agent) return { content: `Module "${input.module_name}" not found. Use list_available_modules to see options.` };
 
   const details: Record<number, { can: string[]; cant: string[]; tools: string[] }> = {
-    30: { can: ['Build landing pages/dashboards', 'Fix bugs', 'Create APIs/webhooks', 'Set up payments', 'Deploy to Render', 'Database provisioning/migrations', 'Health checks post-deploy', 'Rollback failed deploys', 'Git commits and PRs', 'Stripe integration'], cant: ['Automated testing', 'Browser QA', 'Web search', 'Load testing'], tools: ['github_create_repo','github_push_file','github_read_file','github_list_files','github_delete_file','github_create_branch','github_create_pr','github_search_code','github_create_commit','render_create_service','render_deploy','render_get_service','render_get_deploy_status','render_get_logs','render_delete_service','render_list_services','render_get_metrics','render_list_databases','render_rollback','check_url_health','get_company_tech','attach_custom_domain','verify_custom_domain','provision_database','get_database_info','run_migration','query_company_db','stripe_create_product','stripe_create_price','stripe_create_payment_link','stripe_get_products'] },
+    30: { can: ['Build landing pages/dashboards', 'Fix bugs', 'Create APIs/webhooks', 'Set up payments', 'Deploy to Render', 'Canonical app instance provisioning', 'Database provisioning/migrations', 'Health checks post-deploy', 'Rollback failed deploys', 'Git commits and PRs', 'Stripe integration'], cant: ['Automated testing', 'Browser QA', 'Web search', 'Load testing'], tools: ['create_instance','github_create_repo','github_push_file','github_read_file','github_list_files','github_delete_file','github_create_branch','github_create_pr','github_search_code','github_create_commit','render_create_service','render_deploy','render_get_service','render_get_deploy_status','render_get_logs','render_delete_service','render_list_services','render_get_metrics','render_list_databases','render_rollback','check_url_health','get_company_tech','attach_custom_domain','verify_custom_domain','provision_database','get_database_info','run_migration','query_company_db','stripe_create_product','stripe_create_price','stripe_create_payment_link','stripe_get_products'] },
     42: { can: ['Navigate websites', 'Fill forms', 'Take screenshots', 'Extract data', 'Account signup', 'Password generation', 'Credential management', 'Verification email polling', 'Browser context reuse', 'Site memory across tasks', 'Provider bootstrap packs (OpenAI/Stripe/etc signup recipes)', 'OCR for canvas/image/PDF text', 'Send mail from company inbox', 'Cheap HTTP fetch (skip Browserbase for APIs)', 'Save + search contacts'], cant: ['2FA automation', 'Desktop apps', 'Multi-tab research'], tools: ['browser_navigate','browser_screenshot','browser_click','browser_fill','browser_extract','browser_get_content','browser_evaluate','get_site_tier','save_credentials','get_credentials','generate_password','get_company_email','check_verification_inbox','verify_credentials','list_stored_credentials','list_browser_contexts','delete_browser_context','record_domain_skill','read_domain_skills','list_provider_packs','start_provider_pack','ocr_current_page','ocr_click_text','ocr_image','get_inbox','get_email_thread','wait_for_email','send_company_email','http_fetch','add_contact','get_contacts'] },
     29: { can: ['Web search (Tavily)', 'Competitor analysis', 'Industry trends', 'Market research'], cant: ['Interactive browsing', 'Account creation', 'Real-time data'], tools: ['web_search', 'web_extract', 'competitor_analysis', 'industry_trends'] },
     33: { can: ['SQL queries', 'Schema inspection', 'Metrics collection', 'Trend analysis', 'Founder app health checks (status / list services / preview URL)'], cant: ['Write/modify data', 'Infrastructure changes'], tools: ['query_database', 'inspect_schema', 'get_metrics', 'analyze_trends', 'query_company_db', 'get_database_info', 'get_company_tech', 'render_get_logs', 'get_service_status', 'list_company_services', 'get_preview_url'] },
@@ -313,7 +315,9 @@ function inferPromoVideoOptions(title: string, description: string): InferredPro
       : /\bcinematic\b/.test(text) && !wantsActualSite ? 'cinematic_ui'
         : 'product_demo',
     visual_mode: wantsActualSite || /\bproduct\s*hunt|producthunt|\bph\s+launch\b/.test(text) ? 'actual_site' : 'cinematic',
-    voice_mode: /\b(founder avatar|avatar voice|my voice|founder voice)\b/.test(text) ? 'founder_avatar' : 'deepgram',
+    voice_mode: /\b(supertonic|supertone)\b/.test(text) ? 'supertonic'
+      : /\b(founder avatar|avatar voice|my voice|founder voice)\b/.test(text) ? 'founder_avatar'
+        : 'deepgram',
   };
 }
 
@@ -349,6 +353,7 @@ async function handleCreateTask(input: Record<string, unknown>, companyId: strin
   const tag = input.tag as string;
   const executionContract = input.execution_contract as Record<string, unknown> | undefined;
   const relatedTaskIds = (input.related_task_ids as string[] | undefined) ?? [];
+  const source = input.source === 'ceo_rolling_plan' ? 'ceo_rolling_plan' : 'ceo_suggested';
   // Complexity 1-10. CEO must pass this; clamp into range and default to 5 if missing.
   const rawComplexity = typeof input.complexity === 'number' ? input.complexity : 5;
   const complexity = Math.max(1, Math.min(10, Math.round(rawComplexity)));
@@ -411,7 +416,7 @@ async function handleCreateTask(input: Record<string, unknown>, companyId: strin
     title,
     description,
     tag,
-    source: 'ceo_suggested',
+    source,
     execution_mode: decision.execution_mode,
     assigned_to_agent_id: agentId,
     execution_contract: executionContract,
@@ -428,7 +433,7 @@ async function handleCreateTask(input: Record<string, unknown>, companyId: strin
   const task = await taskService.createTask({
     company_id: companyId, title, description, tag,
     priority,
-    source: 'ceo_suggested',
+    source,
     execution_mode: decision.execution_mode,
     verification_level: decision.verification_level,
     assigned_to_agent_id: agentId,
@@ -447,7 +452,7 @@ async function handleCreateTask(input: Record<string, unknown>, companyId: strin
     : null;
 
   await eventService.emit(companyId, 'task_created', {
-    task_id: task.id, title: task.title, tag: task.tag, source: 'ceo_suggested', promo_video_job_id: promoVideoJobId,
+    task_id: task.id, title: task.title, tag: task.tag, source, promo_video_job_id: promoVideoJobId,
   });
 
   // Step 5 — Return clean confirmation with run link
@@ -478,6 +483,85 @@ async function handleCreateTask(input: Record<string, unknown>, companyId: strin
         agent_name: agentName, run_link: runLink,
       },
     },
+  };
+}
+
+function getTaskActions(result: ToolResult): ChatAction[] {
+  return [
+    ...(result.action ? [result.action] : []),
+    ...(result.actions ?? []),
+  ];
+}
+
+function inputTitle(input: Record<string, unknown>, fallback: string): string {
+  return typeof input.title === 'string' && input.title.trim() ? input.title.trim() : fallback;
+}
+
+async function handleCreateTasks(input: Record<string, unknown>, companyId: string): Promise<ToolResult> {
+  const rawTasks = Array.isArray(input.tasks) ? input.tasks : [];
+  const taskInputs = rawTasks.filter((item): item is Record<string, unknown> =>
+    Boolean(item) && typeof item === 'object' && !Array.isArray(item)
+  );
+
+  if (taskInputs.length === 0) {
+    return {
+      content: 'create_tasks needs a non-empty tasks array. Each item follows the create_task schema and must stay within the 4-hour task cap.',
+    };
+  }
+
+  if (taskInputs.length > 12) {
+    return {
+      content: 'create_tasks accepts at most 12 tasks at once. Split larger plans into smaller batches so the queue stays reviewable.',
+    };
+  }
+
+  const actions: ChatAction[] = [];
+  const createdLines: string[] = [];
+  const blockedLines: string[] = [];
+  const createdIdsByIndex = new Map<number, string>();
+
+  for (let i = 0; i < taskInputs.length; i++) {
+    const taskInput = taskInputs[i];
+    const existingRelatedIds = Array.isArray(taskInput.related_task_ids)
+      ? taskInput.related_task_ids.filter((id): id is string => typeof id === 'string' && Boolean(id.trim()))
+      : [];
+    const indexedRelatedIds = Array.isArray(taskInput.depends_on_indexes)
+      ? taskInput.depends_on_indexes
+          .filter((index): index is number => typeof index === 'number' && Number.isInteger(index))
+          .map((index) => createdIdsByIndex.get(index))
+          .filter((id): id is string => Boolean(id))
+      : [];
+    const result = await handleCreateTask({
+      ...taskInput,
+      related_task_ids: [...new Set([...existingRelatedIds, ...indexedRelatedIds])],
+    }, companyId);
+    const taskActions = getTaskActions(result);
+
+    if (taskActions.length === 0) {
+      blockedLines.push(`- ${inputTitle(taskInput, `Task ${i + 1}`)}: ${result.content.slice(0, 260)}`);
+      continue;
+    }
+
+    actions.push(...taskActions);
+    for (const action of taskActions) {
+      if (action.type === 'task_proposal') {
+        createdIdsByIndex.set(i + 1, action.data.task_id);
+        createdLines.push(`- [${action.data.task_id}] ${action.data.title} (${action.data.tag})`);
+      }
+    }
+  }
+
+  const sections: string[] = [];
+  if (createdLines.length > 0) {
+    sections.push(`Created ${createdLines.length} tasks:\n${createdLines.join('\n')}`);
+  }
+  if (blockedLines.length > 0) {
+    sections.push(`Blocked ${blockedLines.length} tasks:\n${blockedLines.join('\n')}`);
+  }
+
+  return {
+    content: sections.join('\n\n') || 'No tasks were created.',
+    actions: actions.length > 0 ? actions : undefined,
   };
 }
 

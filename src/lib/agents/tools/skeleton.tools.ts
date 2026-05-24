@@ -5,6 +5,7 @@ export const skeletonToolDomain: EngineeringToolDomain = {
   toolNames: [
     'fork_express_skeleton',
     'github_fork_skeleton',
+    'ensure_founder_app_instance',
     'create_instance',
     'get_preview',
   ],

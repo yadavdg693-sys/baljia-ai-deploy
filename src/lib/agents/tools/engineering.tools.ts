@@ -70,6 +70,7 @@ import {
   matchReferenceRepos,
   retrieveComponentExamples,
 } from '@/lib/agents/reference-pattern-registry';
+import { BALJIA_RUNTIME_VERSION, signRuntimeToken } from '@/lib/runtime/runtime.service';
 export { ENGINEERING_TOOL_DOMAINS, getEngineeringToolDomain, getRegisteredEngineeringToolNames } from './engineering.registry';
 
 const log = createLogger('EngineeringTools');
@@ -463,7 +464,7 @@ export function getEngineeringTools(): EngineeringToolDefinition[] {
     },
     {
       name: 'render_set_env_vars',
-      description: 'Update environment variables on an EXISTING Render service. Use when render_get_logs shows missing env vars (e.g. "AI_GATEWAY_TOKEN not set", "DATABASE_URL undefined") or when the app needs new credentials. Each key in `env_vars` is created if missing or replaced if present. Triggers an automatic redeploy on Render. Do NOT use for first-time service creation — pass env_vars directly to render_create_service instead. This tool cannot change Render service config: BUILD_COMMAND, START_COMMAND, runtime, plan, root directory, and health check path are rejected because Render does not treat them as env vars.',
+      description: 'Update environment variables on an EXISTING Render service. Use when render_get_logs shows missing env vars (e.g. "AI_GATEWAY_TOKEN not set", "DATABASE_URL undefined") or when the app needs new credentials. Each key in `env_vars` is created if missing or replaced if present. Triggers an automatic redeploy on Render. Do NOT use for first-time service creation: pass env_vars to create_instance for full-stack Next.js apps, or directly to render_create_service only for backend/manual Render paths. This tool cannot change Render service config: BUILD_COMMAND, START_COMMAND, runtime, plan, root directory, and health check path are rejected because Render does not treat them as env vars.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -543,6 +544,22 @@ export function getEngineeringTools(): EngineeringToolDefinition[] {
           screenshot_label: { type: 'string' as const, description: 'Optional screenshot label for saved evidence.' },
         },
         required: ['url'],
+      },
+    },
+    {
+      name: 'verify_release',
+      description: 'Batch release verification for founder apps. Runs Render deploy/log checks, URL health, optional user journeys, optional DB assertions, optional browser UI assertions, static scan, and final Baljia domain proof. Use after deploy; it returns VERIFY_RELEASE_PASS/FAIL plus one structured blocker checklist.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          companyId: { type: 'string' as const, description: 'Company id for audit context. Must match this task company.' },
+          renderUrl: { type: 'string' as const, description: 'Render URL used for build/debug verification.' },
+          baljiaUrl: { type: 'string' as const, description: 'Final founder-facing https://<slug>.baljia.app URL.' },
+          journeys: { type: 'array' as const, description: 'Optional verify_user_journey payloads.', items: { type: 'object' as const } },
+          dbAssertions: { type: 'array' as const, description: 'Optional verify_db_state payloads.', items: { type: 'object' as const } },
+          uiAssertions: { type: 'array' as const, description: 'Optional verify_browser_ui payloads.', items: { type: 'object' as const } },
+        },
+        required: ['renderUrl', 'baljiaUrl'],
       },
     },
     {
@@ -723,7 +740,7 @@ export function getEngineeringTools(): EngineeringToolDefinition[] {
     },
     {
       name: 'review_pushed_code',
-      description: 'Run an LLM-based code review over the full diff produced by this task (from the first commit in this run through HEAD; falls back to latest commit vs parent if no task commit range is available). Catches semantic bugs that runtime journey verification cannot see by definition: unhandled async errors, auth bypass, SQL injection, secrets in logs, silent catch blocks, race conditions. Returns structured findings with severity (high/medium/low). Costs one Haiku LLM call (~3-15s, $0.01-0.05) per build. Call AFTER github_create_commit/github_push_file and AFTER static_code_scan, BEFORE render_create_service. Address all HIGH-severity findings via github_create_commit before declaring complete; medium/low are advisory.',
+      description: 'Run an LLM-based code review over the full diff produced by this task (from the first commit in this run through HEAD; falls back to latest commit vs parent if no task commit range is available). Catches semantic bugs that runtime journey verification cannot see by definition: unhandled async errors, auth bypass, SQL injection, secrets in logs, silent catch blocks, race conditions. Returns structured findings with severity (high/medium/low). Costs one Haiku LLM call (~3-15s, $0.01-0.05) per build. Call AFTER github_create_commit/github_push_file and AFTER static_code_scan, BEFORE render_deploy or a manual render_create_service fallback. Address all HIGH-severity findings via github_create_commit before declaring complete; medium/low are advisory.',
       input_schema: {
         type: 'object' as const,
         properties: {},
@@ -731,7 +748,7 @@ export function getEngineeringTools(): EngineeringToolDefinition[] {
     },
     {
       name: 'static_code_scan',
-      description: 'Run a fast pattern-based static scan over the JS/TS files in the company\'s GitHub repo. Catches AI-coding pitfalls that runtime journey verification cannot see by definition: process.env reads outside CONFIG_SCHEMA, silent catch blocks, secret-shaped vars in log statements, app.use(session) without trust-proxy, hardcoded test emails leaked from journey runs, template-literal SQL (injection risk), TODO/FIXME in committed code. Returns a structured list of findings with severity (high/medium/low). Call this AFTER github_create_commit and BEFORE render_create_service. Address all HIGH-severity findings via github_create_commit before declaring complete; medium/low are advisory.',
+      description: 'Run a fast pattern-based static scan over the JS/TS files in the company\'s GitHub repo. Catches AI-coding pitfalls that runtime journey verification cannot see by definition: process.env reads outside CONFIG_SCHEMA, silent catch blocks, secret-shaped vars in log statements, app.use(session) without trust-proxy, hardcoded test emails leaked from journey runs, template-literal SQL (injection risk), TODO/FIXME in committed code. Returns a structured list of findings with severity (high/medium/low). Call this AFTER github_create_commit and BEFORE render_deploy or a manual render_create_service fallback. Address all HIGH-severity findings via github_create_commit before declaring complete; medium/low are advisory.',
       input_schema: {
         type: 'object' as const,
         properties: {},
@@ -1123,7 +1140,7 @@ export function getEngineeringTools(): EngineeringToolDefinition[] {
     // Ã¢â€â‚¬Ã¢â€â‚¬ Skeleton / Next.js SaaS build tools Ã¢â€â‚¬Ã¢â€â‚¬
     {
       name: 'fork_express_skeleton',
-      description: 'BACKEND-ONLY tool. Use ONLY for pure JSON-API services, webhooks, cron workers, or background processors with ZERO user-facing pages. Express + raw HTML cannot clear the Frontend Quality Bar. If the task involves ANY of: landing page, dashboard, chat UI, signup/login flow, founder-facing pages, end-user-facing routes, marketing surface — you MUST use github_fork_skeleton (Next.js + shadcn/ui + Tailwind 4) instead. Forking Express on a UI task will be rejected by the completion gate. Ships with: Zod env validation, trust proxy, Postgres sessions, /api/health, structured logging, withTimeout helper, discriminated-union responses, tests/ folder. All Backend Quality Bar P0 rules pre-wired. After forking: add feature-specific tables to db/schema.sql, customize routes via github_create_commit, call run_migration, then render_create_service.',
+      description: 'BACKEND-ONLY tool. Use ONLY for pure JSON-API services, webhooks, cron workers, or background processors with ZERO user-facing pages. Express + raw HTML cannot clear the Frontend Quality Bar. If the task involves ANY of: landing page, dashboard, chat UI, signup/login flow, founder-facing pages, end-user-facing routes, or marketing surface, use create_instance (Next.js + shadcn/ui + Tailwind 4 + canonical repo/DB/Render reuse) instead. Forking Express on a UI task will be rejected by the completion gate. Ships with: Zod env validation, trust proxy, Postgres sessions, /api/health, structured logging, withTimeout helper, discriminated-union responses, tests/ folder. All Backend Quality Bar P0 rules pre-wired. After forking: add feature-specific tables to db/schema.sql, customize routes via github_create_commit, call run_migration, then render_create_service.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -1186,7 +1203,7 @@ export function getEngineeringTools(): EngineeringToolDefinition[] {
     },
     {
       name: 'github_fork_skeleton',
-      description: 'Fork the Baljia Next.js SaaS skeleton into the company GitHub repo. This copies the full production-ready skeleton (Better Auth, Drizzle, Neon, AI gateway, Stripe, Shadcn/ui, Tailwind 4) into the founder\'s repo. Call this FIRST when building any full-stack SaaS Ã¢â‚¬â€ do not write Express or plain HTML from scratch. After forking, use github_push_file or github_create_commit to patch in feature-specific code.',
+      description: 'Lower-level Next.js skeleton hydrator used by create_instance. For full-stack SaaS build tasks, call create_instance first so the company repo, Neon DB, and Render service are reused. Use this directly only when explicitly repairing skeleton hydration; after hydrating, patch feature-specific code with github_push_file or github_create_commit.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -1209,8 +1226,29 @@ export function getEngineeringTools(): EngineeringToolDefinition[] {
     },
     // -- Atomic instance provisioning --
     {
+      name: 'ensure_founder_app_instance',
+      description: 'Public v2 instance tool. Reuses or hydrates the canonical company repo, reuses/provisions Neon, reuses/provisions Render, injects Baljia runtime env vars, and writes baljia.runtime.json plus local @baljia/* runtime modules. Use this FIRST for full-stack Next.js founder apps.',
+      input_schema: {
+        type: 'object' as const,
+        properties: {
+          companyId: { type: 'string' as const, description: 'Company id. Must match this task company.' },
+          capabilities: {
+            type: 'array' as const,
+            description: 'Runtime capabilities to enable, e.g. ["auth", "ai"].',
+            items: { type: 'string' as const },
+          },
+          preferredStack: {
+            type: 'string' as const,
+            enum: ['nextjs'],
+            description: 'Only "nextjs" is supported in v2.',
+          },
+        },
+        required: ['companyId', 'capabilities', 'preferredStack'],
+      },
+    },
+    {
       name: 'create_instance',
-      description: 'Atomic tool that does everything needed to launch a new full-stack SaaS in one call: forks the Next.js skeleton, provisions a Neon database, creates a Render web service, and saves the company tech record. Call this FIRST for any full-stack SaaS build instead of calling github_fork_skeleton + provision_database + render_create_service separately. Returns repo URL, database connection string, service URL, and next steps.',
+      description: 'Atomic tool that prepares a full-stack SaaS instance in one call. It reuses the company repo/Neon DB/Render service created during onboarding when present, hydrates the canonical slug repo with the Next.js skeleton when needed, and only provisions missing pieces. Call this FIRST for full-stack SaaS build tasks instead of manually creating duplicate repos/databases/services. Returns repo URL, database state, service URL, and next steps.',
       input_schema: {
         type: 'object' as const,
         properties: {
@@ -1268,7 +1306,7 @@ async function resolveServiceId(input: Record<string, unknown>, companyId: strin
   const [company] = await db.select({ render_service_id: companies.render_service_id })
     .from(companies).where(eq(companies.id, companyId)).limit(1);
   if (!company?.render_service_id) {
-    throw new Error('No render_service_id stored for this company. Call render_create_service first.');
+    throw new Error('No render_service_id stored for this company. Call create_instance for full-stack apps, or render_create_service for backend/manual Render paths.');
   }
   input.service_id = company.render_service_id;
 }
@@ -1332,7 +1370,7 @@ export async function handleEngineeringTool(
       return githubCreateRepo(input, task.company_id);
 
     case 'github_push_file':
-      return githubPushFile(input, task.company_id);
+      return githubPushFile(input, task.company_id, task);
 
     case 'github_read_file':
       return githubReadFile(input, task.company_id);
@@ -1341,7 +1379,7 @@ export async function handleEngineeringTool(
       return githubListFiles(input, task.company_id);
 
     case 'github_delete_file':
-      return githubDeleteFile(input, task.company_id);
+      return githubDeleteFile(input, task.company_id, task);
 
     // Ã¢â€â‚¬Ã¢â€â‚¬ Render deploys (primary founder app target) Ã¢â€â‚¬Ã¢â€â‚¬
     case 'render_create_service':
@@ -1437,6 +1475,8 @@ export async function handleEngineeringTool(
       return handleCheckUrlHealth(input);
     case 'verify_user_journey':
       return handleVerifyUserJourney(input);
+    case 'verify_release':
+      return handleVerifyRelease(input, task);
     case 'list_journey_templates':
       return handleListJourneyTemplates(input);
     case 'verify_db_state':
@@ -1501,7 +1541,7 @@ export async function handleEngineeringTool(
       return githubSearchCode(input, task.company_id);
 
     case 'github_create_commit':
-      return githubCreateCommit(input, task.company_id);
+      return githubCreateCommit(input, task.company_id, task);
 
     // Ã¢â€â‚¬Ã¢â€â‚¬ Skeleton / Next.js SaaS build tools Ã¢â€â‚¬Ã¢â€â‚¬
     case 'fork_express_skeleton':
@@ -1514,6 +1554,8 @@ export async function handleEngineeringTool(
       return handleRunDrizzlePush(input, task.company_id);
 
     // -- Atomic instance creation --
+    case 'ensure_founder_app_instance':
+      return handleEnsureFounderAppInstance(input, task.company_id, 'json');
     case 'create_instance':
       return handleCreateInstance(input, task.company_id);
 
@@ -1538,6 +1580,36 @@ function stringArrayFrom(input: Record<string, unknown>, ...keys: string[]): str
     if (value && value.length > 0) return value;
   }
   return undefined;
+}
+
+const PROTECTED_RUNTIME_PATH_PATTERNS = [
+  /^src\/baljia\//,
+  /^baljia\.runtime\.json$/,
+  /^src\/lib\/runtime-api-client\.(ts|tsx|js|jsx)$/,
+];
+
+function normalizeRepoPath(path: string): string {
+  return path.replace(/\\/g, '/').replace(/^\/+/, '');
+}
+
+function isProtectedRuntimePath(path: string): boolean {
+  const normalized = normalizeRepoPath(path);
+  if (normalized === 'tsconfig.json') return true;
+  return PROTECTED_RUNTIME_PATH_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+function taskAllowsRuntimeChange(task?: Task): boolean {
+  return task?.execution_contract?.runtime_change === true;
+}
+
+function protectedRuntimeFileBlocker(paths: string[], task?: Task): string | null {
+  const protectedPaths = paths.map(normalizeRepoPath).filter(isProtectedRuntimePath);
+  if (protectedPaths.length === 0 || taskAllowsRuntimeChange(task)) return null;
+  return [
+    'PROTECTED_RUNTIME_FILE_BLOCKED: attempted protected runtime file edit.',
+    `Protected runtime file(s): ${protectedPaths.join(', ')}`,
+    'Set execution_contract.runtime_change=true on the CEO execution contract only for explicit Baljia runtime work.',
+  ].join('\n');
 }
 
 function capabilityInput(input: Record<string, unknown>, task?: Task) {
@@ -2118,7 +2190,7 @@ async function assertRepoOwnership(repoInput: unknown, companyId: string, op: 'r
   const [company] = await db.select({ github_repo: companies.github_repo })
     .from(companies).where(eq(companies.id, companyId)).limit(1);
   if (!company?.github_repo) {
-    throw new Error(`No github_repo stored for this company yet. Call \`github_fork_skeleton\` first.`);
+    throw new Error(`No github_repo stored for this company yet. Call \`create_instance\` first for full-stack apps, or \`github_fork_skeleton\` only for explicit skeleton repair.`);
   }
   const owned = resolveRepo(company.github_repo);
   const explicitRepo = typeof repoInput === 'string' ? repoInput.trim() : '';
@@ -2139,6 +2211,7 @@ async function getCompanyTech(companyId: string): Promise<string> {
   const [company] = await db.select({
     github_repo: companies.github_repo, render_service_id: companies.render_service_id,
     neon_database_id: companies.neon_database_id, subdomain: companies.subdomain, name: companies.name,
+    design_system: companies.design_system,
   }).from(companies).where(eq(companies.id, companyId)).limit(1);
 
   if (!company) return 'Company not found';
@@ -2149,6 +2222,7 @@ async function getCompanyTech(companyId: string): Promise<string> {
     `Render service: ${company.render_service_id ?? 'Not created yet'}`,
     `Neon DB: ${company.neon_database_id ?? 'Not provisioned yet'}`,
     `Subdomain: ${company.subdomain ?? 'Not set'}`,
+    `Design system: ${company.design_system ?? 'Not selected yet'}`,
   ];
 
   return lines.join('\n');
@@ -2186,12 +2260,14 @@ async function githubCreateRepo(input: Record<string, unknown>, companyId: strin
   }
 }
 
-async function githubPushFile(input: Record<string, unknown>, companyId: string): Promise<string> {
+async function githubPushFile(input: Record<string, unknown>, companyId: string, task?: Task): Promise<string> {
   try {
     const headers = githubHeaders();
     const repo = await assertRepoOwnership(input.repo as string, companyId, 'write');
     const branch = (input.branch as string) ?? 'main';
     const path = input.path as string;
+    const runtimeBlocker = protectedRuntimeFileBlocker([path], task);
+    if (runtimeBlocker) return runtimeBlocker;
 
     // Validate content BEFORE the GitHub round-trip. When the LLM hits its
     // max_output_tokens cap mid-JSON, Anthropic returns a tool_use block with
@@ -2310,12 +2386,14 @@ async function githubListFiles(input: Record<string, unknown>, companyId: string
   }
 }
 
-async function githubDeleteFile(input: Record<string, unknown>, companyId: string): Promise<string> {
+async function githubDeleteFile(input: Record<string, unknown>, companyId: string, task?: Task): Promise<string> {
   try {
     const headers = githubHeaders();
     const repo = await assertRepoOwnership(input.repo as string, companyId, 'write');
     const branch = (input.branch as string) ?? 'main';
     const path = input.path as string;
+    const runtimeBlocker = protectedRuntimeFileBlocker([path], task);
+    if (runtimeBlocker) return runtimeBlocker;
 
     // Get SHA first
     const existingRes = await fetch(`${GITHUB_API}/repos/${repo}/contents/${path}?ref=${branch}`, { headers });
@@ -3201,6 +3279,9 @@ type BrowserActionCandidate = {
   title?: string | null;
   value?: string | null;
   href?: string | null;
+  disabled?: boolean | null;
+  tagName?: string | null;
+  type?: string | null;
 };
 
 export function normalizeBrowserActionLabels(candidates: BrowserActionCandidate[]): string[] {
@@ -3212,6 +3293,27 @@ export function normalizeBrowserActionLabels(candidates: BrowserActionCandidate[
     }
   }
   return [...labels];
+}
+
+export function browserActionCandidateIssues(candidate: BrowserActionCandidate): string[] {
+  const labels = normalizeBrowserActionLabels([candidate]);
+  const label = labels[0] ?? 'required action';
+  const combinedText = labels.join(' ');
+  const issues: string[] = [];
+  const tagName = String(candidate.tagName ?? '').toLowerCase();
+  const hrefPresent = candidate.href !== undefined && candidate.href !== null;
+  const href = String(candidate.href ?? '').trim().toLowerCase();
+  const isLinkLike = tagName === 'a' || hrefPresent;
+
+  if (candidate.disabled) issues.push(`${label}: disabled`);
+  if (isLinkLike && (href === '' || href === '#' || href.startsWith('javascript:'))) {
+    issues.push(`${label}: dead href`);
+  }
+  if (hasPlaceholderFlowSurface(combinedText)) {
+    issues.push(`${label}: placeholder/coming-soon action`);
+  }
+
+  return uniqueStrings(issues);
 }
 
 async function extractBrowserActionLabels(page: import('@playwright/test').Page): Promise<string[]> {
@@ -3230,6 +3332,8 @@ async function extractBrowserActionLabels(page: import('@playwright/test').Page)
     title: element.getAttribute('title'),
     value: element instanceof HTMLInputElement ? element.value : null,
     href: element instanceof HTMLAnchorElement ? element.href : null,
+    tagName: element.tagName,
+    type: element instanceof HTMLInputElement || element instanceof HTMLButtonElement ? element.type : null,
   }))).catch(() => []);
   return normalizeBrowserActionLabels(candidates);
 }
@@ -3254,6 +3358,8 @@ async function extractDeadRequiredActionIssues(
     title: element.getAttribute('title'),
     value: element instanceof HTMLInputElement ? element.value : null,
     href: element instanceof HTMLAnchorElement ? element.getAttribute('href') : null,
+    tagName: element.tagName,
+    type: element instanceof HTMLInputElement || element instanceof HTMLButtonElement ? element.type : null,
     disabled: element instanceof HTMLButtonElement || element instanceof HTMLInputElement
       ? element.disabled
       : element.getAttribute('aria-disabled') === 'true',
@@ -3265,12 +3371,7 @@ async function extractDeadRequiredActionIssues(
       normalizeBrowserActionLabels([candidate]).some((label) => browserPatternMatches(label, pattern))
     );
     for (const candidate of matching) {
-      const label = normalizeBrowserActionLabels([candidate])[0] ?? pattern;
-      const href = String(candidate.href ?? '').trim().toLowerCase();
-      const text = normalizeBrowserActionLabels([candidate]).join(' ');
-      if (candidate.disabled) issues.push(`${label}: disabled`);
-      if (href === '#' || href === '' || href.startsWith('javascript:')) issues.push(`${label}: dead href`);
-      if (hasPlaceholderFlowSurface(text)) issues.push(`${label}: placeholder/coming-soon action`);
+      issues.push(...browserActionCandidateIssues(candidate));
     }
   }
   return uniqueStrings(issues);
@@ -3873,6 +3974,52 @@ const DESIGN_DOMAIN_RULES: Array<{
   { test: /\b(luxury|premium|high-end|automotive|vehicle|real estate|property)\b/i, categories: ['Automotive', 'Professional & Corporate'], names: ['luxury', 'apple', 'bmw', 'tesla', 'airbnb'], reason: 'premium/luxury signal' },
 ];
 
+function isValidDesignSystemName(value: string): boolean {
+  return /^[a-z][a-z0-9-]*$/.test(value);
+}
+
+function requestsDesignSystemRefresh(input: Record<string, unknown>, task: Task): boolean {
+  if (optionalBoolean(input, 'allowDesignSystemChange') === true || optionalBoolean(input, 'allow_design_system_change') === true) {
+    return true;
+  }
+  const text = [
+    input.product_context,
+    input.title,
+    input.description,
+    input.design_intent,
+    task.title,
+    task.description,
+  ]
+    .filter((v): v is string => typeof v === 'string')
+    .join('\n');
+  return /\b(rebrand|brand refresh|new brand|change design system|replace design system|new design system|fresh design language|different design language)\b/i.test(text);
+}
+
+async function getCompanyDesignSystem(companyId: string): Promise<string | null> {
+  try {
+    const [company] = await db.select({ design_system: companies.design_system })
+      .from(companies)
+      .where(eq(companies.id, companyId))
+      .limit(1);
+    const value = typeof company?.design_system === 'string' ? company.design_system.trim().toLowerCase() : '';
+    return value && isValidDesignSystemName(value) ? value : null;
+  } catch (err) {
+    log.warn('Failed to read sticky company design system', { companyId, err });
+    return null;
+  }
+}
+
+async function persistCompanyDesignSystem(companyId: string, designSystem: string): Promise<void> {
+  if (!isValidDesignSystemName(designSystem)) return;
+  try {
+    await db.update(companies)
+      .set({ design_system: designSystem })
+      .where(eq(companies.id, companyId));
+  } catch (err) {
+    log.warn('Failed to persist sticky company design system', { companyId, designSystem, err });
+  }
+}
+
 function tokenizeDesignQuery(input: string): string[] {
   return input
     .toLowerCase()
@@ -3975,6 +4122,18 @@ export function matchDesignSystemsFromIndex(
 }
 
 async function matchDesignSystem(input: Record<string, unknown>, task: Task): Promise<string> {
+  const stickyDesignSystem = await getCompanyDesignSystem(task.company_id);
+  if (stickyDesignSystem && !requestsDesignSystemRefresh(input, task)) {
+    return [
+      `DESIGN_SYSTEM_MATCH_EVIDENCE selected=${stickyDesignSystem}`,
+      'DESIGN SYSTEM MATCHES: reused existing company design system.',
+      `Company design system is already set to "${stickyDesignSystem}". Continue this design language for visual consistency across tasks.`,
+      'To change it, the CEO task must explicitly request a rebrand/new design system or pass allow_design_system_change=true.',
+      '',
+      `Next: call get_design_system with name="${stickyDesignSystem}", then apply its conventions without copying the brand identity.`,
+    ].join('\n');
+  }
+
   const query = [
     input.product_context,
     input.title,
@@ -4004,6 +4163,7 @@ async function matchDesignSystem(input: Record<string, unknown>, task: Task): Pr
       ].join('\n');
     }
 
+    await persistCompanyDesignSystem(task.company_id, matches[0].entry.name);
     const lines = [
       `DESIGN_SYSTEM_MATCH_EVIDENCE selected=${matches[0].entry.name}`,
       'DESIGN SYSTEM MATCHES (vectorless RAG: category + keyword + domain-rule scoring)',
@@ -4072,7 +4232,7 @@ async function readComponent(input: Record<string, unknown>, companyId: string):
   const [company] = await db.select({ github_repo: companies.github_repo })
     .from(companies).where(eq(companies.id, companyId)).limit(1);
   if (!company?.github_repo) {
-    return 'Error: company has no github_repo set. Call get_company_tech first (and ensure github_fork_skeleton has been called).';
+    return 'Error: company has no github_repo set. Call get_company_tech first, then create_instance for full-stack apps.';
   }
 
   const path = `components/ui/${name}.tsx`;
@@ -4086,7 +4246,7 @@ async function readComponent(input: Record<string, unknown>, companyId: string):
       },
     });
     if (res.status === 404) {
-      return `Component "${name}" not found at ${path} in ${company.github_repo}. Call list_components to see what is available, or confirm github_fork_skeleton ran successfully on this repo.`;
+      return `Component "${name}" not found at ${path} in ${company.github_repo}. Call list_components to see what is available, or confirm create_instance hydrated the Next.js skeleton in this repo.`;
     }
     if (!res.ok) return `Error reading ${path}: HTTP ${res.status}`;
     const data = await res.json() as { content?: string; encoding?: string };
@@ -4107,7 +4267,7 @@ async function renderSetEnvVars(input: Record<string, unknown>): Promise<string>
     return [
       `Error: render_set_env_vars cannot update Render service config key(s): ${blockedConfigKeys.join(', ')}.`,
       'Those names are not runtime environment variables in Render; setting them only creates inert app env vars and does not change the service build/start command.',
-      `For first deploy, pass build_command to render_create_service. For the Next.js skeleton use: ${RENDER_NEXTJS_BUILD_COMMAND}`,
+      `For a fresh Next.js deploy, call create_instance so it applies the skeleton build/start config. Only pass build_command to render_create_service on backend-only deploys or when create_instance gave an explicit manual Render fallback. Next.js build command: ${RENDER_NEXTJS_BUILD_COMMAND}`,
       'For an existing service, call render_update_service_config with build_command, start_command, or health_check_path as needed.',
     ].filter(Boolean).join('\n');
   }
@@ -4787,7 +4947,7 @@ async function renderDeleteService(input: Record<string, unknown>, companyId: st
 
     log.warn('Render service deleted', { companyId, serviceId });
 
-    return `Ã¢Å¡Â Ã¯Â¸Â Service ${serviceId} permanently deleted. The company record has been updated. Use render_create_service to redeploy.`;
+    return `Service ${serviceId} permanently deleted. The company record has been updated. Use create_instance for full-stack apps, or render_create_service for backend/manual Render paths.`;
   } catch (err) {
     return `Delete error: ${err instanceof Error ? err.message : 'Unknown error'}`;
   }
@@ -5216,6 +5376,209 @@ async function handleVerifyDbState(input: Record<string, unknown>, companyId: st
 // agent fills in with concrete URLs / field names. Lifts the most common
 // flow patterns out of the agent's per-task generation so we get consistent
 // coverage and reduce token cost.
+type ReleaseCheck = {
+  name: string;
+  passed: boolean;
+  summary: string;
+};
+
+type ReleaseBlocker = {
+  check: string;
+  reason: string;
+};
+
+function urlWithTrailingSlash(url: string): string {
+  return url.endsWith('/') ? url : `${url}/`;
+}
+
+function optionalBoolean(input: Record<string, unknown>, key: string): boolean | undefined {
+  return typeof input[key] === 'boolean' ? input[key] : undefined;
+}
+
+function taskLooksUserFacingForRelease(task: Task): boolean {
+  const text = `${task.title ?? ''} ${task.description ?? ''}`;
+  if (/\b(api only|backend only|webhook|cron|worker|migration|database only|no ui|no frontend)\b/i.test(text)) {
+    return false;
+  }
+  return /\b(app|mvp|landing|homepage|dashboard|portal|frontend|front-end|ui|user-facing|auth|login|signup|register|page|website|marketplace|booking|crm|admin)\b/i.test(text);
+}
+
+function pushReleaseCheck(
+  checks: ReleaseCheck[],
+  blockers: ReleaseBlocker[],
+  name: string,
+  passed: boolean,
+  summary: string,
+) {
+  checks.push({ name, passed, summary });
+  if (!passed) blockers.push({ check: name, reason: summary });
+}
+
+async function handleVerifyRelease(input: Record<string, unknown>, task: Task): Promise<string> {
+  const inputCompanyId = typeof input.companyId === 'string' ? input.companyId : undefined;
+  if (inputCompanyId && inputCompanyId !== task.company_id) {
+    return 'VERIFY_RELEASE_FAIL ' + JSON.stringify({
+      passed: false,
+      selectedVerificationUrl: '',
+      finalFounderUrl: '',
+      checks: [],
+      blockers: [{ check: 'tenant', reason: 'companyId does not match this task' }],
+    });
+  }
+
+  const [company] = await db.select({
+    github_repo: companies.github_repo,
+    render_service_id: companies.render_service_id,
+    custom_domain: companies.custom_domain,
+    slug: companies.slug,
+  }).from(companies).where(eq(companies.id, task.company_id)).limit(1);
+
+  const renderUrl = urlWithTrailingSlash(String(input.renderUrl ?? input.render_url ?? '').trim());
+  const finalFounderUrl = urlWithTrailingSlash(String(
+    input.baljiaUrl
+      ?? input.baljia_url
+      ?? (company?.custom_domain ? `https://${company.custom_domain}` : company?.slug ? `https://${company.slug}.baljia.app` : '')
+  ).trim());
+  const serviceId = company?.render_service_id ?? '';
+  const checks: ReleaseCheck[] = [];
+  const blockers: ReleaseBlocker[] = [];
+  const releaseLooksUserFacing = taskLooksUserFacingForRelease(task);
+  const explicitUiProof = optionalBoolean(input, 'requireUiProof') ?? optionalBoolean(input, 'require_ui_proof');
+  const explicitDesignProof = optionalBoolean(input, 'requireDesignProof') ?? optionalBoolean(input, 'require_design_proof');
+  const requireUiProof = releaseLooksUserFacing ? true : explicitUiProof === true;
+  const requireDesignProof = releaseLooksUserFacing ? true : explicitDesignProof === true;
+
+  if (!renderUrl || renderUrl === '/') {
+    pushReleaseCheck(checks, blockers, 'render_url', false, 'renderUrl is required.');
+  }
+  if (!finalFounderUrl || finalFounderUrl === '/') {
+    pushReleaseCheck(checks, blockers, 'domain_url', false, 'baljiaUrl/final founder URL is required.');
+  }
+  if (!serviceId) {
+    pushReleaseCheck(checks, blockers, 'render_service', false, 'No Render service id is stored for this company.');
+  } else {
+    const deployStatus = await renderGetDeployStatus({
+      service_id: serviceId,
+      wait_for_terminal: true,
+      timeout_seconds: input.timeout_seconds ?? 30,
+      poll_interval_seconds: 10,
+    });
+    pushReleaseCheck(
+      checks,
+      blockers,
+      'render_deploy_status',
+      /status:\s*(live|succeeded|success|deployed)/i.test(deployStatus) && !/failed|error/i.test(deployStatus),
+      deployStatus,
+    );
+
+    const logs = await renderGetLogs({ service_id: serviceId, num_lines: 200 });
+    pushReleaseCheck(
+      checks,
+      blockers,
+      'render_logs',
+      !/error|exception|traceback|failed/i.test(logs),
+      logs.slice(0, 1000),
+    );
+  }
+
+  if (renderUrl && renderUrl !== '/') {
+    const health = await handleCheckUrlHealth({ url: renderUrl });
+    pushReleaseCheck(checks, blockers, 'render_url_health', /is UP|HTTP 2\d\d/i.test(health), health);
+  }
+
+  const journeys = Array.isArray(input.journeys) ? input.journeys as Record<string, unknown>[] : [];
+  for (const [index, journey] of journeys.entries()) {
+    const result = await handleVerifyUserJourney({
+      base_url: renderUrl,
+      ...journey,
+    });
+    pushReleaseCheck(checks, blockers, `journey_${index + 1}`, /^JOURNEY PASS\b/m.test(result), result);
+  }
+
+  const dbAssertions = Array.isArray(input.dbAssertions)
+    ? input.dbAssertions as Record<string, unknown>[]
+    : Array.isArray(input.db_assertions)
+      ? input.db_assertions as Record<string, unknown>[]
+      : [];
+  for (const [index, assertion] of dbAssertions.entries()) {
+    const result = await handleVerifyDbState(assertion, task.company_id);
+    pushReleaseCheck(checks, blockers, `db_assertion_${index + 1}`, /^DB STATE PASS\b/m.test(result), result);
+  }
+
+  const uiAssertions = Array.isArray(input.uiAssertions)
+    ? input.uiAssertions as Record<string, unknown>[]
+    : Array.isArray(input.ui_assertions)
+      ? input.ui_assertions as Record<string, unknown>[]
+      : [];
+  const browserAssertions = uiAssertions.length > 0
+    ? uiAssertions
+    : requireUiProof
+      ? [{ screenshot_label: 'verify-release-browser-ui' }]
+      : [];
+  for (const [index, assertion] of browserAssertions.entries()) {
+    const result = await verifyBrowserUi({
+      url: renderUrl,
+      ...assertion,
+    }, task);
+    pushReleaseCheck(checks, blockers, `browser_ui_${index + 1}`, /^BROWSER UI PASS\b/m.test(result), result);
+  }
+
+  if (requireDesignProof && renderUrl && renderUrl !== '/') {
+    const audit = await designAudit({ url: renderUrl });
+    pushReleaseCheck(
+      checks,
+      blockers,
+      'design_audit',
+      /design_audit CLEAN|0 findings/i.test(audit) && !/HIGH finding|HIGH and \d+ LOW/i.test(audit),
+      audit,
+    );
+
+    if (process.env.GEMINI_API_KEY) {
+      const { critiqueDesign } = await import('@/lib/services/design-critic.service');
+      const critique = await critiqueDesign(renderUrl);
+      pushReleaseCheck(
+        checks,
+        blockers,
+        'design_critique',
+        /design_critique CLEAN/i.test(critique) || (/0 blockers/i.test(critique) && !/\bBLOCKER\b/i.test(critique.replace(/0 blockers?/gi, ''))),
+        critique,
+      );
+    } else {
+      pushReleaseCheck(
+        checks,
+        blockers,
+        'design_critique',
+        true,
+        'design_critique skipped: GEMINI_API_KEY is not configured; deterministic design_audit is the enforced design proof for this run.',
+      );
+    }
+  }
+
+  const staticScan = await handleStaticCodeScan(task.company_id);
+  pushReleaseCheck(
+    checks,
+    blockers,
+    'static_scan',
+    /^STATIC SCAN PASS\b/m.test(staticScan),
+    staticScan,
+  );
+
+  if (finalFounderUrl && finalFounderUrl !== '/') {
+    const domainHealth = await handleCheckUrlHealth({ url: finalFounderUrl });
+    pushReleaseCheck(checks, blockers, 'baljia_domain_health', /is UP|HTTP 2\d\d/i.test(domainHealth), domainHealth);
+  }
+
+  const result = {
+    passed: blockers.length === 0,
+    selectedVerificationUrl: renderUrl.replace(/\/$/, ''),
+    finalFounderUrl: finalFounderUrl.replace(/\/$/, ''),
+    checks,
+    blockers,
+  };
+
+  return `${result.passed ? 'VERIFY_RELEASE_PASS' : 'VERIFY_RELEASE_FAIL'} ${JSON.stringify(result)}`;
+}
+
 function handleListJourneyTemplates(input: Record<string, unknown>): string {
   const which = ((input.template as string | undefined) ?? 'all').toLowerCase();
   const TEMPLATES: Record<string, { description: string; steps: Array<Record<string, unknown>>; substitute: string[] }> = {
@@ -5388,7 +5751,7 @@ async function handleAttachCustomDomain(input: Record<string, unknown>, companyI
   try {
     const result = await attachCustomDomain(companyId, domain);
     if (!result) {
-      return 'Failed to attach custom domain. Make sure a website has been deployed to Render first (use render_create_service).';
+      return 'Failed to attach custom domain. Make sure a website has been deployed to Render first (use create_instance or render_create_service).';
     }
 
     return [
@@ -5997,7 +6360,7 @@ async function renderListServices(_input: Record<string, unknown>, companyId: st
     const [company] = await db.select({ render_service_id: companies.render_service_id, name: companies.name })
       .from(companies).where(eq(companies.id, companyId)).limit(1);
     if (!company?.render_service_id) {
-      return 'No Render service provisioned for this company yet. Call render_create_service first.';
+      return 'No Render service provisioned for this company yet. Call create_instance for full-stack apps, or render_create_service for backend/manual Render paths.';
     }
     const headers = renderHeaders();
     const res = await fetch(`${RENDER_API}/services/${company.render_service_id}`, { headers });
@@ -6071,7 +6434,7 @@ async function githubSearchCode(input: Record<string, unknown>, companyId: strin
 
 // Ã¢â€â‚¬Ã¢â€â‚¬ GitHub: multi-file atomic commit via Git Trees API Ã¢â€â‚¬Ã¢â€â‚¬
 
-async function githubCreateCommit(input: Record<string, unknown>, companyId: string): Promise<string> {
+async function githubCreateCommit(input: Record<string, unknown>, companyId: string, task?: Task): Promise<string> {
   try {
     const headers = githubHeaders();
     const repo = await assertRepoOwnership(input.repo as string, companyId, 'write');
@@ -6086,6 +6449,8 @@ async function githubCreateCommit(input: Record<string, unknown>, companyId: str
     if (badFile) {
       return `github_create_commit error: one or more entries in \`files\` is missing \`path\` or \`content\` (the \`content\` field was likely truncated at the output token cap). Push the affected file individually with \`github_push_file\`, or shrink its content. Bad entry path="${(badFile as { path?: unknown })?.path ?? 'unknown'}".`;
     }
+    const runtimeBlocker = protectedRuntimeFileBlocker(files.map((f) => f.path), task);
+    if (runtimeBlocker) return runtimeBlocker;
 
     // Step 1: Get latest commit SHA on branch
     const refRes = await fetch(`${GITHUB_API}/repos/${repo}/git/ref/heads/${branch}`, { headers });
@@ -6136,6 +6501,64 @@ async function githubCreateCommit(input: Record<string, unknown>, companyId: str
 
 // Ã¢â€â‚¬Ã¢â€â‚¬ Render: list databases Ã¢â€â‚¬Ã¢â€â‚¬
 
+async function githubCommitFilesUnchecked(params: {
+  repo: string;
+  branch?: string;
+  message: string;
+  files: Array<{ path: string; content: string }>;
+}): Promise<{ ok: boolean; sha?: string; error?: string }> {
+  const headers = githubHeaders();
+  const branch = params.branch ?? 'main';
+
+  const refRes = await fetch(`${GITHUB_API}/repos/${params.repo}/git/ref/heads/${branch}`, { headers });
+  if (!refRes.ok) {
+    return { ok: false, error: `Could not get branch ref: ${(await refRes.json().catch(() => ({})) as { message?: string }).message ?? refRes.statusText}` };
+  }
+  const refData = await refRes.json() as { object: { sha: string } };
+  const latestCommitSha = refData.object.sha;
+
+  const commitRes = await fetch(`${GITHUB_API}/repos/${params.repo}/git/commits/${latestCommitSha}`, { headers });
+  if (!commitRes.ok) return { ok: false, error: `Could not get commit: ${commitRes.statusText}` };
+  const commitData = await commitRes.json() as { tree: { sha: string } };
+
+  const treeRes = await fetch(`${GITHUB_API}/repos/${params.repo}/git/trees`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      base_tree: commitData.tree.sha,
+      tree: params.files.map((file) => ({
+        path: file.path,
+        mode: '100644',
+        type: 'blob',
+        content: file.content,
+      })),
+    }),
+  });
+  if (!treeRes.ok) {
+    return { ok: false, error: `Could not create tree: ${(await treeRes.json().catch(() => ({})) as { message?: string }).message ?? treeRes.statusText}` };
+  }
+  const treeData = await treeRes.json() as { sha: string };
+
+  const newCommitRes = await fetch(`${GITHUB_API}/repos/${params.repo}/git/commits`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ message: params.message, tree: treeData.sha, parents: [latestCommitSha] }),
+  });
+  if (!newCommitRes.ok) {
+    return { ok: false, error: `Could not create commit: ${(await newCommitRes.json().catch(() => ({})) as { message?: string }).message ?? newCommitRes.statusText}` };
+  }
+  const newCommit = await newCommitRes.json() as { sha: string };
+
+  const updateRes = await fetch(`${GITHUB_API}/repos/${params.repo}/git/refs/heads/${branch}`, {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify({ sha: newCommit.sha }),
+  });
+  if (!updateRes.ok) return { ok: false, sha: newCommit.sha, error: `Branch update failed: ${updateRes.statusText}` };
+
+  return { ok: true, sha: newCommit.sha };
+}
+
 async function renderListDatabases(_input: Record<string, unknown>, companyId: string): Promise<string> {
   // Founder companies use Neon, not Render Postgres — list_databases on
   // Render returns the operator's account fleet which is irrelevant to the
@@ -6162,7 +6585,7 @@ const SKILLS_ROOT = join(process.cwd(), '.claude', 'skills');
  *  is renamed; the SKILL.md content itself doesn't need to be touched. */
 const SKILL_SUMMARIES: Record<string, string> = {
   'skeleton-nextjs':
-    'READ THIS FIRST for any full-stack SaaS. Clones the Baljia Next.js 15 skeleton (Better Auth, Drizzle, Neon, AI gateway, Stripe, Shadcn/ui). Users never provide their own API key Ã¢â‚¬â€ AI calls route through the Baljia gateway. Use github_fork_skeleton + run_drizzle_push instead of building from scratch.',
+    'READ THIS FIRST for any full-stack SaaS. The canonical path is create_instance: reuse or hydrate the company Next.js 15 skeleton repo, reuse/provision Neon, and reuse/provision Render. Users never provide their own API key; AI calls route through the Baljia gateway.',
   'render-infra':
     'MANDATORY before any Render deploy. Documents the /health endpoint, PORT binding, ephemeral filesystem rules, build/start commands, env var patterns, free plan limits, and deploy verification checklist.',
   'openai-proxy':
@@ -6243,6 +6666,146 @@ function handleReadSkill(input: Record<string, unknown>): string {
 
 const SKELETON_REPO = 'BALAJIapps/Balaji'; // master template repo
 
+async function githubRepoRootEntryNames(repoFullName: string, headers: Record<string, string>): Promise<string[] | null> {
+  const listRes = await fetch(`${GITHUB_API}/repos/${repoFullName}/contents/`, { headers });
+  if (listRes.status === 404 || listRes.status === 409) return [];
+  if (!listRes.ok) return null;
+  const entries = await listRes.json().catch(() => null) as Array<{ name?: string }> | null;
+  if (!Array.isArray(entries)) return null;
+  return entries.map((entry) => entry.name).filter((name): name is string => Boolean(name));
+}
+
+async function githubDefaultBranch(repoFullName: string, headers: Record<string, string>): Promise<string> {
+  const response = await fetch(`${GITHUB_API}/repos/${repoFullName}`, { headers });
+  const data = await response.json().catch(() => ({})) as { default_branch?: string };
+  return data.default_branch ?? 'main';
+}
+
+async function hydrateExistingRepoFromNextSkeleton(input: {
+  targetRepo: string;
+  description: string;
+  companyId: string;
+  headers: Record<string, string>;
+}): Promise<string> {
+  const { targetRepo, description, companyId, headers } = input;
+  const skeletonBranch = await githubDefaultBranch(SKELETON_REPO, headers);
+  const skeletonTreeRes = await fetch(`${GITHUB_API}/repos/${SKELETON_REPO}/git/trees/${skeletonBranch}?recursive=1`, { headers });
+  if (!skeletonTreeRes.ok) {
+    const data = await skeletonTreeRes.json().catch(() => ({})) as { message?: string };
+    return `Skeleton hydrate failed: could not read ${SKELETON_REPO} tree (${data.message ?? skeletonTreeRes.statusText}).`;
+  }
+  const skeletonTree = await skeletonTreeRes.json() as {
+    tree?: Array<{ path?: string; mode?: string; type?: string; sha?: string }>;
+  };
+  const blobs = (skeletonTree.tree ?? [])
+    .filter((item) => item.type === 'blob' && item.path && item.sha)
+    .map((item) => ({ path: item.path as string, mode: item.mode ?? '100644', sha: item.sha as string }));
+  if (blobs.length === 0) return `Skeleton hydrate failed: ${SKELETON_REPO} has no files to copy.`;
+
+  const targetItems: Array<{ path: string; mode: string; type: 'blob'; sha: string }> = [];
+  for (const blob of blobs) {
+    const sourceBlobRes = await fetch(`${GITHUB_API}/repos/${SKELETON_REPO}/git/blobs/${blob.sha}`, { headers });
+    if (!sourceBlobRes.ok) {
+      const data = await sourceBlobRes.json().catch(() => ({})) as { message?: string };
+      return `Skeleton hydrate failed: could not read ${blob.path} from skeleton (${data.message ?? sourceBlobRes.statusText}).`;
+    }
+    const sourceBlob = await sourceBlobRes.json() as { content?: string; encoding?: string };
+    if (!sourceBlob.content || sourceBlob.encoding !== 'base64') {
+      return `Skeleton hydrate failed: ${blob.path} content was not available as base64.`;
+    }
+
+    const createBlobRes = await fetch(`${GITHUB_API}/repos/${targetRepo}/git/blobs`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        content: sourceBlob.content.replace(/\n/g, ''),
+        encoding: 'base64',
+      }),
+    });
+    if (!createBlobRes.ok) {
+      const data = await createBlobRes.json().catch(() => ({})) as { message?: string };
+      return `Skeleton hydrate failed: could not create ${blob.path} in ${targetRepo} (${data.message ?? createBlobRes.statusText}).`;
+    }
+    const createdBlob = await createBlobRes.json() as { sha?: string };
+    if (!createdBlob.sha) return `Skeleton hydrate failed: GitHub did not return a blob SHA for ${blob.path}.`;
+    targetItems.push({ path: blob.path, mode: blob.mode, type: 'blob', sha: createdBlob.sha });
+  }
+
+  const targetBranch = await githubDefaultBranch(targetRepo, headers);
+  const refRes = await fetch(`${GITHUB_API}/repos/${targetRepo}/git/ref/heads/${targetBranch}`, { headers });
+  if (!refRes.ok) {
+    const data = await refRes.json().catch(() => ({})) as { message?: string };
+    return `Skeleton hydrate failed: could not read ${targetRepo} ${targetBranch} ref (${data.message ?? refRes.statusText}).`;
+  }
+  const refData = await refRes.json() as { object?: { sha?: string } };
+  const baseCommitSha = refData.object?.sha;
+  if (!baseCommitSha) return `Skeleton hydrate failed: ${targetRepo} ${targetBranch} has no commit SHA.`;
+
+  const baseCommitRes = await fetch(`${GITHUB_API}/repos/${targetRepo}/git/commits/${baseCommitSha}`, { headers });
+  if (!baseCommitRes.ok) return `Skeleton hydrate failed: could not read base commit for ${targetRepo}.`;
+  const baseCommit = await baseCommitRes.json() as { tree?: { sha?: string } };
+  if (!baseCommit.tree?.sha) return `Skeleton hydrate failed: base commit for ${targetRepo} has no tree SHA.`;
+
+  const treeRes = await fetch(`${GITHUB_API}/repos/${targetRepo}/git/trees`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      base_tree: baseCommit.tree.sha,
+      tree: targetItems,
+    }),
+  });
+  if (!treeRes.ok) {
+    const data = await treeRes.json().catch(() => ({})) as { message?: string };
+    return `Skeleton hydrate failed: could not create target tree (${data.message ?? treeRes.statusText}).`;
+  }
+  const treeData = await treeRes.json() as { sha?: string };
+  if (!treeData.sha) return `Skeleton hydrate failed: GitHub did not return a target tree SHA.`;
+
+  const commitRes = await fetch(`${GITHUB_API}/repos/${targetRepo}/git/commits`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      message: `Hydrate Baljia Next.js skeleton\n\nCopied from ${SKELETON_REPO} for ${description}.`,
+      tree: treeData.sha,
+      parents: [baseCommitSha],
+    }),
+  });
+  if (!commitRes.ok) {
+    const data = await commitRes.json().catch(() => ({})) as { message?: string };
+    return `Skeleton hydrate failed: could not create commit (${data.message ?? commitRes.statusText}).`;
+  }
+  const commitData = await commitRes.json() as { sha?: string };
+  if (!commitData.sha) return `Skeleton hydrate failed: GitHub did not return a commit SHA.`;
+
+  const updateRefRes = await fetch(`${GITHUB_API}/repos/${targetRepo}/git/refs/heads/${targetBranch}`, {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify({ sha: commitData.sha }),
+  });
+  if (!updateRefRes.ok) {
+    const data = await updateRefRes.json().catch(() => ({})) as { message?: string };
+    return `Skeleton hydrate failed: commit ${commitData.sha.substring(0, 7)} created but branch update failed (${data.message ?? updateRefRes.statusText}).`;
+  }
+
+  await fetch(`${GITHUB_API}/repos/${targetRepo}`, {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify({ description }),
+  });
+  await db.update(companies)
+    .set({ github_repo: targetRepo })
+    .where(eq(companies.id, companyId));
+  const patchSummary = await patchForkedNextSkeletonKnownIssues(targetRepo)
+    .catch((err) => `storage patch skipped: ${err instanceof Error ? err.message : String(err)}`);
+
+  return [
+    `Next.js skeleton hydrated in existing repo ${targetRepo}.`,
+    `Commit: ${commitData.sha.substring(0, 7)} (${targetItems.length} files)`,
+    patchSummary ? `Known-issue patch: ${patchSummary}` : null,
+    `Next: use github_push_file to patch feature-specific files, then run_drizzle_push.`,
+  ].filter(Boolean).join('\n');
+}
+
 // ── Express skeleton fork (PRIMARY for Render-hosted founder apps) ──
 //
 // Reads the skeleton files from skeletons/express-render/ on the platform
@@ -6289,7 +6852,7 @@ async function handleForkExpressSkeleton(input: Record<string, unknown>, company
   }).from(companies).where(eq(companies.id, companyId)).limit(1);
   if (!company) return 'Error: company not found.';
   if (!company.github_repo) {
-    return 'Error: no GitHub repo on this company. Call render_create_service or the GitHub provisioning path first; the repo must exist before the skeleton can be pushed.';
+    return 'Error: no GitHub repo on this company. Call create_instance or set the company GitHub repo first; the repo must exist before the skeleton can be pushed.';
   }
   if (!company.slug) {
     return 'Error: company has no slug. Onboarding is incomplete; cannot derive subdomain.';
@@ -6417,15 +6980,38 @@ async function githubForkSkeleton(input: Record<string, unknown>, companyId: str
     // Step 1: Check if target repo already exists
     const existRes = await fetch(`${GITHUB_API}/repos/${targetRepo}`, { headers });
     if (existRes.ok) {
-      const patchSummary = await patchForkedNextSkeletonKnownIssues(targetRepo)
-        .catch((err) => `storage patch skipped: ${err instanceof Error ? err.message : String(err)}`);
-      return [
-        `Ã¢Å“â€¦ Repo ${targetRepo} already exists Ã¢â‚¬â€ skeleton was previously forked.`,
-        patchSummary ? `Known-issue patch: ${patchSummary}` : null,
-        `Next: use github_push_file to patch in feature-specific files (db/schema.ts, app/actions/, etc.)`,
-        `Then: call run_drizzle_push to sync the schema to the database.`,
-        `Finally: call render_create_service with buildCommand="${RENDER_NEXTJS_BUILD_COMMAND}", startCommand="${RENDER_NEXTJS_START_COMMAND}", and health_check_path="/".`,
-      ].filter(Boolean).join('\n');
+      const rootNames = await githubRepoRootEntryNames(targetRepo, headers);
+      if (rootNames === null) {
+        return `Error: repo ${targetRepo} exists, but GitHub root inspection failed. Retry github_fork_skeleton after checking GitHub API/token access.`;
+      }
+      if (rootNames && !isRepoHydratedForNextSkeleton(rootNames)) {
+        if (!isRepoEmptyEnoughToHydrate(rootNames)) {
+          return [
+            `Refusing to fork-overwrite ${targetRepo} - it already contains non-skeleton files: ${rootNames.join(', ') || '(unknown contents)'}.`,
+            `Use github_create_commit/github_push_file to patch the existing app, or clear the repo deliberately before retrying.`,
+          ].join('\n');
+        }
+
+        return hydrateExistingRepoFromNextSkeleton({
+          targetRepo,
+          description,
+          companyId,
+          headers,
+        });
+      } else {
+        await db.update(companies)
+          .set({ github_repo: targetRepo })
+          .where(eq(companies.id, companyId));
+        const patchSummary = await patchForkedNextSkeletonKnownIssues(targetRepo)
+          .catch((err) => `storage patch skipped: ${err instanceof Error ? err.message : String(err)}`);
+        return [
+          `Repo ${targetRepo} already exists and contains the Next.js skeleton.`,
+          patchSummary ? `Known-issue patch: ${patchSummary}` : null,
+          `Next: use github_push_file to patch in feature-specific files (db/schema.ts, app/actions/, etc.)`,
+          `Then: call run_drizzle_push to sync the schema to the database.`,
+          `Finally: call create_instance for canonical repo/DB/Render reuse, or render_create_service only if create_instance gave an explicit manual Render fallback.`,
+        ].filter(Boolean).join('\n');
+      }
     }
 
     // Step 2: Fork skeleton repo into the org
@@ -6491,7 +7077,7 @@ async function githubForkSkeleton(input: Record<string, unknown>, companyId: str
       `3. Call run_drizzle_push to create tables in the database`,
       `4. Push your feature Server Actions (app/actions/<feature>.ts)`,
       `5. Push your feature pages (app/app/<feature>/page.tsx)`,
-      `6. Call render_create_service with buildCommand="${RENDER_NEXTJS_BUILD_COMMAND}", startCommand="${RENDER_NEXTJS_START_COMMAND}", and health_check_path="/"`,
+      `6. Call create_instance for canonical repo/DB/Render reuse, or render_create_service only if create_instance gave an explicit manual Render fallback.`,
     ].filter(Boolean).join('\n');
   } catch (err) {
     return `Skeleton fork error: ${err instanceof Error ? err.message : 'Unknown error'}`;
@@ -6588,6 +7174,83 @@ async function handleRunDrizzlePush(input: Record<string, unknown>, companyId: s
 
 // â”€â”€ create_instance: atomic fork + provision + deploy â”€â”€
 
+export type FounderAppCompanyState = {
+  name?: string | null;
+  slug?: string | null;
+  github_repo?: string | null;
+  neon_database_id?: string | null;
+  render_service_id?: string | null;
+  custom_domain?: string | null;
+};
+
+export type FounderAppInstanceTargets = {
+  repoFullName: string;
+  repoName: string;
+  canonicalRepoFullName: string;
+  canonicalRepoName: string;
+  repoStatus: 'reused' | 'missing';
+  dbStatus: 'reused' | 'missing';
+  renderStatus: 'reused' | 'missing';
+  canonicalUrl: string | null;
+};
+
+function slugifyFounderAppName(value: string | null | undefined): string {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .replace(/-{2,}/g, '-');
+}
+
+function repoNameFromFullName(repoFullName: string): string {
+  return repoFullName.split('/').pop() ?? repoFullName;
+}
+
+export function resolveFounderAppInstanceTargets(
+  company: FounderAppCompanyState,
+  org: string,
+): FounderAppInstanceTargets {
+  const slug = slugifyFounderAppName(company.slug ?? company.name);
+  const canonicalRepoName = slug || 'founder-app';
+  const canonicalRepoFullName = `${org}/${canonicalRepoName}`;
+  const storedRepo = company.github_repo?.trim();
+  const repoFullName = storedRepo
+    ? (storedRepo.includes('/') ? storedRepo : `${org}/${storedRepo}`)
+    : canonicalRepoFullName;
+  const repoName = repoNameFromFullName(repoFullName);
+  const domain = company.custom_domain?.trim();
+
+  return {
+    repoFullName,
+    repoName,
+    canonicalRepoFullName,
+    canonicalRepoName,
+    repoStatus: storedRepo ? 'reused' : 'missing',
+    dbStatus: company.neon_database_id ? 'reused' : 'missing',
+    renderStatus: company.render_service_id ? 'reused' : 'missing',
+    canonicalUrl: domain
+      ? `https://${domain}`
+      : slug
+        ? `https://${slug}.baljia.app`
+        : null,
+  };
+}
+
+export function isRepoEmptyEnoughToHydrate(entryNames: string[]): boolean {
+  const harmless = new Set(['readme.md', '.gitignore', 'license', 'license.md']);
+  return entryNames.every((name) => harmless.has(name.trim().toLowerCase()));
+}
+
+export function isRepoHydratedForNextSkeleton(entryNames: string[]): boolean {
+  const names = new Set(entryNames.map((name) => name.trim().toLowerCase()));
+  return names.has('package.json')
+    && names.has('app')
+    && names.has('components')
+    && names.has('db')
+    && names.has('lib');
+}
+
 export function platformProvidedFounderEnvVars(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const out: Record<string, string> = {};
 
@@ -6614,66 +7277,507 @@ export function platformProvidedFounderEnvVars(env: NodeJS.ProcessEnv = process.
   return out;
 }
 
+function envVarsForExistingRenderService(
+  envVars: Record<string, string>,
+  explicitEnvVars: Record<string, string>,
+): Array<{ key: string; value: string }> {
+  const alwaysSafe = new Set([
+    'DATABASE_URL',
+    'BETTER_AUTH_URL',
+    'NEXT_PUBLIC_APP_URL',
+    'NODE_ENV',
+    'BALJIA_COMPANY_ID',
+    'BALJIA_APP_SLUG',
+    'BALJIA_RUNTIME_TOKEN',
+    'BALJIA_RUNTIME_VERSION',
+    'BALJIA_PLATFORM_API_URL',
+  ]);
+
+  return Object.entries(envVars)
+    .filter(([key, value]) => {
+      if (!value) return false;
+      if (key in explicitEnvVars) return true;
+      if (alwaysSafe.has(key)) return true;
+      if (/^(AI_|GEMINI_API_KEY$)/.test(key)) return true;
+      return false;
+    })
+    .map(([key, value]) => ({ key, value }));
+}
+
+async function githubReadTextFileUnchecked(repo: string, filePath: string, branch = 'main'): Promise<string | null> {
+  const response = await fetch(`${GITHUB_API}/repos/${repo}/contents/${filePath}?ref=${branch}`, { headers: githubHeaders() });
+  if (!response.ok) return null;
+  const data = await response.json().catch(() => null) as { content?: string; encoding?: string } | null;
+  if (!data?.content || data.encoding !== 'base64') return null;
+  return Buffer.from(data.content.replace(/\n/g, ''), 'base64').toString('utf8');
+}
+
+function mergeBaljiaTsConfig(existing: string | null): string {
+  const fallback = {
+    compilerOptions: {
+      baseUrl: '.',
+      paths: {
+        '@/*': ['./src/*'],
+        '@baljia/*': ['./src/baljia/*'],
+      },
+    },
+  };
+
+  if (!existing) return JSON.stringify(fallback, null, 2) + '\n';
+
+  try {
+    const parsed = JSON.parse(existing) as Record<string, unknown>;
+    const compilerOptions = typeof parsed.compilerOptions === 'object' && parsed.compilerOptions !== null
+      ? parsed.compilerOptions as Record<string, unknown>
+      : {};
+    const paths = typeof compilerOptions.paths === 'object' && compilerOptions.paths !== null
+      ? compilerOptions.paths as Record<string, unknown>
+      : {};
+    parsed.compilerOptions = {
+      ...compilerOptions,
+      baseUrl: typeof compilerOptions.baseUrl === 'string' ? compilerOptions.baseUrl : '.',
+      paths: {
+        ...paths,
+        '@baljia/*': ['./src/baljia/*'],
+      },
+    };
+    return JSON.stringify(parsed, null, 2) + '\n';
+  } catch {
+    return existing.includes('@baljia/*')
+      ? existing
+      : `${existing.trimEnd()}\n\n/* Baljia runtime path alias required: "@baljia/*" -> "./src/baljia/*" */\n`;
+  }
+}
+
+function runtimeScaffoldFiles(input: {
+  companyId: string;
+  slug: string;
+  capabilities: string[];
+  tsconfig: string | null;
+}): Array<{ path: string; content: string }> {
+  const manifest = {
+    runtimeVersion: BALJIA_RUNTIME_VERSION,
+    companyId: input.companyId,
+    slug: input.slug,
+    enabledCapabilities: input.capabilities,
+    protectedRuntimeFiles: true,
+  };
+
+  const runtimeTs = `export type RuntimeIdentity = {
+  companyId: string;
+  appSlug: string;
+  runtimeToken: string;
+  runtimeVersion: string;
+};
+
+const manifest = ${JSON.stringify(manifest, null, 2)} as const;
+
+export function getRuntimeIdentity(): RuntimeIdentity {
+  const companyId = process.env.BALJIA_COMPANY_ID || manifest.companyId;
+  const appSlug = process.env.BALJIA_APP_SLUG || manifest.slug;
+  const runtimeToken = process.env.BALJIA_RUNTIME_TOKEN || "";
+  const runtimeVersion = process.env.BALJIA_RUNTIME_VERSION || manifest.runtimeVersion;
+
+  if (!companyId || !appSlug || !runtimeToken || !runtimeVersion) {
+    throw new Error("Baljia runtime identity is not configured.");
+  }
+
+  return { companyId, appSlug, runtimeToken, runtimeVersion };
+}
+
+export function platformApiBaseUrl(): string {
+  return process.env.BALJIA_PLATFORM_API_URL || "https://baljia.app";
+}
+
+export async function runtimeFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const runtime = getRuntimeIdentity();
+  const url = path.startsWith("http") ? path : \`\${platformApiBaseUrl()}\${path}\`;
+  const headers = new Headers(init.headers);
+  headers.set("authorization", \`Bearer \${runtime.runtimeToken}\`);
+  headers.set("content-type", headers.get("content-type") || "application/json");
+
+  return fetch(url, {
+    ...init,
+    headers,
+  });
+}
+
+export async function logUsageEvent(input: {
+  packageName: string;
+  feature: string;
+  userId?: string | null;
+  units?: number;
+  costUsd?: string | number;
+  status?: string;
+  metadata?: Record<string, unknown>;
+}) {
+  const response = await runtimeFetch("/api/runtime/usage", {
+    method: "POST",
+    body: JSON.stringify({
+      packageName: input.packageName,
+      feature: input.feature,
+      userId: input.userId ?? null,
+      units: input.units ?? 1,
+      costUsd: input.costUsd ?? "0",
+      status: input.status ?? "success",
+      metadata: input.metadata ?? {},
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(\`Baljia usage logging failed: HTTP \${response.status} \${text.slice(0, 200)}\`);
+  }
+
+  return response.json();
+}
+`;
+
+  const aiTs = `import { runtimeFetch } from "./runtime";
+
+export async function generateJson<T = unknown>(input: {
+  feature: string;
+  prompt: string;
+  schema?: Record<string, unknown>;
+  userId?: string | null;
+}): Promise<T> {
+  const response = await runtimeFetch("/api/runtime/ai/generate-json", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(typeof body.error === "string" ? body.error : "Baljia AI JSON generation failed");
+  }
+  return body.json as T;
+}
+
+export async function generateText(input: {
+  feature: string;
+  prompt: string;
+  userId?: string | null;
+}): Promise<string> {
+  const result = await generateJson<{ text: string }>({
+    ...input,
+    schema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
+    prompt: \`\${input.prompt}\\n\\nReturn JSON only: {"text":"..."}\`,
+  });
+  return result.text;
+}
+
+export async function embedText(input: {
+  feature: string;
+  text: string;
+  userId?: string | null;
+}): Promise<number[]> {
+  const response = await runtimeFetch("/api/runtime/ai/embed-text", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(typeof body.error === "string" ? body.error : "Baljia AI embedding failed");
+  }
+  return body.embedding as number[];
+}
+`;
+
+  const authTs = `export type RuntimeUser = {
+  id: string;
+  email?: string | null;
+  role?: string | null;
+  [key: string]: unknown;
+};
+
+export async function getCurrentUser(): Promise<RuntimeUser | null> {
+  const response = await fetch("/api/auth/session", { cache: "no-store" });
+  if (!response.ok) return null;
+  const body = await response.json().catch(() => null) as { user?: RuntimeUser } | RuntimeUser | null;
+  if (!body) return null;
+  return "user" in body ? body.user ?? null : body;
+}
+
+export async function requireUser(): Promise<RuntimeUser> {
+  const user = await getCurrentUser();
+  if (!user?.id) throw new Error("Authentication required");
+  return user;
+}
+
+export async function requireRole(role: string): Promise<RuntimeUser> {
+  const user = await requireUser();
+  if (user.role !== role) throw new Error(\`Role "\${role}" required\`);
+  return user;
+}
+`;
+
+  const eventWrapper = (packageName: string, exportName: string, withName: string, aliasNames: string[] = []) => {
+    const aliasExports = aliasNames.map((aliasName) => `
+export async function ${aliasName}<T>(
+  input: Omit<RuntimeLifecycleEvent, "status"> & { operation?: string },
+  operation: () => Promise<T>,
+): Promise<T> {
+  return ${withName}({ ...input, operation: input.operation ?? "${aliasName}" }, operation);
+}
+`).join('');
+
+    return `import { logUsageEvent } from "./runtime";
+
+export type RuntimeLifecycleEvent = {
+  feature: string;
+  userId?: string | null;
+  status?: string;
+  units?: number;
+  costUsd?: string | number;
+  operation?: string;
+  amountCents?: number;
+  currency?: string;
+  customerId?: string;
+  subscriptionId?: string;
+  paymentId?: string;
+  bucket?: string;
+  objectKey?: string;
+  bytes?: number;
+  messageId?: string;
+  recipient?: string;
+  metadata?: Record<string, unknown>;
+};
+
+function lifecycleMetadata(input: RuntimeLifecycleEvent) {
+  const context = {
+    operation: input.operation,
+    amountCents: input.amountCents,
+    currency: input.currency,
+    customerId: input.customerId,
+    subscriptionId: input.subscriptionId,
+    paymentId: input.paymentId,
+    bucket: input.bucket,
+    objectKey: input.objectKey,
+    bytes: input.bytes,
+    messageId: input.messageId,
+    recipient: input.recipient,
+  };
+
+  return Object.fromEntries(
+    Object.entries({ ...(input.metadata ?? {}), ...context }).filter(([, value]) => value !== undefined && value !== null && value !== ""),
+  );
+}
+
+export async function ${exportName}(input: RuntimeLifecycleEvent) {
+  return logUsageEvent({
+    packageName: "${packageName}",
+    feature: input.feature,
+    userId: input.userId ?? null,
+    units: input.units ?? input.bytes ?? 1,
+    costUsd: input.costUsd ?? "0",
+    status: input.status ?? "success",
+    metadata: lifecycleMetadata(input),
+  });
+}
+
+export async function ${withName}<T>(
+  input: Omit<RuntimeLifecycleEvent, "status"> & { operation?: string },
+  operation: () => Promise<T>,
+): Promise<T> {
+  await ${exportName}({
+    ...input,
+    status: "started",
+    operation: input.operation ?? "runtime_operation",
+  });
+  try {
+    const result = await operation();
+    await ${exportName}({
+      ...input,
+      status: "completed",
+      operation: input.operation ?? "runtime_operation",
+    });
+    return result;
+  } catch (err) {
+    await ${exportName}({
+      ...input,
+      status: "error",
+      metadata: {
+        ...(input.metadata ?? {}),
+        error: err instanceof Error ? err.message : String(err),
+      },
+      operation: input.operation ?? "runtime_operation",
+    }).catch(() => undefined);
+    throw err;
+  }
+}
+${aliasExports}
+`;
+  };
+
+  const uiShellTsx = `import type { ReactNode } from "react";
+
+export function BaljiaAppShell(props: { children: ReactNode; title?: string }) {
+  return (
+    <main className="min-h-screen bg-background text-foreground">
+      {props.title ? <h1 className="sr-only">{props.title}</h1> : null}
+      {props.children}
+    </main>
+  );
+}
+`;
+
+  return [
+    { path: 'baljia.runtime.json', content: JSON.stringify(manifest, null, 2) + '\n' },
+    { path: 'src/baljia/runtime.ts', content: runtimeTs },
+    { path: 'src/baljia/ai.ts', content: aiTs },
+    { path: 'src/baljia/auth.ts', content: authTs },
+    { path: 'src/baljia/payments.ts', content: eventWrapper('@baljia/payments', 'recordPaymentEvent', 'withCheckoutEvent', ['withWebhookEvent', 'withSubscriptionEvent']) },
+    { path: 'src/baljia/storage.ts', content: eventWrapper('@baljia/storage', 'recordStorageEvent', 'withStorageEvent', ['withObjectUploadEvent']) },
+    { path: 'src/baljia/email.ts', content: eventWrapper('@baljia/email', 'recordEmailEvent', 'withEmailEvent', ['withSendEmailEvent']) },
+    { path: 'src/baljia/ui-shell.tsx', content: uiShellTsx },
+    { path: 'tsconfig.json', content: mergeBaljiaTsConfig(input.tsconfig) },
+  ];
+}
+
 async function handleCreateInstance(input: Record<string, unknown>, companyId: string): Promise<string> {
-  const appName = (input.app_name as string)?.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-');
-  if (!appName) return 'Error: app_name is required (e.g. "acme-crm").';
+  return handleEnsureFounderAppInstance(input, companyId, 'legacy');
+}
+
+async function handleEnsureFounderAppInstance(
+  input: Record<string, unknown>,
+  companyId: string,
+  outputMode: 'json' | 'legacy' = 'legacy',
+): Promise<string> {
+  if (typeof input.companyId === 'string' && input.companyId && input.companyId !== companyId) {
+    return 'ensure_founder_app_instance failed: companyId does not match this task.';
+  }
+  if (input.preferredStack && input.preferredStack !== 'nextjs') {
+    return 'ensure_founder_app_instance failed: only preferredStack="nextjs" is supported.';
+  }
+  const capabilityList = asStringArray(input.capabilities) ?? ['auth', 'ai'];
+  const appName = ((input.app_name as string | undefined) ?? (input.appSlug as string | undefined) ?? '').trim().toLowerCase().replace(/[^a-z0-9-]/g, '-');
+  if (!appName && outputMode === 'legacy') return 'Error: app_name is required (e.g. "acme-crm").';
 
   const description = (input.description as string) ?? 'SaaS app built on Baljia skeleton';
   const extraEnvVars = (input.env_vars as Record<string, string>) ?? {};
   const org = githubOrg();
-  const repoSlug = `${appName}-${companyId.slice(0, 6)}`;
+  const [company] = await db.select({
+    name: companies.name,
+    slug: companies.slug,
+    github_repo: companies.github_repo,
+    neon_database_id: companies.neon_database_id,
+    render_service_id: companies.render_service_id,
+    custom_domain: companies.custom_domain,
+  }).from(companies).where(eq(companies.id, companyId)).limit(1);
+  if (!company) return 'create_instance failed: company not found.';
+
+  const targets = resolveFounderAppInstanceTargets({ ...company, name: company.name ?? appName }, org);
+  const repoSlug = targets.repoName;
 
   const steps: string[] = [];
   let repoUrl = '';
   let databaseUrl = '';
   let serviceUrl = '';
+  let renderUrl = '';
+  let renderServiceId = company.render_service_id ?? '';
+  let runtimeCommitSummary = '';
 
-  // Step 1: Fork skeleton
-  steps.push('Step 1/4: Forking Next.js skeleton...');
+  // Step 1: Reuse or hydrate the founder repo created during onboarding.
+  steps.push('Step 1/4: Ensuring canonical Next.js skeleton repo...');
   const forkResult = await githubForkSkeleton({ repo: repoSlug, description }, companyId);
-  if (forkResult.startsWith('Fork failed') || forkResult.startsWith('Error:')) {
+  if (forkResult.startsWith('Fork failed') || forkResult.startsWith('Error:') || forkResult.startsWith('Refusing') || forkResult.startsWith('Skeleton hydrate failed')) {
     return `create_instance failed at skeleton fork:\n${forkResult}`;
   }
-  repoUrl = `https://github.com/${org}/${repoSlug}`;
+  const repoStatus: 'reused' | 'hydrated' | 'created' = /hydrated in existing repo/i.test(forkResult)
+    ? 'hydrated'
+    : /skeleton forked/i.test(forkResult)
+      ? 'created'
+      : 'reused';
+  repoUrl = `https://github.com/${targets.repoFullName}`;
+  steps.push(`  Repo mode: ${targets.repoStatus === 'reused' ? 'reused onboarding repo' : 'canonical repo ready'}`);
   steps.push(`  âœ… Repo: ${repoUrl}`);
 
   // Step 2: Provision database
   steps.push('Step 2/4: Provisioning Neon Postgres...');
-  const dbInfo = await provisionCompanyDatabase(companyId, repoSlug);
+  const existingDbInfo = await getCompanyDatabase(companyId);
+  const dbInfo = existingDbInfo ?? await provisionCompanyDatabase(companyId, repoSlug);
   if (!dbInfo) {
     return `create_instance: database provisioning failed. Check NEON_API_KEY.`;
   }
   databaseUrl = dbInfo.connectionUri ?? '';
+  if (!databaseUrl) {
+    return [
+      ...steps,
+      'Step 2/4: Neon database exists but no connection URI is available.',
+      'Do not deploy with an empty DATABASE_URL. Run get_database_info to inspect the Neon connection state, then retry create_instance.',
+    ].join('\n');
+  }
+  steps.push(`  DB mode: ${existingDbInfo ? 'reused onboarding Neon database' : 'created new Neon database'}`);
   steps.push(`  âœ… Database: ${dbInfo.host ?? 'provisioned'}`);
 
-  // Step 3: Create Render service
-  steps.push('Step 3/4: Creating Render web service...');
+  // Step 3: Reuse or create the Render service.
+  steps.push('Step 3/4: Preparing Render web service...');
   const authSecret = Array.from(crypto.getRandomValues(new Uint8Array(32)))
     .map(b => b.toString(16).padStart(2, '0')).join('');
 
-  // Auth URLs: prefer the company's baljia.app subdomain (the canonical
-  // public URL after subdomain attachment) over the *.onrender.com fallback.
-  // Better Auth uses BETTER_AUTH_URL for cookie domain + redirect URLs, so
-  // pointing it at .onrender.com causes session breakage as soon as the
-  // user hits the custom domain. Fetch the company slug here.
-  const [companyRow] = await db.select({ slug: companies.slug, custom_domain: companies.custom_domain })
-    .from(companies).where(eq(companies.id, companyId)).limit(1);
-  const canonicalUrl = companyRow?.custom_domain
-    ? `https://${companyRow.custom_domain}`
-    : companyRow?.slug
-      ? `https://${companyRow.slug}.baljia.app`
-      : `https://${repoSlug}.onrender.com`;
+  // Auth URLs prefer the company's Baljia subdomain, because Better Auth
+  // bakes this into redirect/cookie behavior.
+  const canonicalUrl = targets.canonicalUrl ?? `https://${repoSlug}.onrender.com`;
+  const runtimeToken = await signRuntimeToken({
+    companyId,
+    appSlug: repoSlug,
+    runtimeVersion: BALJIA_RUNTIME_VERSION,
+    capabilities: capabilityList,
+  });
 
   const envVars: Record<string, string> = {
     DATABASE_URL: databaseUrl,
     BETTER_AUTH_SECRET: authSecret,
     BETTER_AUTH_URL: canonicalUrl,
     NEXT_PUBLIC_APP_URL: canonicalUrl,
+    BALJIA_COMPANY_ID: companyId,
+    BALJIA_APP_SLUG: repoSlug,
+    BALJIA_RUNTIME_TOKEN: runtimeToken,
+    BALJIA_RUNTIME_VERSION: BALJIA_RUNTIME_VERSION,
     NODE_ENV: 'production',
     ...platformProvidedFounderEnvVars(),
     ...extraEnvVars,
   };
 
+  const existingTsconfig = await githubReadTextFileUnchecked(targets.repoFullName, 'tsconfig.json');
+  const runtimeCommit = await githubCommitFilesUnchecked({
+    repo: targets.repoFullName,
+    message: 'Install Baljia runtime contract',
+    files: runtimeScaffoldFiles({
+      companyId,
+      slug: repoSlug,
+      capabilities: capabilityList,
+      tsconfig: existingTsconfig,
+    }),
+  });
+  runtimeCommitSummary = runtimeCommit.ok
+    ? `  Runtime contract: committed ${runtimeCommit.sha?.substring(0, 7) ?? 'updated'}`
+    : `  Runtime contract warning: ${runtimeCommit.error ?? 'commit failed'}`;
+  steps.push(runtimeCommitSummary);
+
+  if (company.render_service_id) {
+    steps.push('Step 3/4: Reusing existing Render web service...');
+    const existingUrl = await getRenderServiceUrl(company.render_service_id);
+    renderUrl = existingUrl ?? `https://${repoSlug}.onrender.com`;
+    serviceUrl = targets.canonicalUrl ?? renderUrl;
+    const runtimeEnvResult = await renderSetEnvVars({
+      service_id: company.render_service_id,
+      env_vars: envVarsForExistingRenderService(envVars, extraEnvVars),
+      force_after_quota_restored: true,
+    });
+    if (/^Error\b|HTTP\s+[45]\d\d|redeploy trigger failed/i.test(runtimeEnvResult)) {
+      return [
+        ...steps,
+        'Step 3/4: runtime env injection failed for existing Render service.',
+        runtimeEnvResult,
+        'Do not continue: generated app runtime identity and central usage tracking require BALJIA_* env vars on Render.',
+      ].join('\n');
+    }
+    steps.push(`  Runtime env injection: ${runtimeEnvResult.split('\n')[0]}`);
+    steps.push(`  Render service: ${serviceUrl}`);
+    steps.push(`  Service ID: ${company.render_service_id}`);
+  } else {
 
   const renderApiKey = process.env.RENDER_API_KEY;
   if (!renderApiKey) {
@@ -6746,8 +7850,11 @@ async function handleCreateInstance(input: Record<string, unknown>, companyId: s
       : saved?.slug
         ? `https://${saved.slug}.baljia.app`
         : `https://${repoSlug}.onrender.com`);
+    renderServiceId = saved?.render_service_id ?? renderServiceId;
+    renderUrl = createdAppUrl ?? `https://${repoSlug}.onrender.com`;
     steps.push(`  Render service: ${serviceUrl}`);
     if (saved?.render_service_id) steps.push(`  Service ID: ${saved.render_service_id}`);
+  }
   }
 
   // Step 4: Summary
@@ -6774,6 +7881,18 @@ async function handleCreateInstance(input: Record<string, unknown>, companyId: s
   steps.push('   Use: read_skill({ skill: "verify-deploy" }) then execute each check_url_health step.');
 
   log.info('Instance created', { companyId, repoSlug, serviceUrl });
+  if (outputMode === 'json') {
+    return JSON.stringify({
+      repo: targets.repoFullName,
+      repoStatus,
+      neonProjectId: dbInfo.projectId ?? company.neon_database_id ?? '',
+      dbStatus: existingDbInfo ? 'reused' : 'created',
+      renderServiceId,
+      renderStatus: company.render_service_id ? 'reused' : 'created',
+      renderUrl: renderUrl || `https://${repoSlug}.onrender.com`,
+      baljiaUrl: targets.canonicalUrl ?? `https://${repoSlug}.baljia.app`,
+    });
+  }
   return steps.join('\n');
 }
 

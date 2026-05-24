@@ -1,5 +1,5 @@
 import { db, taskDrafts } from '@/lib/db';
-import { eq, and, desc, inArray } from 'drizzle-orm';
+import { eq, and, desc, inArray, isNotNull } from 'drizzle-orm';
 import { sanitizeForFounder } from '@/lib/founder-safety/sanitize';
 import { stripLlmArtifacts } from '@/lib/text/llm-artifacts';
 import * as taskService from '@/lib/services/task.service';
@@ -12,7 +12,7 @@ import {
 import type { ExecutabilityType, TaskSource } from '@/types';
 
 export type TaskDraftStatus = 'pending_ceo_review' | 'finalized' | 'discarded';
-export type TaskDraftSource = 'onboarding' | 'night_shift_generated' | 'recurring';
+export type TaskDraftSource = 'onboarding' | 'night_shift_generated' | 'recurring' | 'ceo_rolling_plan';
 
 export interface CreateTaskDraftInput {
   company_id: string;
@@ -177,10 +177,49 @@ function numberValue(value: unknown): number | undefined {
   return undefined;
 }
 
+function numberList(value: unknown): number[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map(numberValue)
+    .filter((item): item is number => typeof item === 'number' && Number.isFinite(item));
+}
+
 function executabilityValue(value: unknown): ExecutabilityType | undefined {
   return value === 'can_run_now' || value === 'needs_new_connection' || value === 'manual_task'
     ? value
     : undefined;
+}
+
+async function resolveRollingPlanRelatedTaskIds(
+  draft: TaskDraftRow,
+  proposed: Record<string, unknown>,
+): Promise<string[]> {
+  const rollingPlan = recordValue(proposed.rolling_plan);
+  const planKey = stringValue(rollingPlan.key);
+  const dependencyIndexes = numberList(proposed.depends_on_plan_indexes);
+  if (draft.source !== 'ceo_rolling_plan' || !planKey || dependencyIndexes.length === 0) return [];
+
+  const finalizedDrafts = await db.select({
+    reviewed_task_id: taskDrafts.reviewed_task_id,
+    proposed_task: taskDrafts.proposed_task,
+  })
+    .from(taskDrafts)
+    .where(and(
+      eq(taskDrafts.company_id, draft.company_id),
+      eq(taskDrafts.source, 'ceo_rolling_plan'),
+      eq(taskDrafts.status, 'finalized'),
+      isNotNull(taskDrafts.reviewed_task_id),
+    ));
+
+  return finalizedDrafts
+    .filter((candidate) => {
+      const candidateProposed = recordValue(candidate.proposed_task);
+      const candidatePlan = recordValue(candidateProposed.rolling_plan);
+      return stringValue(candidatePlan.key) === planKey
+        && dependencyIndexes.includes(numberValue(candidatePlan.plan_index) ?? Number.NaN);
+    })
+    .map((candidate) => candidate.reviewed_task_id)
+    .filter((id): id is string => typeof id === 'string' && Boolean(id.trim()));
 }
 
 function buildExecutionContractFromDraft(draft: TaskDraftRow, agentId: number): Record<string, unknown> {
@@ -255,6 +294,12 @@ async function finalizeOneDraft(
     if (!validation.ok) return { ok: false, reason: validation.reason };
   }
 
+  const proposedRelatedIds = Array.isArray(proposed.related_task_ids)
+    ? proposed.related_task_ids.filter((id): id is string => typeof id === 'string' && Boolean(id.trim()))
+    : [];
+  const rollingPlanRelatedIds = await resolveRollingPlanRelatedTaskIds(draft, proposed);
+  const relatedTaskIds = [...new Set([...proposedRelatedIds, ...rollingPlanRelatedIds])];
+
   const task = await taskService.createTask({
     company_id: draft.company_id,
     title: draft.title,
@@ -270,6 +315,7 @@ async function finalizeOneDraft(
     executability_type: executabilityValue(proposed.executability_type) ?? 'can_run_now',
     complexity: numberValue(proposed.complexity),
     estimated_hours: numberValue(proposed.estimated_hours) ?? 1,
+    related_task_ids: relatedTaskIds.length > 0 ? relatedTaskIds : undefined,
     authorized_by: stringValue(proposed.authorized_by) ?? options.authorizedBy,
     authorization_reason: stringValue(proposed.authorization_reason) ?? options.authorizationReason,
     execution_contract: Object.keys(executionContract).length > 0 ? executionContract : null,

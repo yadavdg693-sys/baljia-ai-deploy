@@ -3,6 +3,7 @@ import * as chatService from '@/lib/services/chat.service';
 import { chatMessageSchema } from '@/lib/validations';
 import { requireAuthAndCompany, resolveBodyCompanyId, resolveCompanyIdentifier, parseJsonBody, isApiError } from '@/lib/api-utils';
 import { streamCEOResponse } from '@/lib/agents/ceo/ceo.agent';
+import { createPendingPlanConfirmationAction } from '@/lib/agents/ceo/ceo.confirmed-plan-queue';
 import { checkRateLimitAsync } from '@/lib/rate-limiter';
 import { createLogger } from '@/lib/logger';
 import type { ChatMessage, CEOStreamEvent, ChatAction } from '@/types';
@@ -90,11 +91,31 @@ export async function POST(request: NextRequest) {
           }
         }
 
-        // Only persist messages on real success — errors don't pollute session
+        // Persist founder intent even when a provider/tool guardrail stops the
+        // assistant reply. Otherwise confirmations like "yes" vanish from the
+        // next turn and the CEO asks the same question again.
         const isErrorFallback = fullText.includes('AI providers are temporarily unavailable')
           || fullText.includes('Response timed out')
           || fullText.includes('Reached processing limit');
         if (fullText.trim() && !isErrorFallback) {
+          const hasTaskAction = actions.some((action) =>
+            action.type === 'task_proposal' || action.type === 'task_approved'
+          );
+          const pendingPlanAction = hasTaskAction ? null : createPendingPlanConfirmationAction(fullText);
+          const alreadyHasPlanAction = actions.some((action) =>
+            action.type === 'pending_plan_confirmation'
+            && pendingPlanAction
+            && action.data.plan_id === pendingPlanAction.data.plan_id
+          );
+          if (pendingPlanAction && !alreadyHasPlanAction) {
+            actions.push(pendingPlanAction);
+            const event: CEOStreamEvent = { type: 'action', action: pendingPlanAction };
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+          }
+        }
+        if (fullText.trim() && isErrorFallback) {
+          await chatService.appendMessages(session.id, [userMessage]);
+        } else if (fullText.trim()) {
           const assistantMessage: ChatMessage = {
             id: `assistant-${Date.now()}`,
             session_id: session.id,

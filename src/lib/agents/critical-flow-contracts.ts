@@ -434,6 +434,7 @@ function latestTool(logEntries: CriticalFlowLogEntry[], toolName: string): { ind
 
 function latestAppChangeIndex(logEntries: CriticalFlowLogEntry[]): number {
   const appChangeTools = new Set<string>([
+    'ensure_founder_app_instance',
     'create_instance',
     'github_push_file',
     'github_create_commit',
