@@ -145,13 +145,13 @@ async function createService(envVars: Array<{ key: string; value: string }>): Pr
       env: 'node',
       plan: PLAN,
       region: REGION,
-      buildCommand: 'npm install --include=dev && npm run build',
-      startCommand: 'npm start -- -H 0.0.0.0 -p $PORT',
+      buildCommand: 'npm install && npm run build',
+      startCommand: 'npm start',
       healthCheckPath: '/api/health',
       numInstances: 1,
       envSpecificDetails: {
-        buildCommand: 'npm install --include=dev && npm run build',
-        startCommand: 'npm start -- -H 0.0.0.0 -p $PORT',
+        buildCommand: 'npm install && npm run build',
+        startCommand: 'npm start',
       },
     },
   };
