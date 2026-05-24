@@ -4,8 +4,8 @@ services:
     runtime: node
     plan: starter
     region: oregon
-    buildCommand: npm install && npm run build
-    startCommand: npm start
+    buildCommand: npm install --include=dev && npm run build
+    startCommand: npm start -- -H 0.0.0.0 -p $PORT
     healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV
